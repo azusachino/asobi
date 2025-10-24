@@ -3,3 +3,8 @@
 
 [tasks.dev]
 run = "cargo build"
+
+[tasks.re]
+run = """
+cargo run --example {{arg(name="target", default="read_file")}}
+"""
