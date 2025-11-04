@@ -5,6 +5,12 @@
 run = "cargo build"
 
 [tasks.re]
+# Arguments defined in the usage field are available as environment variables prefixed with usage_.
+usage = """
+arg "<target>" default="read_file"
+option "--format <format>" help="Output format" default="text"
+flag "-v --verbose" help="Enable verbose output"
+"""
 run = """
-cargo run --example {{arg(name="target", default="read_file")}}
+cargo run --example ${usage_target?}
 """
