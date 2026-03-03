@@ -1,16 +1,11 @@
-[env]
-'_'.file.path = ".env"
+[tools]
+rust = "latest"
+python = "3.14"
+uv = "latest"
 
-[tasks.dev]
-run = "cargo build"
-
-[tasks.re]
-# Arguments defined in the usage field are available as environment variables prefixed with usage_.
-usage = """
-arg "<target>" default="read_file"
-option "--format <format>" help="Output format" default="text"
-flag "-v --verbose" help="Enable verbose output"
-"""
-run = """
-cargo run --example ${usage_target?}
-"""
+[tasks]
+build = "make build"
+test = "make test"
+fmt = "make fmt"
+lint = "make lint"
+init = "make init"
