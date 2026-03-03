@@ -1,13 +1,22 @@
-# Current Task: Rosemary Knowledge Base v0.1.0 Implementation Complete
-- Status: PR created (https://github.com/azusachino/rosemary/pull/1)
-- Completed: 
-  - Scaffolding & Dependencies
-  - Core CLI with Ingest/Recall
-  - libSQL schema & initialization
-  - Markdown ingestion with frontmatter
-  - LanceDB vector store initialization
-  - Codebase cleanup and dependency trimming
-- Next Steps:
-  - Merge the PR
-  - Implement actual vector embedding logic in `src/vector.rs` (currently mock/init only)
-  - Implement `recall` logic for semantic search
+## Objective
+Transform Rosemary into a Personal Knowledge Base (v0.1.0) and initialize professional project infrastructure.
+
+## Status
+DONE
+
+## Completed Steps
+- [x] Consolidate storage into a single libSQL database (Relations + Vectors).
+- [x] Implement keyword search in 'Recall' command.
+- [x] Implement relationship tracking in 'Recall' and 'Relate' commands.
+- [x] Initialize project with mise, Makefile, .env, and Python 3.14 (uv).
+- [x] Clean up async playground and trim Cargo.toml dependencies.
+
+## Remaining Steps
+- [ ] Implement actual vector embedding logic in 'src/vector.rs' or 'src/db.rs'.
+- [ ] Add more sophisticated search (e.g., FTS5 or Vector search integration).
+
+## Next Action
+Merge the PR and start using the knowledge base for real investigations.
+
+## Last Updated
+2026-03-03
