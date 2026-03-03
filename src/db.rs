@@ -1,8 +1,10 @@
-use libsql::{Builder, Connection};
 use anyhow::Result;
+use libsql::{Builder, Connection, Database};
+use std::env;
 
-pub async fn init_db() -> Result<Connection> {
-    let db = Builder::new_local("rosemary.db").build().await?;
+pub async fn init_db() -> Result<(Database, Connection)> {
+    let db_path = env::var("DATABASE_URL").unwrap_or_else(|_| "rosemary.db".to_string());
+    let db = Builder::new_local(&db_path).build().await?;
     let conn = db.connect()?;
 
     conn.execute(
@@ -14,7 +16,8 @@ pub async fn init_db() -> Result<Connection> {
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP
         )",
         (),
-    ).await?;
+    )
+    .await?;
 
     conn.execute(
         "CREATE TABLE IF NOT EXISTS entities (
@@ -23,7 +26,8 @@ pub async fn init_db() -> Result<Connection> {
             entity_type TEXT
         )",
         (),
-    ).await?;
+    )
+    .await?;
 
     conn.execute(
         "CREATE TABLE IF NOT EXISTS relations (
@@ -33,7 +37,8 @@ pub async fn init_db() -> Result<Connection> {
             PRIMARY KEY (from_id, to_id, relation_type)
         )",
         (),
-    ).await?;
+    )
+    .await?;
 
     // gists table with vector support (384-dimensional embeddings are common for local models)
     conn.execute(
@@ -45,7 +50,8 @@ pub async fn init_db() -> Result<Connection> {
             FOREIGN KEY (topic_id) REFERENCES topics (id)
         )",
         (),
-    ).await?;
+    )
+    .await?;
 
     // create vector index for semantic search
     conn.execute(
@@ -53,5 +59,41 @@ pub async fn init_db() -> Result<Connection> {
         (),
     ).await?;
 
-    Ok(conn)
+    Ok((db, conn))
+}
+
+pub async fn search_topics(
+    conn: &Connection,
+    query: &str,
+) -> Result<Vec<(String, String, String)>> {
+    let sql = "SELECT id, title, file_path FROM topics WHERE title LIKE ?1 OR id IN (SELECT topic_id FROM gists WHERE content LIKE ?1)";
+    let pattern = format!("%{}%", query);
+    let mut rows = conn.query(sql, libsql::params![pattern]).await?;
+
+    let mut results = Vec::new();
+    while let Some(row) = rows.next().await? {
+        let id: String = row.get(0)?;
+        let title: String = row.get(1)?;
+        let path: String = row.get(2)?;
+        results.push((id, title, path));
+    }
+    Ok(results)
+}
+
+pub async fn get_related_topics(
+    conn: &Connection,
+    topic_id: &str,
+) -> Result<Vec<(String, String)>> {
+    let sql = "SELECT to_id, relation_type FROM relations WHERE from_id = ?1
+               UNION
+               SELECT from_id, relation_type FROM relations WHERE to_id = ?1";
+    let mut rows = conn.query(sql, libsql::params![topic_id]).await?;
+
+    let mut results = Vec::new();
+    while let Some(row) = rows.next().await? {
+        let id: String = row.get(0)?;
+        let relation: String = row.get(1)?;
+        results.push((id, relation));
+    }
+    Ok(results)
 }

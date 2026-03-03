@@ -1,14 +1,16 @@
+use anyhow::Result;
+use chrono::Utc;
+use slug::slugify;
+use std::env;
 use std::fs;
 use std::path::PathBuf;
-use anyhow::Result;
-use slug::slugify;
-use chrono::Utc;
 
 pub fn save_markdown(topic: &str, content: &str) -> Result<PathBuf> {
     let slug = slugify(topic);
-    let dir = PathBuf::from("kb/topics");
+    let kb_root = env::var("KB_ROOT").unwrap_or_else(|_| "kb/topics".to_string());
+    let dir = PathBuf::from(kb_root);
     fs::create_dir_all(&dir)?;
-    
+
     let file_path = dir.join(format!("{}.md", slug));
     let full_content = format!(
         "---
@@ -23,7 +25,7 @@ created_at: {}
         Utc::now().to_rfc3339(),
         content
     );
-    
+
     fs::write(&file_path, full_content)?;
     Ok(file_path)
 }
