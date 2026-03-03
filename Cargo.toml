@@ -16,6 +16,5 @@ chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4.5", features = ["derive"] }
 slug = "0.1"
 
-# Databases
+# Database (Unified libSQL)
 libsql = "0.6"
-lancedb = "0.14"
