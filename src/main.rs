@@ -24,9 +24,8 @@ enum Commands {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // initialize storage layers
+    // initialize unified libSQL database (topics, relations, and vectors)
     let _conn = rosemary::db::init_db().await?;
-    let _v_conn = rosemary::vector::init_vector_db().await?;
 
     let cli = Cli::parse();
 

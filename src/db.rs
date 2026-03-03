@@ -35,5 +35,23 @@ pub async fn init_db() -> Result<Connection> {
         (),
     ).await?;
 
+    // gists table with vector support (384-dimensional embeddings are common for local models)
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS gists (
+            id TEXT PRIMARY KEY,
+            topic_id TEXT,
+            content TEXT NOT NULL,
+            embedding F32_BLOB(384),
+            FOREIGN KEY (topic_id) REFERENCES topics (id)
+        )",
+        (),
+    ).await?;
+
+    // create vector index for semantic search
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS gists_idx ON gists (libsql_vector_idx(embedding, 'metric=cosine'))",
+        (),
+    ).await?;
+
     Ok(conn)
 }
