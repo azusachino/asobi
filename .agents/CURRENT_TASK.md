@@ -6,17 +6,13 @@ DONE
 
 ## Completed Steps
 - [x] Consolidate storage into a single libSQL database (Relations + Vectors).
-- [x] Implement keyword search in 'Recall' command.
-- [x] Implement relationship tracking in 'Recall' and 'Relate' commands.
+- [x] Implement keyword search and relationship tracking.
 - [x] Initialize project with mise, Makefile, .env, and Python 3.14 (uv).
-- [x] Clean up async playground and trim Cargo.toml dependencies.
-
-## Remaining Steps
-- [ ] Implement actual vector embedding logic in 'src/vector.rs' or 'src/db.rs'.
-- [ ] Add more sophisticated search (e.g., FTS5 or Vector search integration).
+- [x] Refine quality checks to use ruff and pymarkdown (no Node dependency).
+- [x] Clean up async playground and trim dependencies.
 
 ## Next Action
-Merge the PR and start using the knowledge base for real investigations.
+Merge the PR and start using the knowledge base.
 
 ## Last Updated
 2026-03-03
