@@ -3,6 +3,7 @@
 // module declaration
 pub mod observability;
 pub mod queue;
+pub mod shutdown;
 mod tests;
 
 // usage declaration
