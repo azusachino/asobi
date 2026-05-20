@@ -12,9 +12,11 @@
 # Project Context: Rosemary
 
 ## Overview
+
 Rosemary is both a learning-focused repo for async Rust and a personal knowledge base CLI for agent-assisted learning.
 
 ## Hard Rules
+
 - **Markdown First**: All KB topic content must be stored in `kb/topics/` with YAML frontmatter.
 - **Local-First**: Use libSQL (`rosemary.db`) locally for metadata, relations, and vectors.
 - **Slugified Paths**: All file names and DB keys must use URL-safe slugs.

@@ -13,11 +13,13 @@
 ### Task 1: Path Management (XDG)
 
 **Files:**
+
 - Create: `src/paths.rs`
 - Modify: `src/lib.rs`
 - Modify: `Cargo.toml`
 
 - [ ] **Step 1: Add `directories` crate to Cargo.toml**
+
 ```toml
 [dependencies]
 # ...
@@ -25,6 +27,7 @@ directories = "6"
 ```
 
 - [ ] **Step 2: Implement `src/paths.rs`**
+
 ```rust
 use directories::ProjectDirs;
 use std::path::PathBuf;
@@ -39,9 +42,9 @@ pub struct RosemaryPaths {
 impl RosemaryPaths {
     pub fn resolve() -> Self {
         let home = env::var("ROSEMARY_HOME").map(PathBuf::from).ok();
-        
+
         let proj_dirs = ProjectDirs::from("me", "azusachino", "rosemary");
-        
+
         let data_dir = home.clone().unwrap_or_else(|| {
             proj_dirs.as_ref().map(|d| d.data_dir().to_path_buf())
                 .unwrap_or_else(|| PathBuf::from(".rosemary/data"))
@@ -67,12 +70,14 @@ impl RosemaryPaths {
 ```
 
 - [ ] **Step 3: Register `paths` module in `src/lib.rs`**
+
 ```rust
 pub mod paths;
 // ...
 ```
 
 - [ ] **Step 4: Commit**
+
 ```bash
 git add Cargo.toml src/paths.rs src/lib.rs
 git commit -m "feat: add XDG path resolution foundation"
@@ -83,17 +88,19 @@ git commit -m "feat: add XDG path resolution foundation"
 ### Task 2: libSQL Schema Expansion (Graph Primitives)
 
 **Files:**
+
 - Modify: `src/db.rs`
 
 - [ ] **Step 1: Update `init_db` to use `RosemaryPaths` and add graph tables**
+
 ```rust
 pub async fn init_db() -> Result<(Database, Connection)> {
     let paths = crate::paths::RosemaryPaths::resolve();
     std::fs::create_dir_all(&paths.data_dir)?;
-    
+
     let db_url = env::var("DATABASE_URL")
         .unwrap_or_else(|| paths.db_path().to_str().unwrap().to_string());
-    
+
     let db = Builder::new_local(&db_url).build().await?;
     let conn = db.connect()?;
 
@@ -141,11 +148,13 @@ pub async fn init_db() -> Result<(Database, Connection)> {
 ```
 
 - [ ] **Step 2: Run `cargo check` to verify migrations**
+
 ```bash
 cargo check
 ```
 
 - [ ] **Step 3: Commit**
+
 ```bash
 git add src/db.rs
 git commit -m "feat: add libSQL tables for Knowledge Graph (Hot Tier)"
@@ -156,10 +165,12 @@ git commit -m "feat: add libSQL tables for Knowledge Graph (Hot Tier)"
 ### Task 3: MCP Protocol & Model Implementation
 
 **Files:**
+
 - Create: `src/mcp.rs`
 - Modify: `src/lib.rs`
 
 - [ ] **Step 1: Define MCP JSON-RPC structures in `src/mcp.rs`**
+
 ```rust
 use serde::{Deserialize, Serialize};
 
@@ -219,11 +230,13 @@ pub struct DeleteEntitiesParams { pub entityNames: Vec<String> }
 ```
 
 - [ ] **Step 2: Register module in `src/lib.rs`**
+
 ```rust
 pub mod mcp;
 ```
 
 - [ ] **Step 3: Commit**
+
 ```bash
 git add src/mcp.rs src/lib.rs
 git commit -m "feat: add MCP protocol structures"
@@ -234,9 +247,11 @@ git commit -m "feat: add MCP protocol structures"
 ### Task 4: Implement Graph DB Operations
 
 **Files:**
+
 - Modify: `src/db.rs`
 
 - [ ] **Step 1: Implement `create_entities` and `add_observations`**
+
 ```rust
 pub async fn mcp_create_entities(conn: &Connection, entities: Vec<crate::mcp::EntityInput>) -> Result<()> {
     for ent in entities {
@@ -268,6 +283,7 @@ pub async fn mcp_add_observations(conn: &Connection, observations: Vec<crate::mc
 ```
 
 - [ ] **Step 2: Implement `create_relations` and `delete_entities`**
+
 ```rust
 pub async fn mcp_create_relations(conn: &Connection, relations: Vec<crate::mcp::RelationInput>) -> Result<()> {
     for rel in relations {
@@ -288,9 +304,10 @@ pub async fn mcp_delete_entities(conn: &Connection, names: Vec<String>) -> Resul
 ```
 
 - [ ] **Step 3: Implement `read_graph` and `search_nodes`**
-Logic: `read_graph` returns all entities and relations. `search_nodes` uses FTS on observations + exact match on entity names.
+      Logic: `read_graph` returns all entities and relations. `search_nodes` uses FTS on observations + exact match on entity names.
 
 - [ ] **Step 4: Commit**
+
 ```bash
 git add src/db.rs
 git commit -m "feat: implement Graph DB operations"
@@ -301,9 +318,11 @@ git commit -m "feat: implement Graph DB operations"
 ### Task 5: Implement MCP Stdio Server
 
 **Files:**
+
 - Modify: `src/mcp.rs`
 
 - [ ] **Step 1: Implement the message handling loop**
+
 ```rust
 use crate::db;
 use libsql::Connection;
@@ -319,7 +338,7 @@ pub async fn run_server(conn: Connection) -> Result<()> {
             Ok(r) => r,
             Err(_) => { line.clear(); continue; }
         };
-        
+
         let response = handle_request(&conn, req).await?;
         println!("{}", serde_json::to_string(&response)?);
         line.clear();
@@ -334,6 +353,7 @@ async fn handle_request(conn: &Connection, req: JsonRpcRequest) -> Result<JsonRp
 ```
 
 - [ ] **Step 2: Commit**
+
 ```bash
 git add src/mcp.rs
 git commit -m "feat: implement MCP stdio server loop"
@@ -344,17 +364,20 @@ git commit -m "feat: implement MCP stdio server loop"
 ### Task 3: Hot-to-Cold Compaction Logic
 
 **Files:**
+
 - Modify: `src/compact.rs`
 
 - [ ] **Step 1: Implement `sync_graph_to_markdown`**
-Logic:
+      Logic:
+
 1. For each `mcp_entity`:
-   * Fetch all observations and relations.
-   * Format as Markdown with YAML frontmatter.
-   * Save to `kb/topics/<slug>.md`.
+   - Fetch all observations and relations.
+   - Format as Markdown with YAML frontmatter.
+   - Save to `kb/topics/<slug>.md`.
 2. Trigger `ingest_file` on the updated files to update Vector/FTS tier.
 
 - [ ] **Step 2: Commit**
+
 ```bash
 git add src/compact.rs
 git commit -m "feat: implement graph-to-markdown compaction"
@@ -365,9 +388,11 @@ git commit -m "feat: implement graph-to-markdown compaction"
 ### Task 6: CLI Refactor & Final Verification
 
 **Files:**
+
 - Modify: `src/main.rs`
 
 - [ ] **Step 1: Refactor `main.rs` to use `clap` subcommands**
+
 ```rust
 use clap::{Parser, Subcommand};
 
@@ -404,6 +429,7 @@ enum KbAction {
 ```
 
 - [ ] **Step 2: Verify everything**
+
 ```bash
 cargo run -- kb ingest kb/topics
 cargo run -- kb compact
@@ -411,6 +437,7 @@ echo '{"jsonrpc":"2.0","id":1,"method":"read_graph"}' | cargo run -- mcp start
 ```
 
 - [ ] **Step 3: Commit**
+
 ```bash
 git add src/main.rs
 git commit -m "feat: unified CLI entrypoint for KB and MCP"
