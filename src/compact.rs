@@ -1,6 +1,71 @@
 use anyhow::Result;
+use std::io::Write;
 use std::path::PathBuf;
 use std::time::{Duration, SystemTime};
+use crate::db;
+use crate::ingest::ingest_file;
+use crate::vector::VectorStore;
+use libsql::Connection;
+use slug::slugify;
+
+pub async fn sync_graph_to_markdown(
+    conn: &Connection,
+    store: &VectorStore,
+    embedder: &dyn crate::embed::EmbeddingProvider,
+) -> Result<usize> {
+    let paths = crate::paths::RosemaryPaths::resolve();
+    let kb_dir = paths.kb_dir;
+    if !kb_dir.exists() {
+        std::fs::create_dir_all(&kb_dir)?;
+    }
+
+    let graph = db::mcp_read_graph(conn).await?;
+    let mut count = 0;
+
+    for entity in graph.entities {
+        let slug = slugify(&entity.name);
+        let file_path = kb_dir.join(format!("{}.md", slug));
+        
+        let mut content = String::new();
+        content.push_str("---\n");
+        content.push_str(&format!("title: {}\n", entity.name));
+        content.push_str(&format!("type: {}\n", entity.entity_type));
+        content.push_str(&format!("slug: {}\n", slug));
+        content.push_str("---\n\n");
+
+        if !entity.observations.is_empty() {
+            content.push_str("## Observations\n\n");
+            for obs in entity.observations {
+                content.push_str(&format!("* {}\n", obs));
+            }
+            content.push_str("\n");
+        }
+
+        let relations: Vec<_> = graph.relations.iter()
+            .filter(|r| r.from == entity.name || r.to == entity.name)
+            .collect();
+
+        if !relations.is_empty() {
+            content.push_str("## Relations\n\n");
+            for rel in relations {
+                if rel.from == entity.name {
+                    content.push_str(&format!("* {} [[{}]]\n", rel.relation_type, slugify(&rel.to)));
+                } else {
+                    content.push_str(&format!("* [[{}]] is {} of this\n", slugify(&rel.from), rel.relation_type));
+                }
+            }
+        }
+
+        let mut file = std::fs::File::create(&file_path)?;
+        file.write_all(content.as_bytes())?;
+        
+        // Re-ingest to update Vector/FTS tier
+        ingest_file(&file_path, conn, store, embedder).await?;
+        count += 1;
+    }
+
+    Ok(count)
+}
 
 pub fn prune_old_sessions(kb_root: &str, days: u32) -> Result<usize> {
     let sessions_dir = PathBuf::from(kb_root).join("sessions");
