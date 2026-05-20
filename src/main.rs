@@ -25,23 +25,42 @@ enum Commands {
         query: String,
     },
     /// Create new entities in the knowledge graph
-    CreateEntities { entities: String },
+    CreateEntities {
+        name: String,
+        entity_type: String,
+    },
     /// Create relations between entities
-    CreateRelations { relations: String },
+    CreateRelations {
+        from: String,
+        to: String,
+        relation_type: String,
+    },
     /// Add observations to existing entities
-    AddObservations { observations: String },
+    AddObservations {
+        name: String,
+        content: String,
+    },
     /// Delete entities and their relations
-    DeleteEntities { names: String },
+    DeleteEntities {
+        names: Vec<String>,
+    },
     /// Delete specific observations
-    DeleteObservations { deletions: String },
+    DeleteObservations {
+        name: String,
+        content: String,
+    },
     /// Delete specific relations
-    DeleteRelations { relations: String },
+    DeleteRelations {
+        from: String,
+        to: String,
+        relation_type: String,
+    },
     /// Read the entire knowledge graph
     ReadGraph,
     /// Search for nodes
     SearchNodes { query: String },
     /// Retrieve specific nodes by name
-    OpenNodes { names: String },
+    OpenNodes { names: Vec<String> },
     /// Merge near-duplicate topics, prune sessions, and sync Graph to MD
     Compact {
         /// Prune sessions older than N days
@@ -109,34 +128,46 @@ async fn main() -> Result<()> {
                 }
             }
         }
-        Commands::CreateEntities { entities } => {
-            let params: rosemary::mcp::CreateEntitiesParams = serde_json::from_str(&entities)?;
-            rosemary::db::mcp_create_entities(&conn, params.entities).await?;
-            println!("Entities created.");
+        Commands::CreateEntities { name, entity_type } => {
+            rosemary::db::mcp_create_entities(&conn, vec![rosemary::mcp::EntityInput {
+                name: name.clone(),
+                entity_type,
+                observations: vec![],
+            }]).await?;
+            println!("Entity '{}' created.", name);
         }
-        Commands::CreateRelations { relations } => {
-            let params: rosemary::mcp::CreateRelationsParams = serde_json::from_str(&relations)?;
-            rosemary::db::mcp_create_relations(&conn, params.relations).await?;
-            println!("Relations created.");
+        Commands::CreateRelations { from, to, relation_type } => {
+            rosemary::db::mcp_create_relations(&conn, vec![rosemary::mcp::RelationInput {
+                from,
+                to,
+                relation_type,
+            }]).await?;
+            println!("Relation created.");
         }
-        Commands::AddObservations { observations } => {
-            let params: rosemary::mcp::AddObservationsParams = serde_json::from_str(&observations)?;
-            rosemary::db::mcp_add_observations(&conn, params.observations).await?;
-            println!("Observations added.");
+        Commands::AddObservations { name, content } => {
+            rosemary::db::mcp_add_observations(&conn, vec![rosemary::mcp::ObservationInput {
+                entity_name: name,
+                contents: vec![content],
+            }]).await?;
+            println!("Observation added.");
         }
         Commands::DeleteEntities { names } => {
-            let names: Vec<String> = serde_json::from_str(&names)?;
             rosemary::db::mcp_delete_entities(&conn, names).await?;
             println!("Entities deleted.");
         }
-        Commands::DeleteObservations { deletions } => {
-            let params: rosemary::mcp::DeleteObservationsParams = serde_json::from_str(&deletions)?;
-            rosemary::db::mcp_delete_observations(&conn, params.deletions).await?;
+        Commands::DeleteObservations { name, content } => {
+            rosemary::db::mcp_delete_observations(&conn, vec![rosemary::mcp::ObservationDeletion {
+                entity_name: name,
+                observations: vec![content],
+            }]).await?;
             println!("Observations deleted.");
         }
-        Commands::DeleteRelations { relations } => {
-            let params: rosemary::mcp::DeleteRelationsParams = serde_json::from_str(&relations)?;
-            rosemary::db::mcp_delete_relations(&conn, params.relations).await?;
+        Commands::DeleteRelations { from, to, relation_type } => {
+            rosemary::db::mcp_delete_relations(&conn, vec![rosemary::mcp::RelationInput {
+                from,
+                to,
+                relation_type,
+            }]).await?;
             println!("Relations deleted.");
         }
         Commands::ReadGraph => {
@@ -148,7 +179,6 @@ async fn main() -> Result<()> {
             println!("{}", serde_json::to_string_pretty(&graph)?);
         }
         Commands::OpenNodes { names } => {
-            let names: Vec<String> = serde_json::from_str(&names)?;
             let graph = rosemary::db::mcp_open_nodes(&conn, names).await?;
             println!("{}", serde_json::to_string_pretty(&graph)?);
         }
