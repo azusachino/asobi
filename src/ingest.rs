@@ -24,20 +24,22 @@ pub async fn ingest_file(
 
     // Fallback to filename stem if title is still Untitled
     if title == "Untitled"
-        && let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
-            title = stem.replace(['-', '_'], " ");
-            // capitalise words
-            title = title.split_whitespace()
-                .map(|w| {
-                    let mut chars = w.chars();
-                    match chars.next() {
-                        None => String::new(),
-                        Some(first) => format!("{}{}", first.to_uppercase(), chars.as_str()),
-                    }
-                })
-                .collect::<Vec<_>>()
-                .join(" ");
-        }
+        && let Some(stem) = path.file_stem().and_then(|s| s.to_str())
+    {
+        title = stem.replace(['-', '_'], " ");
+        // capitalise words
+        title = title
+            .split_whitespace()
+            .map(|w| {
+                let mut chars = w.chars();
+                match chars.next() {
+                    None => String::new(),
+                    Some(first) => format!("{}{}", first.to_uppercase(), chars.as_str()),
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(" ");
+    }
 
     let slug = slugify(&title);
     let file_path = path.to_str().unwrap_or_default().to_string();
@@ -92,15 +94,17 @@ pub async fn ingest_dir(
 /// otherwise the filename stem.
 fn parse_frontmatter(raw: &str) -> (String, String) {
     if let Some(rest) = raw.strip_prefix("---")
-        && let Some(end) = rest.find("\n---") {
-            let fm = &rest[..end];
-            let body = rest[end + 4..].trim_start_matches('\n').to_string();
-            let title = fm.lines()
-                .find(|l| l.starts_with("title:"))
-                .map(|l| l.trim_start_matches("title:").trim().to_string())
-                .unwrap_or_else(|| "Untitled".to_string());
-            return (title, body);
-        }
+        && let Some(end) = rest.find("\n---")
+    {
+        let fm = &rest[..end];
+        let body = rest[end + 4..].trim_start_matches('\n').to_string();
+        let title = fm
+            .lines()
+            .find(|l| l.starts_with("title:"))
+            .map(|l| l.trim_start_matches("title:").trim().to_string())
+            .unwrap_or_else(|| "Untitled".to_string());
+        return (title, body);
+    }
 
     // Try to find "title:" in the first few lines (legacy format)
     for line in raw.lines().take(5) {
@@ -132,24 +136,40 @@ mod tests {
         async fn embed(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
             Ok(texts.iter().map(|_| vec![0.1f32; self.0]).collect())
         }
-        fn dim(&self) -> usize { self.0 }
+        fn dim(&self) -> usize {
+            self.0
+        }
     }
 
     #[tokio::test]
     async fn test_ingest_single_file() {
         let dir = tempdir().unwrap();
         let db_path = dir.path().join("test.db");
-        unsafe { std::env::set_var("DATABASE_URL", db_path.to_str().unwrap()); }
+        unsafe {
+            std::env::set_var("DATABASE_URL", db_path.to_str().unwrap());
+        }
 
         let mut f = std::fs::File::create(dir.path().join("rust-pinning.md")).unwrap();
-        writeln!(f, "---\ntitle: Rust Pinning\nslug: rust-pinning\n---\n\nPinning is a mechanism...").unwrap();
+        writeln!(
+            f,
+            "---\ntitle: Rust Pinning\nslug: rust-pinning\n---\n\nPinning is a mechanism..."
+        )
+        .unwrap();
 
         let (_db, conn) = init_db().await.unwrap();
-        let store = VectorStore::new_with_dim(dir.path().join("lance").to_str().unwrap(), 4).await.unwrap();
+        let store = VectorStore::new_with_dim(dir.path().join("lance").to_str().unwrap(), 4)
+            .await
+            .unwrap();
         let embedder = FakeEmbedder(4);
 
-        ingest_file(dir.path().join("rust-pinning.md").as_path(), &conn, &store, &embedder)
-            .await.unwrap();
+        ingest_file(
+            dir.path().join("rust-pinning.md").as_path(),
+            &conn,
+            &store,
+            &embedder,
+        )
+        .await
+        .unwrap();
 
         let results = crate::db::search_fts(&conn, "pinning", 5).await.unwrap();
         assert_eq!(results.len(), 1);
@@ -160,18 +180,28 @@ mod tests {
     async fn test_ingest_dir_counts_files() {
         let dir = tempdir().unwrap();
         let db_path = dir.path().join("test2.db");
-        unsafe { std::env::set_var("DATABASE_URL", db_path.to_str().unwrap()); }
+        unsafe {
+            std::env::set_var("DATABASE_URL", db_path.to_str().unwrap());
+        }
 
         for name in &["a.md", "b.md", "c.md"] {
             let mut f = std::fs::File::create(dir.path().join(name)).unwrap();
-            writeln!(f, "---\ntitle: {name}\nslug: {name}\n---\n\nContent of {name}.").unwrap();
+            writeln!(
+                f,
+                "---\ntitle: {name}\nslug: {name}\n---\n\nContent of {name}."
+            )
+            .unwrap();
         }
 
         let (_db, conn) = init_db().await.unwrap();
-        let store = VectorStore::new_with_dim(dir.path().join("lance2").to_str().unwrap(), 4).await.unwrap();
+        let store = VectorStore::new_with_dim(dir.path().join("lance2").to_str().unwrap(), 4)
+            .await
+            .unwrap();
         let embedder = FakeEmbedder(4);
 
-        let count = ingest_dir(dir.path(), &conn, &store, &embedder).await.unwrap();
+        let count = ingest_dir(dir.path(), &conn, &store, &embedder)
+            .await
+            .unwrap();
         assert_eq!(count, 3);
     }
 }

@@ -1,7 +1,7 @@
-use tokio_util::bytes::Bytes;
 use futures::{SinkExt, StreamExt};
 use std::env;
 use tokio::net::TcpStream;
+use tokio_util::bytes::Bytes;
 use tokio_util::codec::{Framed, LengthDelimitedCodec};
 
 #[tokio::main]

@@ -1,6 +1,13 @@
-use directories::ProjectDirs;
+use serde::Deserialize;
 use std::env;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+
+#[derive(Debug, Deserialize, Default)]
+pub struct RosemaryConfig {
+    pub data_dir: Option<PathBuf>,
+    pub config_dir: Option<PathBuf>,
+    pub kb_dir: Option<PathBuf>,
+}
 
 pub struct RosemaryPaths {
     pub data_dir: PathBuf,
@@ -10,9 +17,28 @@ pub struct RosemaryPaths {
 
 impl RosemaryPaths {
     pub fn resolve() -> Self {
-        let home = env::var("ROSEMARY_HOME").map(PathBuf::from).ok();
+        // 1. Try project-local config.toml first
+        let local_config = Path::new("rosemary.toml");
+        if local_config.exists()
+            && let Ok(content) = std::fs::read_to_string(local_config)
+            && let Ok(conf) = toml::from_str::<RosemaryConfig>(&content)
+        {
+            return Self::from_config(conf, Path::new("."));
+        }
 
-        let proj_dirs = ProjectDirs::from("me", "azusachino", "rosemary");
+        // 2. Try project-local .rosemary directory
+        let local_root = PathBuf::from(".rosemary");
+        if local_root.exists() {
+            return Self {
+                data_dir: local_root.join("data"),
+                config_dir: local_root.join("config"),
+                kb_dir: local_root.join("topics"),
+            };
+        }
+
+        // 3. Fallback to XDG
+        let home = env::var("ROSEMARY_HOME").map(PathBuf::from).ok();
+        let proj_dirs = directories::ProjectDirs::from("me", "azusachino", "rosemary");
 
         let data_dir = home.clone().unwrap_or_else(|| {
             proj_dirs
@@ -39,6 +65,16 @@ impl RosemaryPaths {
             data_dir,
             config_dir,
             kb_dir,
+        }
+    }
+
+    fn from_config(conf: RosemaryConfig, root: &Path) -> Self {
+        Self {
+            data_dir: conf.data_dir.unwrap_or_else(|| root.join(".rosemary/data")),
+            config_dir: conf
+                .config_dir
+                .unwrap_or_else(|| root.join(".rosemary/config")),
+            kb_dir: conf.kb_dir.unwrap_or_else(|| root.join(".rosemary/topics")),
         }
     }
 

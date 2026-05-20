@@ -1,12 +1,30 @@
-# rust
+# ── Rust ─────────────────────────────────────────────────────────────────────
 target/
-.agents/CURRENT_TASK.md
-.agents/MEMORY.md
-.claude/settings.local.json
 
-# dev runtime
+# ── Rosemary runtime data ─────────────────────────────────────────────────────
+# Project-local graph + vector store (created by rosemary.toml / auto-detection)
+.rosemary/
+# Stale root-level DB (real one lives in .rosemary/data/)
+rosemary.db
+
+# ── Fastembed model cache ─────────────────────────────────────────────────────
+.fastembed_cache/
+
+# ── Dev artifacts ─────────────────────────────────────────────────────────────
+memory_export.json
+tools_list.json
 *.txt
 
-# other
+# ── Python (uv) ───────────────────────────────────────────────────────────────
+.venv/
+__pycache__/
+*.pyc
+
+# ── Secrets & local config ────────────────────────────────────────────────────
 .env
-.fastembed_cache/
+.env.*
+.claude/settings.local.json
+
+# ── Agent session state (local only) ─────────────────────────────────────────
+.agents/CURRENT_TASK.md
+.agents/MEMORY.md

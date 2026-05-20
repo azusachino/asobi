@@ -3,6 +3,7 @@
 ## Project Overview
 
 Rosemary is a multi-purpose Rust project serving as:
+
 1.  **Personal Knowledge Base CLI**: A reactive memory for users and agents to store, relate, and recall technical concepts using hybrid Markdown/libSQL storage.
 2.  **Async Rust Masterclass**: A learning platform for mastering async Rust patterns, networking, and best practices through standalone examples and toolkit explorations.
 
@@ -19,6 +20,7 @@ Rosemary is a multi-purpose Rust project serving as:
 - **Tooling**: Nix + Makefile (Primary), `mise` for tool management, `uv` for Python environments.
 
 The project is structured as:
+
 - `src/`: Core library, KB management, and learning modules.
 - `examples/`: Standalone async Rust samples.
 - `kb/topics/`: Source of truth Markdown files for the Knowledge Base.
