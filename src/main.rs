@@ -53,6 +53,10 @@ enum Commands {
         /// Optional: specific content to delete. If omitted, deletes all obs for entity (careful!)
         content: Option<String>,
     },
+    /// Open a specific entity to see its details
+    Open {
+        name: String,
+    },
     /// Merge near-duplicate topics, prune sessions, and sync Graph to MD
     Compact {
         /// Prune sessions older than N days
@@ -115,11 +119,8 @@ async fn main() -> Result<()> {
                 println!("No results found.");
             } else {
                 for r in results {
-                    println!("\n# {} (score: {:.2})", r.title, r.score);
-                    println!("Path: {}", r.file_path);
-                    if !r.snippet.is_empty() {
-                        println!("Snippet: {}...", &r.snippet.chars().take(120).collect::<String>());
-                    }
+                    // Concise format: Title (Score) | Path
+                    println!("{:<20} | (score: {:.2}) | {}", r.title, r.score, r.file_path);
                 }
             }
         }
@@ -156,6 +157,20 @@ async fn main() -> Result<()> {
                 }
             }
             println!("\nRelations:");
+            for r in graph.relations {
+                println!("- {} --({})--> {}", r.from, r.relation_type, r.to);
+            }
+        }
+        Commands::Open { name } => {
+            let graph = rosemary::db::mcp_open_nodes(&conn, vec![name.clone()]).await?;
+            for e in graph.entities {
+                println!("Entity: {} ({})", e.name, e.entity_type);
+                println!("Observations:");
+                for o in e.observations {
+                    println!("  * {}", o);
+                }
+            }
+            println!("Relations:");
             for r in graph.relations {
                 println!("- {} --({})--> {}", r.from, r.relation_type, r.to);
             }
