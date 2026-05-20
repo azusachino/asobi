@@ -5,16 +5,16 @@
 ## overview
 
 1. introduction
-2. basic
-3. build async queues
-4. integrating networking into async queue
-5. coroutines
-6. reactive programming
-7. customizing tokio
-8. the actor model
-9. design patterns
-10. build async server without dependencies
-11. testing
+1. basic
+1. build async queues
+1. integrating networking into async queue
+1. coroutines
+1. reactive programming
+1. customizing tokio
+1. the actor model
+1. design patterns
+1. build async server without dependencies
+1. testing
 
 ## references
 

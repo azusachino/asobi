@@ -9,14 +9,21 @@
 - **DON'T**: Use plan mode (write-plan → execute-plan) for small, well-scoped tasks.
 - **DON'T**: Install tools globally; use nix devShell or `make <target>`.
 
-# Project Context
+# Project Context: Rosemary
 
-- Rosemary is a learning-focused repo. Prioritize clarity and idiomatic Rust patterns.
-- Follow "best and popular practices" as requested by the user.
-- When adding new examples, update `AGENTS.md` if new crates or patterns are introduced.
+## Overview
+Rosemary is both a learning-focused repo for async Rust and a personal knowledge base CLI for agent-assisted learning.
+
+## Hard Rules
+- **Markdown First**: All KB topic content must be stored in `kb/topics/` with YAML frontmatter.
+- **Local-First**: Use libSQL (`rosemary.db`) locally for metadata, relations, and vectors.
+- **Slugified Paths**: All file names and DB keys must use URL-safe slugs.
+- **Clarity Over Cleverness**: Prioritize idiomatic Rust patterns and clear code for learning purposes.
 
 # Tool Provisioning
 
 - **Nix DevShell**: Primary tool source. Enter with `nix develop`.
 - **Makefile**: Task runner wrapper ensuring `nix develop --command` is used when outside the shell.
+- **Mise**: Fallback tool management.
+- **UV**: Python tool and environment management.
 - To add a new tool, add it to `flake.nix` in the `devShells.default.packages` list.
