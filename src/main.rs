@@ -24,39 +24,24 @@ enum Commands {
         /// Query string
         query: String,
     },
-    /// Add a new entity to the knowledge graph
-    AddEntity {
-        name: String,
-        #[arg(rename_all = "snake_case")]
-        entity_type: String,
-    },
-    /// Add an observation to an existing entity
-    AddObservation {
-        name: String,
-        content: String,
-    },
-    /// Relate two entities
-    Relate {
-        from: String,
-        to: String,
-        relation: String,
-    },
-    /// List all entities and relations (the whole graph)
-    List,
-    /// Remove an entity and its associated relations/observations
-    DeleteEntity {
-        name: String,
-    },
-    /// Remove specific observations from an entity
-    DeleteObservation {
-        name: String,
-        /// Optional: specific content to delete. If omitted, deletes all obs for entity (careful!)
-        content: Option<String>,
-    },
-    /// Open a specific entity to see its details
-    Open {
-        name: String,
-    },
+    /// Create new entities in the knowledge graph
+    CreateEntities { entities: String },
+    /// Create relations between entities
+    CreateRelations { relations: String },
+    /// Add observations to existing entities
+    AddObservations { observations: String },
+    /// Delete entities and their relations
+    DeleteEntities { names: String },
+    /// Delete specific observations
+    DeleteObservations { deletions: String },
+    /// Delete specific relations
+    DeleteRelations { relations: String },
+    /// Read the entire knowledge graph
+    ReadGraph,
+    /// Search for nodes
+    SearchNodes { query: String },
+    /// Retrieve specific nodes by name
+    OpenNodes { names: String },
     /// Merge near-duplicate topics, prune sessions, and sync Graph to MD
     Compact {
         /// Prune sessions older than N days
@@ -124,74 +109,48 @@ async fn main() -> Result<()> {
                 }
             }
         }
-        Commands::AddEntity { name, entity_type } => {
-            rosemary::db::mcp_create_entities(&conn, vec![rosemary::mcp::EntityInput {
-                name: name.clone(),
-                entity_type,
-                observations: vec![],
-            }]).await?;
-            println!("Entity '{}' added.", name);
+        Commands::CreateEntities { entities } => {
+            let params: rosemary::mcp::CreateEntitiesParams = serde_json::from_str(&entities)?;
+            rosemary::db::mcp_create_entities(&conn, params.entities).await?;
+            println!("Entities created.");
         }
-        Commands::AddObservation { name, content } => {
-            rosemary::db::mcp_add_observations(&conn, vec![rosemary::mcp::ObservationInput {
-                entity_name: name.clone(),
-                contents: vec![content],
-            }]).await?;
-            println!("Observation added to '{}'.", name);
+        Commands::CreateRelations { relations } => {
+            let params: rosemary::mcp::CreateRelationsParams = serde_json::from_str(&relations)?;
+            rosemary::db::mcp_create_relations(&conn, params.relations).await?;
+            println!("Relations created.");
         }
-        Commands::Relate { from, to, relation } => {
-            rosemary::db::mcp_create_relations(&conn, vec![rosemary::mcp::RelationInput {
-                from: from.clone(),
-                to: to.clone(),
-                relation_type: relation,
-            }]).await?;
-            println!("Relation {} -> {} added.", from, to);
+        Commands::AddObservations { observations } => {
+            let params: rosemary::mcp::AddObservationsParams = serde_json::from_str(&observations)?;
+            rosemary::db::mcp_add_observations(&conn, params.observations).await?;
+            println!("Observations added.");
         }
-        Commands::List => {
+        Commands::DeleteEntities { names } => {
+            let names: Vec<String> = serde_json::from_str(&names)?;
+            rosemary::db::mcp_delete_entities(&conn, names).await?;
+            println!("Entities deleted.");
+        }
+        Commands::DeleteObservations { deletions } => {
+            let params: rosemary::mcp::DeleteObservationsParams = serde_json::from_str(&deletions)?;
+            rosemary::db::mcp_delete_observations(&conn, params.deletions).await?;
+            println!("Observations deleted.");
+        }
+        Commands::DeleteRelations { relations } => {
+            let params: rosemary::mcp::DeleteRelationsParams = serde_json::from_str(&relations)?;
+            rosemary::db::mcp_delete_relations(&conn, params.relations).await?;
+            println!("Relations deleted.");
+        }
+        Commands::ReadGraph => {
             let graph = rosemary::db::mcp_read_graph(&conn).await?;
-            println!("Entities:");
-            for e in graph.entities {
-                println!("- {} ({})", e.name, e.entity_type);
-                for o in e.observations {
-                    println!("  * {}", o);
-                }
-            }
-            println!("\nRelations:");
-            for r in graph.relations {
-                println!("- {} --({})--> {}", r.from, r.relation_type, r.to);
-            }
+            println!("{}", serde_json::to_string_pretty(&graph)?);
         }
-        Commands::Open { name } => {
-            let graph = rosemary::db::mcp_open_nodes(&conn, vec![name.clone()]).await?;
-            for e in graph.entities {
-                println!("Entity: {} ({})", e.name, e.entity_type);
-                println!("Observations:");
-                for o in e.observations {
-                    println!("  * {}", o);
-                }
-            }
-            println!("Relations:");
-            for r in graph.relations {
-                println!("- {} --({})--> {}", r.from, r.relation_type, r.to);
-            }
+        Commands::SearchNodes { query } => {
+            let graph = rosemary::db::mcp_search_nodes(&conn, &query).await?;
+            println!("{}", serde_json::to_string_pretty(&graph)?);
         }
-        Commands::DeleteEntity { name } => {
-            rosemary::db::mcp_delete_entities(&conn, vec![name.clone()]).await?;
-            println!("Entity '{}' deleted.", name);
-        }
-        Commands::DeleteObservation { name, content } => {
-            if let Some(c) = content {
-                rosemary::db::mcp_delete_observations(&conn, vec![rosemary::mcp::ObservationDeletion {
-                    entity_name: name.clone(),
-                    observations: vec![c],
-                }]).await?;
-                println!("Observation deleted from '{}'.", name);
-            } else {
-                // If no content, we need a way to clear all observations. 
-                // For now, let's just delete the entity and re-add it if that's the intent, 
-                // or we could add a dedicated 'clear-obs' later.
-                println!("Warning: No content specified. Use delete-entity to remove everything.");
-            }
+        Commands::OpenNodes { names } => {
+            let names: Vec<String> = serde_json::from_str(&names)?;
+            let graph = rosemary::db::mcp_open_nodes(&conn, names).await?;
+            println!("{}", serde_json::to_string_pretty(&graph)?);
         }
         Commands::Compact { older_than } => {
             let kb_root = std::env::var("KB_ROOT")
