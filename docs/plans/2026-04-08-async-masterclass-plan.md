@@ -15,11 +15,13 @@
 ### Task 1.1: Dependencies & Core Infrastructure
 
 **Files:**
+
 - Modify: `Cargo.toml`
 - Create: `src/observability.rs`
 - Modify: `src/lib.rs`
 
 - [ ] **Step 1: Add observability and utility dependencies**
+
 ```toml
 # Add to Cargo.toml [dependencies]
 tracing = "0.1"
@@ -30,6 +32,7 @@ tokio-util = { version = "0.7", features = ["full"] }
 ```
 
 - [ ] **Step 2: Create the observability module**
+
 ```rust
 // src/observability.rs
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
@@ -49,6 +52,7 @@ pub fn init_metrics() {
 ```
 
 - [ ] **Step 3: Export the new module in lib.rs**
+
 ```rust
 // src/lib.rs
 pub mod observability;
@@ -56,10 +60,11 @@ pub mod observability;
 ```
 
 - [ ] **Step 4: Verify compilation**
-Run: `make check`
-Expected: PASS
+      Run: `make check`
+      Expected: PASS
 
 - [ ] **Step 5: Commit**
+
 ```bash
 git add Cargo.toml src/observability.rs src/lib.rs
 git commit -m "feat: init observability (tracing + metrics)"
@@ -68,11 +73,13 @@ git commit -m "feat: init observability (tracing + metrics)"
 ### Task 1.2: Graceful Shutdown Pattern
 
 **Files:**
+
 - Create: `src/shutdown.rs`
 - Modify: `src/lib.rs`
 - Create: `examples/graceful_shutdown.rs`
 
 - [ ] **Step 1: Implement the Shutdown Manager**
+
 ```rust
 // src/shutdown.rs
 use tokio::signal;
@@ -121,6 +128,7 @@ impl GracefulShutdown {
 ```
 
 - [ ] **Step 2: Add example demonstrating the pattern**
+
 ```rust
 // examples/graceful_shutdown.rs
 use rosemary::observability::init_tracing;
@@ -157,11 +165,12 @@ async fn main() -> anyhow::Result<()> {
 ```
 
 - [ ] **Step 3: Verify the example**
-Run: `make run-examples EXAMPLE=graceful_shutdown`
-(Press Ctrl+C to trigger shutdown)
-Expected: Logs show "received Ctrl+C signal", "worker: shutting down", and "main: goodbye!"
+      Run: `make run-examples EXAMPLE=graceful_shutdown`
+      (Press Ctrl+C to trigger shutdown)
+      Expected: Logs show "received Ctrl+C signal", "worker: shutting down", and "main: goodbye!"
 
 - [ ] **Step 4: Commit**
+
 ```bash
 git add src/shutdown.rs examples/graceful_shutdown.rs
 git commit -m "feat: implement graceful shutdown pattern"
@@ -174,6 +183,7 @@ git commit -m "feat: implement graceful shutdown pattern"
 ### Task 2.1: gRPC with Tonic
 
 **Files:**
+
 - Modify: `Cargo.toml`
 - Create: `proto/hello.proto`
 - Create: `build.rs`
@@ -181,6 +191,7 @@ git commit -m "feat: implement graceful shutdown pattern"
 - Create: `examples/grpc_client.rs`
 
 - [ ] **Step 1: Add Tonic dependencies**
+
 ```toml
 # Cargo.toml [dependencies]
 tonic = "0.12"
@@ -191,6 +202,7 @@ tonic-build = "0.12"
 ```
 
 - [ ] **Step 2: Define Protobuf service**
+
 ```proto
 // proto/hello.proto
 syntax = "proto3";
@@ -210,6 +222,7 @@ message HelloResponse {
 ```
 
 - [ ] **Step 3: Create build.rs for Protobuf compilation**
+
 ```rust
 // build.rs
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -219,14 +232,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 ```
 
 - [ ] **Step 4: Implement gRPC Server Example**
-(See full code in docs/plans/grpc_server_code.rs for detail)
+      (See full code in docs/plans/grpc_server_code.rs for detail)
 
 - [ ] **Step 5: Verify gRPC interaction**
-Run: `make run-examples EXAMPLE=grpc_server`
-Run: `make run-examples EXAMPLE=grpc_client` (in separate terminal)
-Expected: Client receives "Hello <name>!"
+      Run: `make run-examples EXAMPLE=grpc_server`
+      Run: `make run-examples EXAMPLE=grpc_client` (in separate terminal)
+      Expected: Client receives "Hello <name>!"
 
 - [ ] **Step 6: Commit**
+
 ```bash
 git add proto/ build.rs examples/grpc_server.rs examples/grpc_client.rs
 git commit -m "feat: add gRPC example using tonic"
@@ -239,19 +253,22 @@ git commit -m "feat: add gRPC example using tonic"
 ### Task 3.1: Async DB with SQLx
 
 **Files:**
+
 - Modify: `Cargo.toml`
 - Create: `examples/sqlx_sqlite.rs`
 
 - [ ] **Step 1: Add SQLx dependencies**
+
 ```toml
 # Cargo.toml [dependencies]
 sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite", "macros"] }
 ```
 
 - [ ] **Step 2: Implement SQLite Example**
-(See code in examples/sqlx_sqlite.rs)
+      (See code in examples/sqlx_sqlite.rs)
 
 - [ ] **Step 3: Commit**
+
 ```bash
 git add examples/sqlx_sqlite.rs
 git commit -m "feat: add SQLx SQLite example"
@@ -264,15 +281,18 @@ git commit -m "feat: add SQLx SQLite example"
 ### Task 4.1: Tokio Actor Pattern
 
 **Files:**
+
 - Create: `examples/tokio_actor.rs`
 
 - [ ] **Step 1: Implement the Handle/Command/Loop pattern**
+
 ```rust
 // examples/tokio_actor.rs
 // ... actor implementation details ...
 ```
 
 - [ ] **Step 2: Commit**
+
 ```bash
 git add examples/tokio_actor.rs
 git commit -m "feat: implement tokio actor pattern example"

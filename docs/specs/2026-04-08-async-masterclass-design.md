@@ -18,6 +18,7 @@ The `rosemary` project will evolve into a "best practices" async Rust learning r
 ## Architecture
 
 The project will transition from a flat `examples/` collection to a more structured hybrid:
+
 - `src/lib.rs`: Shared utilities (observability, shutdown, common error types).
 - `src/observability/`: Tracing and metrics configuration.
 - `src/shutdown/`: Graceful shutdown signal handling.
@@ -29,11 +30,13 @@ The project will transition from a flat `examples/` collection to a more structu
 ## Phase 1: Observability & Reliability
 
 ### Features
+
 - **Tracing**: `tracing` + `tracing-subscriber` (with `env-filter`).
 - **Metrics**: `metrics` + `metrics-exporter-prometheus` (exposing `/metrics`).
 - **Shutdown**: `tokio-util::sync::CancellationToken` for centralized cancellation.
 
 ### Architecture
+
 - `src/observability.rs`: `init_tracing()` and `init_metrics()` functions.
 - `src/shutdown.rs`: `GracefulShutdown` struct that listens for `SIGINT`/`SIGTERM` and triggers a cancellation token.
 
@@ -42,11 +45,13 @@ The project will transition from a flat `examples/` collection to a more structu
 ## Phase 2: Advanced Networking
 
 ### Features
+
 - **gRPC**: `tonic` + `prost` for high-performance service communication.
 - **WebSockets**: `tokio-tungstenite` for bidirectional streaming.
 - **Framing**: `tokio-util` `Codec`/`Framed` for custom binary protocols.
 
 ### Components
+
 - `proto/`: `.proto` files for gRPC definitions.
 - `examples/grpc_server.rs`: Sample gRPC service.
 - `examples/websocket_chat.rs`: Multi-client async chat.
@@ -57,10 +62,12 @@ The project will transition from a flat `examples/` collection to a more structu
 ## Phase 3: Data & Storage
 
 ### Features
+
 - **SQLx**: Async SQL with compile-time query verification.
 - **Redis**: Async caching and pub/sub via `fred`.
 
 ### Components
+
 - `examples/sqlx_db.rs`: CRUD with SQLite/Postgres.
 - `examples/redis_cache.rs`: Caching layer with TTL and invalidation logic.
 
@@ -69,11 +76,13 @@ The project will transition from a flat `examples/` collection to a more structu
 ## Phase 4: System Patterns
 
 ### Features
+
 - **Scheduling**: `tokio-cron-scheduler` for periodic tasks.
 - **Actor Pattern**: "Pure Tokio" actors using channels and background loop tasks.
 - **Stream Processing**: Aggregation and windowing using `futures` and `tokio-stream`.
 
 ### Components
+
 - `examples/task_scheduler.rs`: Cron-style job runner.
 - `examples/tokio_actor.rs`: Handle/Command/Loop pattern for state isolation.
 - `examples/stream_aggregate.rs`: Windowed stream processing demo.

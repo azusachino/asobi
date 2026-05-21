@@ -22,12 +22,12 @@ run:
 	$(NIX_RUN) cargo run -- $(ARGS)
 
 test:
-	$(NIX_RUN) cargo test
+	$(NIX_RUN) cargo test -- --test-threads=1
 
 fmt:
 	$(NIX_RUN) cargo fmt
-	$(NIX_RUN) taplo fmt
-	$(NIX_RUN) prettier --write "**/*.{md,json,yaml,yml}"
+	$(NIX_RUN) taplo fmt || true
+	$(NIX_RUN) prettier --write "**/*.{md,json,yaml,yml}" || true
 	$(NIX_RUN) uv run ruff format . || true
 
 lint:
@@ -48,4 +48,4 @@ init:
 	$(NIX_RUN) mise install || true
 	$(NIX_RUN) uv venv --python 3.14 || true
 	$(NIX_RUN) uv add ruff mdformat-gfm pymarkdownlnt --dev || true
-	mkdir -p scripts kb/topics
+	mkdir -p scripts

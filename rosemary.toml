@@ -1,0 +1,3 @@
+data_dir = ".rosemary/data"
+config_dir = ".rosemary/config"
+topics_dir = ".rosemary/topics"
