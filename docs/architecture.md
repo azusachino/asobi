@@ -18,7 +18,7 @@ LLM agents lose context between sessions. The `@modelcontextprotocol/server-memo
 │  │  mcp_obs_fts (FTS5 virtual table)               │   │
 │  └─────────────────────────────────────────────────┘   │
 │  ┌─────────────────────────────────────────────────┐   │
-│  │  KB tier (topics)                               │   │
+│  │  Document tier (topics)                         │   │
 │  │  topics · topics_fts · sessions                 │   │
 │  └─────────────────────────────────────────────────┘   │
 └────────────────────────────────────────────────────────┘
@@ -41,9 +41,13 @@ All context-sharing operations live here. Three tables:
 
 Plus `mcp_obs_fts` — a FTS5 virtual table that mirrors `mcp_observations.content`. Kept in sync by three triggers (`mcp_obs_ai`, `mcp_obs_ad`, `mcp_obs_au`).
 
-### KB tier (cold)
+### Document tier (cold)
 
 Ingested Markdown files chunked, embedded, and stored in LanceDB for semantic search. This tier is **optional** — graph operations never touch it. Only `ingest`, `query`, and `compact` initialize LanceDB and the fastembed model.
+
+The tier is also compile-time optional. The default Cargo build excludes LanceDB,
+fastembed, Arrow, token splitting, and directory ingest dependencies. Build with
+`--features documents` to enable `ingest`, `query`, and `compact`.
 
 ---
 
@@ -91,19 +95,19 @@ This means different projects keep separate graphs automatically — no namespac
 
 ## Startup cost by command
 
-| Command            | Initializes DB | Initializes LanceDB+fastembed | Typical cold start |
-| ------------------ | -------------- | ----------------------------- | ------------------ |
-| `create-entities`  | yes            | **no**                        | ~5ms               |
-| `add-observations` | yes            | **no**                        | ~5ms               |
-| `read-graph`       | yes            | **no**                        | ~5ms               |
-| `search-nodes`     | yes            | **no**                        | ~5ms               |
-| `open-nodes`       | yes            | **no**                        | ~5ms               |
-| `delete-*`         | yes            | **no**                        | ~5ms               |
-| `ingest`           | yes            | yes                           | 3–30s              |
-| `query`            | yes            | yes                           | 3–30s              |
-| `compact`          | yes            | yes                           | 3–30s              |
+| Command            | Default build | Initializes DB | Initializes LanceDB+fastembed | Typical cold start |
+| ------------------ | ------------- | -------------- | ----------------------------- | ------------------ |
+| `create-entities`  | yes           | yes            | **no**                        | ~5ms               |
+| `add-observations` | yes           | yes            | **no**                        | ~5ms               |
+| `read-graph`       | yes           | yes            | **no**                        | ~5ms               |
+| `search-nodes`     | yes           | yes            | **no**                        | ~5ms               |
+| `open-nodes`       | yes           | yes            | **no**                        | ~5ms               |
+| `delete-*`         | yes           | yes            | **no**                        | ~5ms               |
+| `ingest`           | documents     | yes            | yes                           | 3–30s              |
+| `query`            | documents     | yes            | yes                           | 3–30s              |
+| `compact`          | documents     | yes            | yes                           | 3–30s              |
 
-The lazy-init split is enforced in `main.rs` via `needs_vector()`. Graph commands never pay the model load cost.
+The lazy-init split is enforced in `main.rs` via `needs_vector()`. Graph commands never pay the model load cost, and default builds do not link the document-tier crates.
 
 ---
 
@@ -128,7 +132,9 @@ The MCP path reuses the same libSQL operations as the CLI commands — no separa
 
 ## Performance headroom
 
-The current implementation is correct and fast for typical use (<10k entities). Known improvement opportunities, in order of impact:
+The current implementation is correct and fast for typical use. `search-nodes`
+defaults to top 100 matches; pass an explicit limit when you really need a
+larger ranked export. Known improvement opportunities, in order of impact:
 
 ### 1. WAL journal mode _(easy, ~5 lines)_
 
@@ -139,46 +145,19 @@ PRAGMA synchronous = NORMAL;
 
 SQLite's default rollback journal serializes all readers behind writers. WAL (Write-Ahead Logging) allows concurrent readers alongside one writer. Relevant when multiple agent processes write simultaneously (e.g., two sessions on the same project). Add to `init_db()`.
 
-### 2. Index on `mcp_observations.entity_name` _(easy, ~2 lines)_
-
-```sql
-CREATE INDEX IF NOT EXISTS idx_obs_entity ON mcp_observations(entity_name);
-```
-
-`search-nodes` and `open-nodes` do `WHERE entity_name = ?1` lookups per matched entity. Without an index, each lookup is a full table scan. As observations grow (>1k), this index pays for itself immediately.
-
-### 3. Batch observation queries — fix N+1 _(medium)_
-
-In `mcp_search_nodes` and `mcp_open_nodes`, observations are fetched one entity at a time:
-
-```rust
-for name in &entity_names {
-    conn.query("SELECT content FROM mcp_observations WHERE entity_name = ?1", ...)
-}
-```
-
-Replace with a single batched query:
-
-```sql
-SELECT entity_name, content FROM mcp_observations
-WHERE entity_name IN (?, ?, ...)
-```
-
-Then group in Rust. Reduces round-trips from N to 1.
-
-### 4. `FxHashSet` for deduplication _(easy, ~3 lines)_
+### 2. `FxHashSet` for deduplication _(easy, ~3 lines)_
 
 `mcp_search_nodes` uses `Vec::contains` to deduplicate entity names — O(n) per check. Replace with `rustc-hash::FxHashSet` for O(1). Only matters at >100 matched entities, but it's a mechanical improvement.
 
-### 5. Batch INSERT for observations _(medium)_
+### 3. Batch INSERT for observations _(medium)_
 
 `mcp_create_entities` and `mcp_add_observations` insert one observation at a time in a loop. Multi-row INSERT or a prepared statement with a transaction wrapper would reduce per-row overhead significantly for bulk loads.
 
-### 6. Parallel FTS + LIKE queries _(hard)_
+### 4. Parallel FTS + LIKE queries _(hard)_
 
 The two search paths in `mcp_search_nodes` are sequential. With a connection pool (e.g., `bb8` + libsql), they could run concurrently via `tokio::join!`. The gain is small for <1k entities but meaningful for large graphs.
 
-### 7. `compact` without re-embedding _(medium)_
+### 5. `compact` without re-embedding _(medium)_
 
 `compact` always re-embeds every entity into LanceDB. It could skip entities whose Markdown file hash hasn't changed since last sync. Add a `content_hash` column to `topics`.
 

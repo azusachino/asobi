@@ -108,6 +108,7 @@ struct DeleteRelationsParams {
 #[derive(Debug, Deserialize)]
 struct SearchNodesParams {
     query: String,
+    limit: Option<usize>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -327,7 +328,12 @@ fn handle_tools_list(id: serde_json::Value) -> JsonRpcResponse {
                     "inputSchema": {
                         "type": "object",
                         "properties": {
-                            "query": {"type": "string"}
+                            "query": {"type": "string"},
+                            "limit": {
+                                "type": "integer",
+                                "minimum": 1,
+                                "description": "Maximum number of matched nodes to return"
+                            }
                         },
                         "required": ["query"]
                     }
@@ -398,7 +404,10 @@ async fn handle_tools_call(
         }
         "search_nodes" => {
             let p: SearchNodesParams = serde_json::from_value(args)?;
-            let graph = db::mcp_search_nodes(conn, &p.query).await?;
+            let graph = match p.limit {
+                Some(limit) => db::mcp_search_nodes_with_limit(conn, &p.query, limit).await?,
+                None => db::mcp_search_nodes(conn, &p.query).await?,
+            };
             serde_json::to_string(&graph)?
         }
         "open_nodes" => {

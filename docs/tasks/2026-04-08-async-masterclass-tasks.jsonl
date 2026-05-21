@@ -1,5 +1,0 @@
-{"task": "Task 1.1: Dependencies & Core Infrastructure", "status": "TODO", "files": ["Cargo.toml", "src/observability.rs", "src/lib.rs"]}
-{"task": "Task 1.2: Graceful Shutdown Pattern", "status": "TODO", "files": ["src/shutdown.rs", "src/lib.rs", "examples/graceful_shutdown.rs"]}
-{"task": "Task 2.1: gRPC with Tonic", "status": "TODO", "files": ["Cargo.toml", "proto/hello.proto", "build.rs", "examples/grpc_server.rs", "examples/grpc_client.rs"]}
-{"task": "Task 3.1: Async DB with SQLx", "status": "TODO", "files": ["Cargo.toml", "examples/sqlx_sqlite.rs"]}
-{"task": "Task 4.1: Tokio Actor Pattern", "status": "TODO", "files": ["examples/tokio_actor.rs"]}

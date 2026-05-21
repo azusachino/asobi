@@ -35,7 +35,7 @@ Two storage tiers, one file:
 | Graph (hot)      | libSQL + FTS5       | Entities, observations, relations — instant CLI access |
 | Documents (cold) | LanceDB + fastembed | Semantic search over ingested Markdown files           |
 
-Graph operations have no model startup cost. The FTS5 index is a b-tree inside the `.db` file — queried with a file open, not a server call. See [`docs/architecture.md`](docs/architecture.md).
+Graph operations have no model startup cost and are compiled by default. The document tier is behind Cargo feature `documents` so default debug builds stay small. The FTS5 index is a b-tree inside the `.db` file — queried with a file open, not a server call. See [`docs/architecture.md`](docs/architecture.md).
 
 ## Documentation
 
@@ -64,9 +64,14 @@ The default `init` writes to `~/.local/share/rosemary/` and `~/.config/rosemary/
 ## Build
 
 ```bash
-make build    # build rosemary CLI
-make check    # fmt + clippy + tests
-make test     # tests only
+make build            # build graph/MCP CLI only
+make build-documents  # build with ingest/query/compact document commands
+make check            # fmt + clippy + tests for default graph/MCP build
+make bench            # graph-tier microbenchmark harness
+make test             # tests only
 ```
 
 Requires Nix (`nix develop`) or a Rust toolchain with the dependencies in `Cargo.toml`.
+
+`search-nodes` returns the top 100 matches by default. Use `--limit <N>` for
+larger ranked result sets, and use `read-graph` for full export.

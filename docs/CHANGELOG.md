@@ -4,7 +4,7 @@
 
 ### Summary
 
-Rosemary pivots from an async Rust learning project to a dual-purpose tool: a production-grade knowledge graph CLI for LLM agents, and a continued async Rust masterclass. The graph tier is now the primary interface.
+Rosemary pivots from an async Rust learning project to a production-grade knowledge graph CLI for LLM agents. The graph tier is now the primary interface.
 
 ### Breaking changes
 
@@ -42,6 +42,8 @@ All graph operations complete in <10ms. No model startup cost.
 - FTS5 operators: `AND`, `OR`, `NOT`, prefix `*`
 - Falls back to substring LIKE on entity name/type (catches exact-name lookups and entities with no observations)
 - Invalid FTS5 syntax degrades gracefully to LIKE
+- Defaults to top 100 matched nodes; use `--limit` or MCP `limit` for larger exports
+- Batch-loads matched entities/observations and indexes `mcp_observations(entity_name)` to avoid N+1 observation reads
 
 #### MCP stdio server
 
@@ -57,6 +59,14 @@ Register with Claude Code: `claude mcp add rosemary -- rosemary mcp`
 #### Lazy vector initialization
 
 Graph commands (`create-entities`, `read-graph`, `search-nodes`, etc.) no longer initialize LanceDB or the fastembed model. Only `ingest`, `query`, and `compact` pay the model load cost.
+
+#### Optional document-tier feature
+
+LanceDB, fastembed, Arrow, token splitting, and directory ingest dependencies are now behind Cargo feature `documents`. Default builds include the graph/MCP CLI only; build with `--features documents` or `make build-documents` to enable `ingest`, `query`, and `compact`.
+
+#### Scripted CLI integration checks
+
+`scripts/verify_cli.py` now runs graph-only CLI integration checks via `uv`, covering entity creation, observations, relations, FTS fallback, deletion, and JSON output parsing.
 
 #### Project-local storage
 
@@ -74,6 +84,7 @@ Agents in different repos keep separate graphs automatically.
 - Fixed `SKILL.md` command names (was referencing pre-refactor API)
 - Fixed `verify_cli.py` command names
 - Fixed clippy lints in `compact.rs` (`push_str("\n")` → `push('\n')`) and `paths.rs` (collapsible if)
+- Removed the stale async-learning track, gRPC proto/build script, and related dependencies before public release.
 
 ### Documentation
 
@@ -96,4 +107,4 @@ See [`docs/architecture.md`](architecture.md#performance-headroom) for implement
 
 ## v0.1.0 — 2026-04-08
 
-Initial project setup. Async Rust masterclass examples, basic KB ingestion with libSQL + LanceDB, FTS5 on topics. Agent infrastructure (`AGENTS.md`, `.claude/rules/`, `GEMINI.md`, `flake.nix`, `Makefile`).
+Initial project setup. Basic document ingestion with libSQL + LanceDB, FTS5 on topics. Agent infrastructure (`AGENTS.md`, `.claude/rules/`, `GEMINI.md`, `flake.nix`, `Makefile`).

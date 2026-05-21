@@ -4,8 +4,6 @@
 
 Rosemary is a persistent **knowledge graph CLI** for humans and LLM agents. It maintains entities, observations, and relations in a local libSQL file, with optional semantic recall over ingested Markdown documents.
 
-The repo also doubles as a sandbox for async Rust patterns; standalone samples live under `examples/`.
-
 ## Tech Stack
 
 - **Language**: Rust (edition 2024); Python 3.14 for ancillary scripts.
@@ -14,7 +12,7 @@ The repo also doubles as a sandbox for async Rust patterns; standalone samples l
   - LanceDB + `fastembed` for the document tier — chunked, embedded Markdown for semantic recall.
 - **Async runtime**: `tokio`.
 - **CLI**: `clap` (derive).
-- **Other**: `serde`/`serde_json`, `anyhow`/`thiserror`, `chrono`, `uuid`, `walkdir`, `directories`, `text-splitter`.
+- **Other**: `serde`/`serde_json`, `anyhow`, `chrono`, `uuid`, `directories`; optional document-tier crates include `walkdir`, `text-splitter`, `fastembed`, and LanceDB/Arrow.
 
 ## Repository Layout
 
@@ -26,7 +24,6 @@ The repo also doubles as a sandbox for async Rust patterns; standalone samples l
 - `src/init.rs` — `rosemary init` workspace bootstrap.
 - `src/ingest.rs`, `src/chunk.rs`, `src/embed/`, `src/vector.rs`, `src/recall.rs` — document tier pipeline.
 - `src/compact.rs`, `src/digest.rs` — maintenance and session digest helpers.
-- `examples/` — standalone async Rust samples.
 - `docs/` — architecture, usage guide, design plans, changelog.
 - `scripts/` — Python utilities (managed via `uv`).
 
@@ -48,21 +45,23 @@ See [`SKILL.md`](SKILL.md) and [`docs/usage.md`](docs/usage.md) for the full ref
 
 Day-to-day work goes through `make`:
 
-- `make fmt` — format Rust, TOML, Markdown, Python.
-- `make lint` — clippy (`-D warnings`) plus ruff/pymarkdown.
+- `make fmt` — format Rust, JSON/YAML, and Python.
+- `make lint` — clippy (`-D warnings`) plus ruff.
 - `make test` — cargo test (single-threaded; tests share `DATABASE_URL`).
-- `make check` — `fmt` + `lint` + `test`. CI baseline.
+- `make test-scripts` — `uv`-managed CLI integration checks.
+- `make check` — `fmt` + `lint` + `test` + `test-scripts`. CI baseline.
 - `make build` — debug build of the CLI.
-- `make run-examples EXAMPLE=name` — run an async sample.
+- `make build-documents` / `make test-documents` — enable the optional document tier.
+- `make bench` — graph-tier benchmark harness.
 
 With Nix installed, every target runs inside `nix develop` automatically.
 
 ## Coding Conventions
 
 - Standard Rust naming (snake_case / PascalCase).
-- `anyhow` at application boundaries; `thiserror` for library-style errors.
+- `anyhow` at application boundaries.
 - Table-driven tests where they fit; integration tests embedded in modules.
-- Formatters: `rustfmt`, `taplo` (TOML), `prettier` (MD/JSON/YAML).
+- Formatters: `rustfmt`, `prettier` (JSON/YAML), `ruff`.
 - Python via `uv` (Python 3.14).
 
 ## Quality Standards

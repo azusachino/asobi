@@ -6,12 +6,13 @@
 - **Runtime**: Tokio (full)
 - **Task Runner**: `make` (Nix-wrapped)
 - **Conventions**:
-  - `anyhow` for app errors, `thiserror` for library errors.
+  - `anyhow` for app errors.
   - Idiomatic Rust (snake_case, PascalCase).
-  - MPMC channels via `flume`.
 - **Primary Commands**:
   - `make fmt`
   - `make lint`
   - `make test`
+  - `make test-scripts`
   - `make check`
-  - `make run-examples EXAMPLE=<name>`
+  - `make check-documents`
+  - `make bench`

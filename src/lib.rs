@@ -1,23 +1,21 @@
 //! Rosemary — Knowledge Graph & Document Memory
 
-// Graph (libSQL) + Document/Vector (LanceDB) tiers
+// Graph (libSQL) + optional Document/Vector (LanceDB) tiers
+#[cfg(feature = "documents")]
 pub mod chunk;
+#[cfg(feature = "documents")]
 pub mod compact;
 pub mod db;
 pub mod digest;
+#[cfg(feature = "documents")]
 pub mod embed;
+#[cfg(feature = "documents")]
 pub mod ingest;
 pub mod init;
+#[cfg(feature = "documents")]
 pub mod recall;
+#[cfg(feature = "documents")]
 pub mod vector;
-
-// Async Masterclass Modules
-pub mod observability;
-pub mod queue;
-pub mod shutdown;
-
-#[cfg(test)]
-mod tests;
 
 // Shared Utilities
 pub mod mcp;

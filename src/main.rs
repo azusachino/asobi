@@ -1,12 +1,15 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
+#[cfg(feature = "documents")]
 use rosemary::paths::RosemaryPaths;
+#[cfg(feature = "documents")]
 use std::path::Path;
+#[cfg(feature = "documents")]
 use std::sync::Arc;
 
 #[derive(Parser)]
 #[command(name = "rosemary")]
-#[command(about = "Rosemary: Knowledge Base & Memory CLI", long_about = None)]
+#[command(about = "Rosemary: Knowledge Graph & Memory CLI", long_about = None)]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
@@ -14,12 +17,14 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Ingest a file or directory into the knowledge base
+    /// Ingest a file or directory into the document tier
+    #[cfg(feature = "documents")]
     Ingest {
         /// Path to file or directory
         path: String,
     },
     /// Query topics or chunks using hybrid semantic + keyword search
+    #[cfg(feature = "documents")]
     Query {
         /// Query string
         query: String,
@@ -47,10 +52,16 @@ enum Commands {
     /// Read the entire knowledge graph
     ReadGraph,
     /// Search for nodes
-    SearchNodes { query: String },
+    SearchNodes {
+        query: String,
+        /// Maximum number of matched nodes to return
+        #[arg(long, default_value_t = rosemary::db::DEFAULT_SEARCH_LIMIT)]
+        limit: usize,
+    },
     /// Retrieve specific nodes by name
     OpenNodes { names: Vec<String> },
     /// Merge near-duplicate topics, prune sessions, and sync Graph to MD
+    #[cfg(feature = "documents")]
     Compact {
         /// Prune sessions older than N days
         #[arg(long, default_value = "90")]
@@ -67,6 +78,7 @@ enum Commands {
     },
 }
 
+#[cfg(feature = "documents")]
 fn needs_vector(cmd: &Commands) -> bool {
     matches!(
         cmd,
@@ -74,6 +86,12 @@ fn needs_vector(cmd: &Commands) -> bool {
     )
 }
 
+#[cfg(not(feature = "documents"))]
+fn needs_vector(_: &Commands) -> bool {
+    false
+}
+
+#[cfg(feature = "documents")]
 async fn init_vector(
     paths: &RosemaryPaths,
 ) -> Result<(
@@ -118,6 +136,7 @@ async fn main() -> Result<()> {
         return Ok(());
     }
 
+    #[cfg(feature = "documents")]
     let paths = RosemaryPaths::resolve();
     let (_db, conn) = rosemary::db::init_db().await?;
 
@@ -125,53 +144,58 @@ async fn main() -> Result<()> {
     // Graph-only operations (create-entities, read-graph, etc.) skip the heavy
     // fastembed model load entirely.
     if needs_vector(&cli.command) {
-        let (store, embedder) = init_vector(&paths).await?;
-        match cli.command {
-            Commands::Ingest { path } => {
-                let p = Path::new(&path);
-                if p.is_dir() {
-                    println!("Ingesting directory: {:?}...", p);
-                    let count =
-                        rosemary::ingest::ingest_dir(p, &conn, &store, embedder.as_ref()).await?;
-                    println!("Done. Ingested {} files.", count);
-                } else {
-                    println!("Ingesting file: {:?}...", p);
-                    rosemary::ingest::ingest_file(p, &conn, &store, embedder.as_ref()).await?;
-                    println!("Done.");
-                }
-            }
-            Commands::Query { query } => {
-                println!("Searching: {}...", query);
-                let results =
-                    rosemary::recall::recall(&query, &conn, &store, embedder.as_ref(), 5).await?;
-                if results.is_empty() {
-                    println!("No results found.");
-                } else {
-                    for r in results {
-                        println!(
-                            "{:<20} | (score: {:.2}) | {}",
-                            r.title, r.score, r.file_path
-                        );
+        #[cfg(feature = "documents")]
+        {
+            let (store, embedder) = init_vector(&paths).await?;
+            match cli.command {
+                Commands::Ingest { path } => {
+                    let p = Path::new(&path);
+                    if p.is_dir() {
+                        println!("Ingesting directory: {:?}...", p);
+                        let count =
+                            rosemary::ingest::ingest_dir(p, &conn, &store, embedder.as_ref())
+                                .await?;
+                        println!("Done. Ingested {} files.", count);
+                    } else {
+                        println!("Ingesting file: {:?}...", p);
+                        rosemary::ingest::ingest_file(p, &conn, &store, embedder.as_ref()).await?;
+                        println!("Done.");
                     }
                 }
-            }
-            Commands::Compact { older_than } => {
-                let topics_root = std::env::var("ROSEMARY_TOPICS_DIR")
-                    .unwrap_or_else(|_| paths.topics_dir.to_str().unwrap().to_string());
-                let pruned = rosemary::compact::prune_old_sessions(&topics_root, older_than)?;
-                println!("Pruned {} old session files.", pruned);
+                Commands::Query { query } => {
+                    println!("Searching: {}...", query);
+                    let results =
+                        rosemary::recall::recall(&query, &conn, &store, embedder.as_ref(), 5)
+                            .await?;
+                    if results.is_empty() {
+                        println!("No results found.");
+                    } else {
+                        for r in results {
+                            println!(
+                                "{:<20} | (score: {:.2}) | {}",
+                                r.title, r.score, r.file_path
+                            );
+                        }
+                    }
+                }
+                Commands::Compact { older_than } => {
+                    let topics_root = std::env::var("ROSEMARY_TOPICS_DIR")
+                        .unwrap_or_else(|_| paths.topics_dir.to_str().unwrap().to_string());
+                    let pruned = rosemary::compact::prune_old_sessions(&topics_root, older_than)?;
+                    println!("Pruned {} old session files.", pruned);
 
-                let clusters =
-                    rosemary::compact::find_duplicate_clusters(&store, &conn, 0.85).await?;
-                println!("Found {} near-duplicate topic clusters.", clusters.len());
+                    let clusters =
+                        rosemary::compact::find_duplicate_clusters(&store, &conn, 0.85).await?;
+                    println!("Found {} near-duplicate topic clusters.", clusters.len());
 
-                println!("Syncing Graph to Markdown...");
-                let synced =
-                    rosemary::compact::sync_graph_to_markdown(&conn, &store, embedder.as_ref())
-                        .await?;
-                println!("Done. Synced {} entities to Markdown.", synced);
+                    println!("Syncing Graph to Markdown...");
+                    let synced =
+                        rosemary::compact::sync_graph_to_markdown(&conn, &store, embedder.as_ref())
+                            .await?;
+                    println!("Done. Synced {} entities to Markdown.", synced);
+                }
+                _ => unreachable!(),
             }
-            _ => unreachable!(),
         }
         return Ok(());
     }
@@ -251,8 +275,8 @@ async fn main() -> Result<()> {
             let graph = rosemary::db::mcp_read_graph(&conn).await?;
             println!("{}", serde_json::to_string_pretty(&graph)?);
         }
-        Commands::SearchNodes { query } => {
-            let graph = rosemary::db::mcp_search_nodes(&conn, &query).await?;
+        Commands::SearchNodes { query, limit } => {
+            let graph = rosemary::db::mcp_search_nodes_with_limit(&conn, &query, limit).await?;
             println!("{}", serde_json::to_string_pretty(&graph)?);
         }
         Commands::OpenNodes { names } => {

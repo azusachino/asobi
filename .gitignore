@@ -11,6 +11,7 @@ rosemary.db
 .fastembed_cache/
 
 # ── Dev artifacts ─────────────────────────────────────────────────────────────
+.DS_Store
 memory_export.json
 tools_list.json
 *.txt

@@ -20,7 +20,7 @@ Rosemary will be extended with a Model Context Protocol (MCP) server interface t
 ### 3.1 Storage Model (Hybrid Tiered Storage)
 
 - **Hot Tier (libSQL)**: Immediate storage for MCP tool calls. Handles frequent writes and complex relational queries for the graph.
-- **Cold Tier (Markdown)**: Long-term archival and human-editable storage. Topics are stored in `kb/topics/*.md`.
+- **Cold Tier (Markdown)**: Long-term archival and human-editable storage. Topics are stored in `.rosemary/topics/*.md`.
 - **Vector Tier (LanceDB)**: Semantic search indexing across both tiers.
 
 ### 3.2 Path Management (XDG)
@@ -29,7 +29,7 @@ Rosemary will move away from local-folder storage to system-standard paths:
 
 - **Data**: `~/.local/share/rosemary/` (DB, Vector store, Model cache)
 - **Config**: `~/.config/rosemary/config.toml`
-- **KB Source**: `~/Documents/rosemary/topics/` (Default, configurable)
+- **Topics Source**: `~/Documents/rosemary/topics/` (Default, configurable)
 
 ### 3.3 Data Schema (libSQL)
 
@@ -64,7 +64,7 @@ The server will implement the following primitives:
 - Implement the MCP protocol loop (stdio-based).
 - Map MCP tool requests to libSQL operations.
 
-### Phase 3: KB Integration & Compaction
+### Phase 3: Document Integration & Compaction
 
 - Implement `compact` logic to sync libSQL Graph data into Markdown files.
 - Update `ingest` logic to ensure human-written Markdown updates the Graph state.
@@ -73,7 +73,7 @@ The server will implement the following primitives:
 
 - Update `main.rs` to provide a unified `rosemary` CLI with subcommands:
   - `rosemary mcp start`: Launch the server.
-  - `rosemary kb [ingest|query|compact]`: Manage the knowledge base.
+  - `rosemary [ingest|query|compact]`: Manage the document tier.
 
 ## 6. Success Criteria
 

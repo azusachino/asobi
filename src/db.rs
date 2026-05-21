@@ -1,6 +1,9 @@
 use anyhow::Result;
 use libsql::{Builder, Connection, Database};
+use std::collections::HashMap;
 use std::env;
+
+pub const DEFAULT_SEARCH_LIMIT: usize = 100;
 
 pub async fn init_db() -> Result<(Database, Connection)> {
     let paths = crate::paths::RosemaryPaths::resolve();
@@ -66,6 +69,13 @@ pub async fn init_db() -> Result<(Database, Connection)> {
             created_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (entity_name) REFERENCES mcp_entities(name) ON DELETE CASCADE
         )",
+        (),
+    )
+    .await?;
+
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_mcp_observations_entity_name
+         ON mcp_observations(entity_name)",
         (),
     )
     .await?;
@@ -328,18 +338,31 @@ pub async fn mcp_read_graph(conn: &Connection) -> Result<crate::mcp::Graph> {
 }
 
 pub async fn mcp_search_nodes(conn: &Connection, query: &str) -> Result<crate::mcp::Graph> {
+    mcp_search_nodes_with_limit(conn, query, DEFAULT_SEARCH_LIMIT).await
+}
+
+pub async fn mcp_search_nodes_with_limit(
+    conn: &Connection,
+    query: &str,
+    limit: usize,
+) -> Result<crate::mcp::Graph> {
+    let limit = limit.max(1);
     let mut entity_names: Vec<String> = Vec::new();
 
     // Primary: FTS5 on observation content — porter stemming + BM25 ranking.
     // Wrapped in an async block so any error (invalid syntax, bad token) is
     // caught at the boundary and we fall through to the LIKE path.
-    let fts_sql = "SELECT DISTINCT o.entity_name
-                   FROM mcp_obs_fts f
-                   JOIN mcp_observations o ON f.rowid = o.rowid
+    let fts_sql = "SELECT o.entity_name
+                   FROM mcp_obs_fts
+                   JOIN mcp_observations o ON mcp_obs_fts.rowid = o.rowid
                    WHERE mcp_obs_fts MATCH ?1
-                   ORDER BY bm25(mcp_obs_fts)";
+                   ORDER BY bm25(mcp_obs_fts)
+                   LIMIT ?2";
     let fts_hits: Vec<String> = async {
-        let mut rows = conn.query(fts_sql, libsql::params![query]).await?;
+        let fts_fetch_limit = limit.saturating_mul(8).max(limit) as i64;
+        let mut rows = conn
+            .query(fts_sql, libsql::params![query, fts_fetch_limit])
+            .await?;
         let mut names = Vec::new();
         while let Some(row) = rows.next().await? {
             names.push(row.get::<String>(0)?);
@@ -351,6 +374,9 @@ pub async fn mcp_search_nodes(conn: &Connection, query: &str) -> Result<crate::m
     for name in fts_hits {
         if !entity_names.contains(&name) {
             entity_names.push(name);
+            if entity_names.len() >= limit {
+                break;
+            }
         }
     }
 
@@ -359,75 +385,27 @@ pub async fn mcp_search_nodes(conn: &Connection, query: &str) -> Result<crate::m
     let pattern = format!("%{}%", query);
     let mut rows = conn
         .query(
-            "SELECT name FROM mcp_entities WHERE name LIKE ?1 OR entity_type LIKE ?1",
-            libsql::params![pattern],
+            "SELECT name FROM mcp_entities
+             WHERE name LIKE ?1 OR entity_type LIKE ?1
+             ORDER BY name
+             LIMIT ?2",
+            libsql::params![pattern, limit as i64],
         )
         .await?;
     while let Some(row) = rows.next().await? {
         let name: String = row.get(0)?;
         if !entity_names.contains(&name) {
             entity_names.push(name);
+            if entity_names.len() >= limit {
+                break;
+            }
         }
     }
 
-    // Load full entity data for each matched name (preserves FTS rank order).
-    let mut entities = Vec::new();
-    for name in &entity_names {
-        let mut rows = conn
-            .query(
-                "SELECT entity_type FROM mcp_entities WHERE name = ?1",
-                libsql::params![name.clone()],
-            )
-            .await?;
-        if let Some(row) = rows.next().await? {
-            let entity_type: String = row.get(0)?;
-            let mut obs_rows = conn
-                .query(
-                    "SELECT content FROM mcp_observations WHERE entity_name = ?1",
-                    libsql::params![name.clone()],
-                )
-                .await?;
-            let mut observations = Vec::new();
-            while let Some(obs_row) = obs_rows.next().await? {
-                observations.push(obs_row.get(0)?);
-            }
-            entities.push(crate::mcp::EntityOutput {
-                name: name.clone(),
-                entity_type,
-                observations,
-            });
-        }
-    }
+    let entities = load_entities(conn, &entity_names).await?;
 
     // Relations between matched entities.
-    let mut relations = Vec::new();
-    if !entity_names.is_empty() {
-        let placeholders = entity_names
-            .iter()
-            .map(|_| "?")
-            .collect::<Vec<_>>()
-            .join(",");
-        let sql = format!(
-            "SELECT from_entity, to_entity, relation_type FROM mcp_relations
-             WHERE from_entity IN ({}) AND to_entity IN ({})",
-            placeholders, placeholders
-        );
-        let mut params = Vec::new();
-        for name in &entity_names {
-            params.push(libsql::Value::from(name.clone()));
-        }
-        for name in &entity_names {
-            params.push(libsql::Value::from(name.clone()));
-        }
-        let mut rel_rows = conn.query(&sql, params).await?;
-        while let Some(row) = rel_rows.next().await? {
-            relations.push(crate::mcp::RelationInput {
-                from: row.get(0)?,
-                to: row.get(1)?,
-                relation_type: row.get(2)?,
-            });
-        }
-    }
+    let relations = load_relations(conn, &entity_names).await?;
 
     Ok(crate::mcp::Graph {
         entities,
@@ -436,36 +414,19 @@ pub async fn mcp_search_nodes(conn: &Connection, query: &str) -> Result<crate::m
 }
 
 pub async fn mcp_open_nodes(conn: &Connection, names: Vec<String>) -> Result<crate::mcp::Graph> {
-    let mut entities = Vec::new();
-    for name in &names {
-        let mut rows = conn
-            .query(
-                "SELECT entity_type FROM mcp_entities WHERE name = ?1",
-                libsql::params![name.clone()],
-            )
-            .await?;
-        if let Some(row) = rows.next().await? {
-            let entity_type: String = row.get(0)?;
+    let entities = load_entities(conn, &names).await?;
+    let relations = load_relations(conn, &names).await?;
 
-            let mut obs_rows = conn
-                .query(
-                    "SELECT content FROM mcp_observations WHERE entity_name = ?1",
-                    libsql::params![name.clone()],
-                )
-                .await?;
-            let mut observations = Vec::new();
-            while let Some(obs_row) = obs_rows.next().await? {
-                observations.push(obs_row.get(0)?);
-            }
+    Ok(crate::mcp::Graph {
+        entities,
+        relations,
+    })
+}
 
-            entities.push(crate::mcp::EntityOutput {
-                name: name.clone(),
-                entity_type,
-                observations,
-            });
-        }
-    }
-
+async fn load_relations(
+    conn: &Connection,
+    names: &[String],
+) -> Result<Vec<crate::mcp::RelationInput>> {
     let mut relations = Vec::new();
     if !names.is_empty() {
         let placeholders = names.iter().map(|_| "?").collect::<Vec<_>>().join(",");
@@ -476,10 +437,10 @@ pub async fn mcp_open_nodes(conn: &Connection, names: Vec<String>) -> Result<cra
         );
 
         let mut params = Vec::new();
-        for name in &names {
+        for name in names {
             params.push(libsql::Value::from(name.clone()));
         }
-        for name in &names {
+        for name in names {
             params.push(libsql::Value::from(name.clone()));
         }
 
@@ -493,10 +454,65 @@ pub async fn mcp_open_nodes(conn: &Connection, names: Vec<String>) -> Result<cra
         }
     }
 
-    Ok(crate::mcp::Graph {
-        entities,
-        relations,
-    })
+    Ok(relations)
+}
+
+async fn load_entities(
+    conn: &Connection,
+    names: &[String],
+) -> Result<Vec<crate::mcp::EntityOutput>> {
+    if names.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let placeholders = names.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+    let entity_sql = format!(
+        "SELECT name, entity_type FROM mcp_entities WHERE name IN ({})",
+        placeholders
+    );
+    let params = names
+        .iter()
+        .cloned()
+        .map(libsql::Value::from)
+        .collect::<Vec<_>>();
+
+    let mut entity_types = HashMap::new();
+    let mut rows = conn.query(&entity_sql, params).await?;
+    while let Some(row) = rows.next().await? {
+        entity_types.insert(row.get::<String>(0)?, row.get::<String>(1)?);
+    }
+
+    let obs_sql = format!(
+        "SELECT entity_name, content FROM mcp_observations
+         WHERE entity_name IN ({})
+         ORDER BY created_at, id",
+        placeholders
+    );
+    let params = names
+        .iter()
+        .cloned()
+        .map(libsql::Value::from)
+        .collect::<Vec<_>>();
+    let mut observations: HashMap<String, Vec<String>> = HashMap::new();
+    let mut rows = conn.query(&obs_sql, params).await?;
+    while let Some(row) = rows.next().await? {
+        observations
+            .entry(row.get::<String>(0)?)
+            .or_default()
+            .push(row.get::<String>(1)?);
+    }
+
+    let mut entities = Vec::new();
+    for name in names {
+        if let Some(entity_type) = entity_types.get(name) {
+            entities.push(crate::mcp::EntityOutput {
+                name: name.clone(),
+                entity_type: entity_type.clone(),
+                observations: observations.remove(name).unwrap_or_default(),
+            });
+        }
+    }
+    Ok(entities)
 }
 
 #[cfg(test)]
@@ -624,5 +640,26 @@ mod tests {
         // Invalid FTS5 syntax — must not panic, falls back to LIKE gracefully
         let result = mcp_search_nodes(&conn, "AND AND").await;
         assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_search_nodes_default_limit_and_explicit_limit() {
+        let dir = tempdir().unwrap();
+        unsafe {
+            std::env::set_var("DATABASE_URL", dir.path().join("test.db").to_str().unwrap());
+        }
+        let (_db, conn) = init_db().await.unwrap();
+
+        for i in 0..(DEFAULT_SEARCH_LIMIT + 10) {
+            seed_entity(&conn, &format!("entity-{i:03}"), "project", &["commonterm"]).await;
+        }
+
+        let default_graph = mcp_search_nodes(&conn, "commonterm").await.unwrap();
+        assert_eq!(default_graph.entities.len(), DEFAULT_SEARCH_LIMIT);
+
+        let explicit_graph = mcp_search_nodes_with_limit(&conn, "commonterm", 7)
+            .await
+            .unwrap();
+        assert_eq!(explicit_graph.entities.len(), 7);
     }
 }

@@ -49,7 +49,7 @@ rosemary read-graph
 Returns the full graph as JSON: `{ "entities": [...], "relations": [...] }`. Each entity includes all its observations.
 
 ```
-rosemary search-nodes <QUERY>
+rosemary search-nodes <QUERY> [--limit <N>]
 ```
 
 Returns a subgraph (same JSON shape) of entities matching `QUERY`. Uses two search paths, merged in order:
@@ -58,6 +58,9 @@ Returns a subgraph (same JSON shape) of entities matching `QUERY`. Uses two sear
 2. **LIKE on entity name / type** — substring fallback, always runs. Catches exact-name lookups (`UserPreferences`) and entities with no observations.
 
 Relations between matched entities are included. Results are ordered by BM25 relevance (FTS matches first, then name/type matches).
+The default limit is 100 matched nodes; use `--limit` for larger ranked exports.
+Use `read-graph` when the caller needs the full graph; do not use a broad
+`search-nodes` query as an implicit export.
 
 ```
 rosemary open-nodes <NAME> [<NAME> ...]
@@ -86,6 +89,9 @@ rosemary delete-relations <FROM> <TO> <RELATION_TYPE>
 Removes a single relation by its three-part key.
 
 ### Document ingestion / vector recall
+
+Available only in binaries built with Cargo feature `documents`
+(`cargo build --features documents` or `make build-documents`).
 
 ```
 rosemary ingest <PATH>
@@ -257,4 +263,7 @@ rosemary add-observations "my-project" "Uses libSQL (libsql crate v0.6) — embe
 
 # Search by keyword
 rosemary search-nodes "libSQL"
+
+# Deliberately request a larger ranked result set
+rosemary search-nodes "auth" --limit 500
 ```

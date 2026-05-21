@@ -36,7 +36,7 @@ use std::env;
 pub struct RosemaryPaths {
     pub data_dir: PathBuf,
     pub config_dir: PathBuf,
-    pub kb_dir: PathBuf,
+    pub topics_dir: PathBuf,
 }
 
 impl RosemaryPaths {
@@ -55,12 +55,12 @@ impl RosemaryPaths {
                 .unwrap_or_else(|| PathBuf::from(".rosemary/config"))
         });
 
-        let kb_dir = home.unwrap_or_else(|| {
+        let topics_dir = home.unwrap_or_else(|| {
             proj_dirs.as_ref().map(|d| d.data_dir().join("topics"))
-                .unwrap_or_else(|| PathBuf::from("kb/topics"))
+                .unwrap_or_else(|| PathBuf::from(".rosemary/topics"))
         });
 
-        Self { data_dir, config_dir, kb_dir }
+        Self { data_dir, config_dir, topics_dir }
     }
 
     pub fn db_path(&self) -> PathBuf {
@@ -373,7 +373,7 @@ git commit -m "feat: implement MCP stdio server loop"
 1. For each `mcp_entity`:
    - Fetch all observations and relations.
    - Format as Markdown with YAML frontmatter.
-   - Save to `kb/topics/<slug>.md`.
+   - Save to `.rosemary/topics/<slug>.md`.
 2. Trigger `ingest_file` on the updated files to update Vector/FTS tier.
 
 - [ ] **Step 2: Commit**
@@ -410,29 +410,21 @@ enum Commands {
         #[command(subcommand)]
         action: McpAction,
     },
-    /// Knowledge Base operations
-    Kb {
-        #[command(subcommand)]
-        action: KbAction,
-    },
-}
-
-#[derive(Subcommand)]
-enum McpAction { Start }
-
-#[derive(Subcommand)]
-enum KbAction {
+    /// Document tier operations
     Ingest { path: String },
     Query { query: String },
     Compact,
 }
+
+#[derive(Subcommand)]
+enum McpAction { Start }
 ```
 
 - [ ] **Step 2: Verify everything**
 
 ```bash
-cargo run -- kb ingest kb/topics
-cargo run -- kb compact
+cargo run -- ingest .rosemary/topics
+cargo run -- compact
 echo '{"jsonrpc":"2.0","id":1,"method":"read_graph"}' | cargo run -- mcp start
 ```
 
@@ -440,5 +432,5 @@ echo '{"jsonrpc":"2.0","id":1,"method":"read_graph"}' | cargo run -- mcp start
 
 ```bash
 git add src/main.rs
-git commit -m "feat: unified CLI entrypoint for KB and MCP"
+git commit -m "feat: unified CLI entrypoint for documents and MCP"
 ```

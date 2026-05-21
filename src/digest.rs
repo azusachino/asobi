@@ -16,8 +16,8 @@ pub struct DigestedTopic {
     pub content: String,
 }
 
-pub fn write_session_file(kb_root: &str, summary: &str) -> Result<PathBuf> {
-    let sessions_dir = PathBuf::from(kb_root).join("sessions");
+pub fn write_session_file(topics_root: &str, summary: &str) -> Result<PathBuf> {
+    let sessions_dir = PathBuf::from(topics_root).join("sessions");
     fs::create_dir_all(&sessions_dir)?;
     let id = Utc::now().format("%Y-%m-%d-%H%M").to_string();
     let path = sessions_dir.join(format!("{}.md", id));
@@ -43,7 +43,7 @@ pub async fn call_digest_llm(transcript: &str) -> Result<DigestOutput> {
         std::env::var("ROSEMARY_DIGEST_MODEL").unwrap_or_else(|_| "claude-sonnet-4-6".to_string());
 
     let prompt = format!(
-        r#"You are a knowledge base assistant. Given the following conversation transcript, extract:
+        r#"You are a memory assistant. Given the following conversation transcript, extract:
 1. A concise session summary (2-3 sentences)
 2. A list of distinct technical topics discussed, each with a title and a thorough markdown summary
 

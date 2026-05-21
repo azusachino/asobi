@@ -84,8 +84,8 @@ pub async fn sync_graph_to_markdown(
     Ok(count)
 }
 
-pub fn prune_old_sessions(kb_root: &str, days: u32) -> Result<usize> {
-    let sessions_dir = PathBuf::from(kb_root).join("sessions");
+pub fn prune_old_sessions(topics_root: &str, days: u32) -> Result<usize> {
+    let sessions_dir = PathBuf::from(topics_root).join("sessions");
     if !sessions_dir.exists() {
         return Ok(0);
     }

@@ -20,7 +20,8 @@ Or build locally:
 
 ```bash
 git clone https://github.com/azusachino/rosemary && cd rosemary
-make build   # binary at ./target/debug/rosemary
+make build            # graph/MCP CLI at ./target/debug/rosemary
+make build-documents  # includes ingest/query/compact
 ```
 
 ### Workspace setup
@@ -86,7 +87,10 @@ rosemary search-nodes "tokio"           # finds "tokio", "tokio-util", stemmed v
 rosemary search-nodes "auth*"           # prefix: matches "auth", "authentication", "authorize"
 rosemary search-nodes "async AND error" # both words must appear
 rosemary search-nodes "deploy OR ship"  # either word
+rosemary search-nodes "auth" --limit 25 # override the default top 100 matches
 ```
+
+Use `read-graph` for full export. `search-nodes` is intentionally top-K by default so a broad term does not accidentally return the whole graph.
 
 **End a session — persist state:**
 
@@ -105,6 +109,8 @@ rosemary read-graph | jq '.entities[] | select(.entityType == "session")'
 ```
 
 **Ingest Markdown into the document tier (optional):**
+
+These commands require a binary built with `--features documents`:
 
 ```bash
 rosemary ingest ./notes/             # directory of .md files
@@ -231,6 +237,7 @@ No files to pass, no state to reconstruct. The graph is the handoff.
 - `search-nodes "tokio async"` → finds entities with both words (ranked higher) or either word
 - `search-nodes "UserPreferences"` → exact name match via LIKE fallback (entity has no observations)
 - `search-nodes "AND AND"` → invalid FTS5 syntax, silently falls back to LIKE, returns empty
+- `search-nodes "auth" --limit 500` → return more than the default top 100 matches
 
 For exact entity retrieval, prefer `open-nodes` over `search-nodes`:
 
@@ -253,3 +260,5 @@ claude mcp add rosemary -- rosemary mcp
 ```
 
 The MCP server uses the same storage as the CLI — data written via `rosemary mcp` is immediately readable via `rosemary read-graph` and vice versa.
+
+`search_nodes` accepts an optional `limit` argument. Omit it for the default top 100 matches; set it explicitly for larger ranked exports.
