@@ -15,8 +15,7 @@ Thank you for your interest in improving Rosemary!
 
 1. Fork the repository.
 2. Create a new branch for your feature or fix.
-3. Use `nix develop` to enter the project environment.
-4. Run `make check` to ensure your changes adhere to project standards.
-5. Submit a PR.
+3. Run `make check` to ensure your changes adhere to project standards.
+4. Submit a PR.
 
 We prioritize simple, idiomatic solutions over clever or speculative abstractions.

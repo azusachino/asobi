@@ -4,7 +4,7 @@
 
 - **Language**: Rust (Edition 2024)
 - **Runtime**: Tokio (full)
-- **Task Runner**: `make` (Nix-wrapped)
+- **Task Runner**: `make` (mise-managed)
 - **Conventions**:
   - `anyhow` for app errors.
   - Idiomatic Rust (snake_case, PascalCase).

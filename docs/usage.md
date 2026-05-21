@@ -184,7 +184,7 @@ rosemary create-entities "<project>:session" "session"
 | `<project>`         | `project`    | Stable project facts, architecture decisions |
 | `UserPreferences`   | `preference` | Cross-project user habits                    |
 | `CodingStyle`       | `standard`   | Commit format, indentation, etc.             |
-| `ToolPreferences`   | `preference` | Nix, make, rtk, etc.                         |
+| `ToolPreferences`   | `preference` | Mise, make, rtk, etc.                         |
 
 ### Output format
 

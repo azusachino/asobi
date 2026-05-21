@@ -1,5 +1,5 @@
 [tools]
 rust = "latest"
-python = "3.14"
+bun = "latest"
 uv = "latest"
 ruff = "latest"

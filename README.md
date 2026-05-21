@@ -11,13 +11,6 @@ Rosemary is a persistent, project-local knowledge graph CLI designed for AI agen
 
 ## Installation
 
-### With Nix (Recommended)
-If you have [Nix](https://nixos.org/) installed (with flakes enabled):
-
-```bash
-nix run github:azusachino/rosemary -- --help
-```
-
 ### From Source (Cargo)
 Requires Rust 1.85+ (Edition 2024):
 
