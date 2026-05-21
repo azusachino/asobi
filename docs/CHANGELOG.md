@@ -107,4 +107,4 @@ See [`docs/architecture.md`](architecture.md#performance-headroom) for implement
 
 ## v0.1.0 — 2026-04-08
 
-Initial project setup. Basic document ingestion with libSQL + LanceDB, FTS5 on topics. Agent infrastructure (`AGENTS.md`, `.claude/rules/`, `GEMINI.md`, `flake.nix`, `Makefile`).
+Initial project setup. Basic document ingestion with libSQL + LanceDB, FTS5 on topics. Agent infrastructure (`AGENTS.md`, `.claude/rules/`, `GEMINI.md`, `Makefile`).

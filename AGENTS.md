@@ -54,8 +54,6 @@ Day-to-day work goes through `make`:
 - `make build-documents` / `make test-documents` — enable the optional document tier.
 - `make bench` — graph-tier benchmark harness.
 
-With Nix installed, every target runs inside `nix develop` automatically.
-
 ## Coding Conventions
 
 - Standard Rust naming (snake_case / PascalCase).
