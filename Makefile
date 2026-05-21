@@ -38,11 +38,11 @@ test-scripts:
 fmt:
 	cargo fmt
 	bun x prettier --write "**/*.{json,yaml,yml}" || true
-	uv run ruff format . || true
+	ruff format . || true
 
 lint:
 	cargo clippy -- -D warnings
-	uv run ruff check . || true
+	ruff check . || true
 
 check: fmt lint test test-scripts
 
@@ -56,7 +56,7 @@ clean:
 	rm -rf target/
 
 init:
-	mise install || true
-	uv venv --python 3.14 || true
-	uv add ruff --dev || true
+	mise install
+	uv venv --python 3.14
+	uv add ruff --dev
 	mkdir -p scripts
