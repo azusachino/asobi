@@ -532,7 +532,7 @@ mod tests {
         let (_db, conn) = init_db().await.unwrap();
 
         conn.execute(
-            "INSERT INTO topics (id, title, file_path) VALUES ('rust-pin', 'Rust Pinning', 'kb/topics/rust-pinning.md')",
+            "INSERT INTO topics (id, title, file_path) VALUES ('rust-pin', 'Rust Pinning', '.rosemary/topics/rust-pinning.md')",
             (),
         ).await.unwrap();
         conn.execute(

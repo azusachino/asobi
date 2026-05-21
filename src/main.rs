@@ -58,6 +58,13 @@ enum Commands {
     },
     /// Start the MCP stdio server (legacy/compatibility)
     Mcp,
+    /// Initialise a Rosemary workspace (XDG by default, `--local` for cwd)
+    Init {
+        /// Create `.rosemary/` and `rosemary.toml` in the current directory
+        /// instead of the user-level XDG paths.
+        #[arg(long)]
+        local: bool,
+    },
 }
 
 fn needs_vector(cmd: &Commands) -> bool {
@@ -95,9 +102,23 @@ async fn init_vector(
 #[tokio::main]
 async fn main() -> Result<()> {
     let _ = dotenvy::dotenv();
-    let paths = RosemaryPaths::resolve();
     let cli = Cli::parse();
 
+    // `init` is special: it runs before any DB or config resolution, since
+    // its job is to create the workspace those subsystems need.
+    if let Commands::Init { local } = cli.command {
+        let cwd = std::env::current_dir()?;
+        let target = if local {
+            rosemary::init::InitTarget::Local
+        } else {
+            rosemary::init::InitTarget::Xdg
+        };
+        let report = rosemary::init::init_workspace(target, &cwd)?;
+        print_init_report(&report);
+        return Ok(());
+    }
+
+    let paths = RosemaryPaths::resolve();
     let (_db, conn) = rosemary::db::init_db().await?;
 
     // Vector store + embedder are only initialised for commands that need them.
@@ -135,9 +156,9 @@ async fn main() -> Result<()> {
                 }
             }
             Commands::Compact { older_than } => {
-                let kb_root = std::env::var("KB_ROOT")
-                    .unwrap_or_else(|_| paths.kb_dir.to_str().unwrap().to_string());
-                let pruned = rosemary::compact::prune_old_sessions(&kb_root, older_than)?;
+                let topics_root = std::env::var("ROSEMARY_TOPICS_DIR")
+                    .unwrap_or_else(|_| paths.topics_dir.to_str().unwrap().to_string());
+                let pruned = rosemary::compact::prune_old_sessions(&topics_root, older_than)?;
                 println!("Pruned {} old session files.", pruned);
 
                 let clusters =
@@ -245,4 +266,23 @@ async fn main() -> Result<()> {
     }
 
     Ok(())
+}
+
+fn print_init_report(report: &rosemary::init::InitReport) {
+    let label = match report.target {
+        rosemary::init::InitTarget::Xdg => "Initialised Rosemary workspace (XDG)",
+        rosemary::init::InitTarget::Local => "Initialised Rosemary workspace (project-local)",
+    };
+    println!("{}", label);
+    for dir in &report.created_dirs {
+        println!("  created  {}", dir.display());
+    }
+    for dir in &report.skipped_dirs {
+        println!("  exists   {}", dir.display());
+    }
+    if let Some(path) = &report.wrote_config {
+        println!("  wrote    {}", path.display());
+    } else if let Some(path) = &report.config_existed {
+        println!("  exists   {}", path.display());
+    }
 }

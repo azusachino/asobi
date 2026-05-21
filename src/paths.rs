@@ -6,18 +6,18 @@ use std::path::{Path, PathBuf};
 pub struct RosemaryConfig {
     pub data_dir: Option<PathBuf>,
     pub config_dir: Option<PathBuf>,
-    pub kb_dir: Option<PathBuf>,
+    pub topics_dir: Option<PathBuf>,
 }
 
 pub struct RosemaryPaths {
     pub data_dir: PathBuf,
     pub config_dir: PathBuf,
-    pub kb_dir: PathBuf,
+    pub topics_dir: PathBuf,
 }
 
 impl RosemaryPaths {
     pub fn resolve() -> Self {
-        // 1. Try project-local config.toml first
+        // 1. Project-local rosemary.toml
         let local_config = Path::new("rosemary.toml");
         if local_config.exists()
             && let Ok(content) = std::fs::read_to_string(local_config)
@@ -26,17 +26,17 @@ impl RosemaryPaths {
             return Self::from_config(conf, Path::new("."));
         }
 
-        // 2. Try project-local .rosemary directory
+        // 2. Project-local .rosemary directory
         let local_root = PathBuf::from(".rosemary");
         if local_root.exists() {
             return Self {
                 data_dir: local_root.join("data"),
                 config_dir: local_root.join("config"),
-                kb_dir: local_root.join("topics"),
+                topics_dir: local_root.join("topics"),
             };
         }
 
-        // 3. Fallback to XDG
+        // 3. XDG fallback
         let home = env::var("ROSEMARY_HOME").map(PathBuf::from).ok();
         let proj_dirs = directories::ProjectDirs::from("me", "azusachino", "rosemary");
 
@@ -54,17 +54,17 @@ impl RosemaryPaths {
                 .unwrap_or_else(|| PathBuf::from(".rosemary/config"))
         });
 
-        let kb_dir = home.unwrap_or_else(|| {
+        let topics_dir = home.unwrap_or_else(|| {
             proj_dirs
                 .as_ref()
                 .map(|d| d.data_dir().join("topics"))
-                .unwrap_or_else(|| PathBuf::from("kb/topics"))
+                .unwrap_or_else(|| PathBuf::from(".rosemary/topics"))
         });
 
         Self {
             data_dir,
             config_dir,
-            kb_dir,
+            topics_dir,
         }
     }
 
@@ -74,7 +74,9 @@ impl RosemaryPaths {
             config_dir: conf
                 .config_dir
                 .unwrap_or_else(|| root.join(".rosemary/config")),
-            kb_dir: conf.kb_dir.unwrap_or_else(|| root.join(".rosemary/topics")),
+            topics_dir: conf
+                .topics_dir
+                .unwrap_or_else(|| root.join(".rosemary/topics")),
         }
     }
 

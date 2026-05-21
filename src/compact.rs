@@ -14,9 +14,9 @@ pub async fn sync_graph_to_markdown(
     embedder: &dyn crate::embed::EmbeddingProvider,
 ) -> Result<usize> {
     let paths = crate::paths::RosemaryPaths::resolve();
-    let kb_dir = paths.kb_dir;
-    if !kb_dir.exists() {
-        std::fs::create_dir_all(&kb_dir)?;
+    let topics_dir = paths.topics_dir;
+    if !topics_dir.exists() {
+        std::fs::create_dir_all(&topics_dir)?;
     }
 
     let graph = db::mcp_read_graph(conn).await?;
@@ -24,7 +24,7 @@ pub async fn sync_graph_to_markdown(
 
     for entity in graph.entities {
         let slug = slugify(&entity.name);
-        let file_path = kb_dir.join(format!("{}.md", slug));
+        let file_path = topics_dir.join(format!("{}.md", slug));
 
         let mut content = String::new();
         content.push_str("---\n");

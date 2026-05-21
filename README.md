@@ -30,10 +30,10 @@ rosemary read-graph
 
 Two storage tiers, one file:
 
-| Tier        | Technology          | Use for                                                |
-| ----------- | ------------------- | ------------------------------------------------------ |
-| Graph (hot) | libSQL + FTS5       | Entities, observations, relations — instant CLI access |
-| KB (cold)   | LanceDB + fastembed | Semantic search over ingested Markdown files           |
+| Tier             | Technology          | Use for                                                |
+| ---------------- | ------------------- | ------------------------------------------------------ |
+| Graph (hot)      | libSQL + FTS5       | Entities, observations, relations — instant CLI access |
+| Documents (cold) | LanceDB + fastembed | Semantic search over ingested Markdown files           |
 
 Graph operations have no model startup cost. The FTS5 index is a b-tree inside the `.db` file — queried with a file open, not a server call. See [`docs/architecture.md`](docs/architecture.md).
 
@@ -43,6 +43,23 @@ Graph operations have no model startup cost. The FTS5 index is a b-tree inside t
 - [`docs/usage.md`](docs/usage.md) — human workflows and agent integration
 - [`docs/CHANGELOG.md`](docs/CHANGELOG.md) — release notes
 - [`SKILL.md`](SKILL.md) — agent skill reference (full command API)
+
+## Install
+
+```bash
+cargo install --git https://github.com/azusachino/rosemary rosemary
+# or, once GitHub releases ship binaries:
+cargo binstall rosemary
+```
+
+Then bootstrap the user-level workspace:
+
+```bash
+rosemary init           # XDG paths under $HOME (default)
+rosemary init --local   # project-local: ./.rosemary/ + ./rosemary.toml
+```
+
+The default `init` writes to `~/.local/share/rosemary/` and `~/.config/rosemary/` on Linux (or the platform equivalent) — owned by your user, no elevation needed. Use `--local` inside a project root when you want that project's graph isolated and checked-in alongside the code.
 
 ## Build
 

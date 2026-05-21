@@ -4,26 +4,57 @@
 
 ### Installation
 
+From source via cargo (Rust 1.85+ toolchain required for edition 2024):
+
 ```bash
-git clone <repo>
-cd rosemary
-make build
-# binary at ./target/debug/rosemary (or release with make build-release)
+cargo install --git https://github.com/azusachino/rosemary rosemary
 ```
 
-Add to `$PATH` or symlink to `~/.local/bin/rosemary`.
+Prebuilt binary via `cargo-binstall` (once GitHub releases are published):
 
-### Project-local setup
+```bash
+cargo binstall rosemary
+```
 
-Create `rosemary.toml` in any project root to keep that project's graph isolated:
+Or build locally:
+
+```bash
+git clone https://github.com/azusachino/rosemary && cd rosemary
+make build   # binary at ./target/debug/rosemary
+```
+
+### Workspace setup
+
+Run once on a new machine — defaults to user-level XDG paths:
+
+```bash
+rosemary init
+# created  ~/.local/share/rosemary
+# created  ~/.local/share/rosemary/topics
+# created  ~/.config/rosemary
+```
+
+No root or elevation needed: XDG dirs are inside `$HOME` and owned by the invoking user.
+
+To keep a project's graph isolated and checked in alongside the code, use the local layout:
+
+```bash
+cd ~/code/my-project
+rosemary init --local
+# writes ./rosemary.toml + ./.rosemary/{data,topics,config}/
+```
+
+`rosemary.toml` (project-local mode):
 
 ```toml
-data_dir = ".rosemary/data"
+data_dir   = ".rosemary/data"
 config_dir = ".rosemary/config"
-kb_dir = ".rosemary/topics"
+topics_dir = ".rosemary/topics"
 ```
 
-Add `.rosemary/` to `.gitignore`. The `rosemary.toml` itself can be checked in — it contains no sensitive data.
+Path resolution order at runtime: project-local `rosemary.toml` → project-local `.rosemary/` → XDG. Both `init` modes are idempotent.
+
+Add `.rosemary/` to `.gitignore`; the `rosemary.toml` itself can be checked in.
 
 ### Common workflows
 
@@ -73,10 +104,10 @@ rosemary compact  # syncs graph → markdown files for durable backup
 rosemary read-graph | jq '.entities[] | select(.entityType == "session")'
 ```
 
-**Ingest Markdown into the semantic KB (optional):**
+**Ingest Markdown into the document tier (optional):**
 
 ```bash
-rosemary ingest kb/topics/        # directory of .md files
+rosemary ingest ./notes/             # directory of .md files
 rosemary query "async cancellation"  # semantic + FTS search
 ```
 

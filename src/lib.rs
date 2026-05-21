@@ -1,13 +1,13 @@
-//! Rosemary Personal Knowledge Base v0.2.0
+//! Rosemary — Knowledge Graph & Document Memory
 
-// Knowledge Base Modules
+// Graph (libSQL) + Document/Vector (LanceDB) tiers
 pub mod chunk;
 pub mod compact;
 pub mod db;
 pub mod digest;
 pub mod embed;
 pub mod ingest;
-pub mod kb;
+pub mod init;
 pub mod recall;
 pub mod vector;
 

@@ -202,7 +202,7 @@ mod tests {
             topic_id: "topic-1".into(),
             chunk_idx: i,
             text: format!("chunk text {}", i),
-            source: "kb/topics/test.md".into(),
+            source: ".rosemary/topics/test.md".into(),
             vector: vec![i as f32 / 10.0; dim],
         }
     }

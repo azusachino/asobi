@@ -48,4 +48,4 @@ init:
 	$(NIX_RUN) mise install || true
 	$(NIX_RUN) uv venv --python 3.14 || true
 	$(NIX_RUN) uv add ruff mdformat-gfm pymarkdownlnt --dev || true
-	mkdir -p scripts kb/topics
+	mkdir -p scripts
