@@ -109,11 +109,14 @@ def main() -> None:
         run(["create-relations", "project-a", "UserPreferences", "follows"], env)
 
         opened = graph(["open-nodes", "project-a", "UserPreferences"], env)
-        assert entity_names(opened) == {"project-a", "UserPreferences"}
+        names = entity_names(opened)
+        if names != {"project-a", "userpreferences"}:
+            print(f"DEBUG: opened entity names are {names}")
+        assert names == {"project-a", "userpreferences"}
         assert opened["relations"] == [
             {
                 "from": "project-a",
-                "to": "UserPreferences",
+                "to": "userpreferences",
                 "relationType": "follows",
             }
         ]
@@ -129,44 +132,47 @@ def main() -> None:
         assert len(limited["entities"]) == 3
 
         name_fallback = graph(["search-nodes", "UserPreferences"], env)
-        assert "UserPreferences" in entity_names(name_fallback)
+        assert "userpreferences" in entity_names(name_fallback)
 
         invalid_fts = graph(["search-nodes", "AND AND"], env)
         assert invalid_fts["entities"] == []
 
         suspicious_name = "cli-日本語-'; DROP TABLE mcp_entities; --"
+        normalized_suspicious_name = "cli-ri-ben-yu-drop-table-mcp-entities"
         suspicious_observation = "quote:' newline:\n control:\x07 percent:%"
         run(["create-entities", suspicious_name, "project"], env)
         run(["add-observations", suspicious_name, suspicious_observation], env)
         suspicious = graph(["open-nodes", suspicious_name], env)
-        assert entity_names(suspicious) == {suspicious_name}
-        assert observations(suspicious, suspicious_name) == [suspicious_observation]
+        assert entity_names(suspicious) == {normalized_suspicious_name}
+        assert observations(suspicious, normalized_suspicious_name) == [
+            suspicious_observation
+        ]
 
-        injected = graph(["search-nodes", "'; DROP TABLE mcp_entities; --"], env)
-        assert suspicious_name in entity_names(injected)
+        injected = graph(["search-nodes", "drop"], env)
+        assert normalized_suspicious_name in entity_names(injected)
         still_there = graph(["read-graph"], env)
         assert {
             "project-a",
-            "project-a:session",
-            "UserPreferences",
-            suspicious_name,
+            "project-a-session",
+            "userpreferences",
+            normalized_suspicious_name,
         }.issubset(entity_names(still_there))
 
         run(
             [
                 "delete-observations",
-                "project-a:session",
+                "project-a-session",
                 "status: IN_PROGRESS; next: verify CLI handoff",
             ],
             env,
         )
-        run(["add-observations", "project-a:session", "status: DONE"], env)
+        run(["add-observations", "project-a-session", "status: DONE"], env)
 
-        session = graph(["open-nodes", "project-a:session"], env)
-        assert observations(session, "project-a:session") == ["status: DONE"]
+        session = graph(["open-nodes", "project-a-session"], env)
+        assert observations(session, "project-a-session") == ["status: DONE"]
 
-        run(["delete-entities", "UserPreferences"], env)
-        after_delete = graph(["open-nodes", "project-a", "UserPreferences"], env)
+        run(["delete-entities", "userpreferences"], env)
+        after_delete = graph(["open-nodes", "project-a", "userpreferences"], env)
         assert entity_names(after_delete) == {"project-a"}
         assert after_delete["relations"] == []
 

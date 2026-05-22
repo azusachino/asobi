@@ -199,7 +199,8 @@ pub async fn mcp_create_entities(
     conn: &Connection,
     entities: Vec<crate::mcp::EntityInput>,
 ) -> Result<()> {
-    for ent in entities {
+    for mut ent in entities {
+        ent.name = crate::normalize::normalize_key(&ent.name);
         conn.execute(
             "INSERT OR IGNORE INTO mcp_entities (name, entity_type) VALUES (?1, ?2)",
             libsql::params![ent.name.clone(), ent.entity_type],
@@ -220,7 +221,8 @@ pub async fn mcp_add_observations(
     conn: &Connection,
     observations: Vec<crate::mcp::ObservationInput>,
 ) -> Result<()> {
-    for obs_batch in observations {
+    for mut obs_batch in observations {
+        obs_batch.entity_name = crate::normalize::normalize_key(&obs_batch.entity_name);
         for content in obs_batch.contents {
             conn.execute(
                 "INSERT INTO mcp_observations (id, entity_name, content) VALUES (?1, ?2, ?3)",
@@ -240,7 +242,9 @@ pub async fn mcp_create_relations(
     conn: &Connection,
     relations: Vec<crate::mcp::RelationInput>,
 ) -> Result<()> {
-    for rel in relations {
+    for mut rel in relations {
+        rel.from = crate::normalize::normalize_key(&rel.from);
+        rel.to = crate::normalize::normalize_key(&rel.to);
         conn.execute(
             "INSERT OR REPLACE INTO mcp_relations (from_entity, to_entity, relation_type) VALUES (?1, ?2, ?3)",
             libsql::params![rel.from, rel.to, rel.relation_type],
@@ -251,9 +255,10 @@ pub async fn mcp_create_relations(
 
 pub async fn mcp_delete_entities(conn: &Connection, names: Vec<String>) -> Result<()> {
     for name in names {
+        let norm_name = crate::normalize::normalize_key(&name);
         conn.execute(
             "DELETE FROM mcp_entities WHERE name = ?1",
-            libsql::params![name],
+            libsql::params![norm_name],
         )
         .await?;
     }
@@ -264,7 +269,8 @@ pub async fn mcp_delete_observations(
     conn: &Connection,
     deletions: Vec<crate::mcp::ObservationDeletion>,
 ) -> Result<()> {
-    for del in deletions {
+    for mut del in deletions {
+        del.entity_name = crate::normalize::normalize_key(&del.entity_name);
         for obs in del.observations {
             conn.execute(
                 "DELETE FROM mcp_observations WHERE entity_name = ?1 AND content = ?2",
@@ -280,7 +286,9 @@ pub async fn mcp_delete_relations(
     conn: &Connection,
     relations: Vec<crate::mcp::RelationInput>,
 ) -> Result<()> {
-    for rel in relations {
+    for mut rel in relations {
+        rel.from = crate::normalize::normalize_key(&rel.from);
+        rel.to = crate::normalize::normalize_key(&rel.to);
         conn.execute(
             "DELETE FROM mcp_relations WHERE from_entity = ?1 AND to_entity = ?2 AND relation_type = ?3",
             libsql::params![rel.from, rel.to, rel.relation_type],
@@ -402,10 +410,19 @@ pub async fn mcp_search_nodes_with_limit(
         }
     }
 
-    let entities = load_entities(conn, &entity_names).await?;
-
-    // Relations between matched entities.
+    // Expand neighbors (1-hop)
     let relations = load_relations(conn, &entity_names).await?;
+    let mut all_entity_names = entity_names.clone();
+    for rel in &relations {
+        if !all_entity_names.contains(&rel.from) {
+            all_entity_names.push(rel.from.clone());
+        }
+        if !all_entity_names.contains(&rel.to) {
+            all_entity_names.push(rel.to.clone());
+        }
+    }
+
+    let entities = load_entities(conn, &all_entity_names).await?;
 
     Ok(crate::mcp::Graph {
         entities,
@@ -414,8 +431,12 @@ pub async fn mcp_search_nodes_with_limit(
 }
 
 pub async fn mcp_open_nodes(conn: &Connection, names: Vec<String>) -> Result<crate::mcp::Graph> {
-    let entities = load_entities(conn, &names).await?;
-    let relations = load_relations(conn, &names).await?;
+    let normalized_names: Vec<String> = names
+        .into_iter()
+        .map(|n| crate::normalize::normalize_key(&n))
+        .collect();
+    let entities = load_entities(conn, &normalized_names).await?;
+    let relations = load_relations(conn, &normalized_names).await?;
 
     Ok(crate::mcp::Graph {
         entities,
@@ -430,16 +451,14 @@ async fn load_relations(
     let mut relations = Vec::new();
     if !names.is_empty() {
         let placeholders = names.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+        // Update SQL to catch relations where EITHER side is in the input list
         let sql = format!(
             "SELECT from_entity, to_entity, relation_type FROM mcp_relations 
-             WHERE from_entity IN ({}) AND to_entity IN ({})",
-            placeholders, placeholders
+             WHERE from_entity IN ({0}) OR to_entity IN ({0})",
+            placeholders
         );
 
         let mut params = Vec::new();
-        for name in names {
-            params.push(libsql::Value::from(name.clone()));
-        }
         for name in names {
             params.push(libsql::Value::from(name.clone()));
         }
@@ -605,11 +624,11 @@ mod tests {
         let (_db, conn) = init_db().await.unwrap();
 
         // Entity with no observations — FTS finds nothing, LIKE fallback finds by name
-        seed_entity(&conn, "UserPreferences", "preference", &[]).await;
+        seed_entity(&conn, "user-preferences", "preference", &[]).await;
 
-        let graph = mcp_search_nodes(&conn, "UserPreferences").await.unwrap();
+        let graph = mcp_search_nodes(&conn, "user-preferences").await.unwrap();
         assert_eq!(graph.entities.len(), 1);
-        assert_eq!(graph.entities[0].name, "UserPreferences");
+        assert_eq!(graph.entities[0].name, "user-preferences");
     }
 
     #[tokio::test]

@@ -65,7 +65,7 @@ pub struct EntityOutput {
     pub observations: Vec<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Graph {
     pub entities: Vec<EntityOutput>,
@@ -357,7 +357,7 @@ fn handle_tools_list(id: serde_json::Value) -> JsonRpcResponse {
 
 // ── tools/call dispatcher ────────────────────────────────────────────────────
 
-async fn handle_tools_call(
+pub async fn handle_tools_call(
     conn: &Connection,
     id: serde_json::Value,
     params: serde_json::Value,
@@ -370,8 +370,16 @@ async fn handle_tools_call(
     let text = match name {
         "create_entities" => {
             let p: CreateEntitiesParams = serde_json::from_value(args)?;
-            db::mcp_create_entities(conn, p.entities).await?;
-            "Entities created.".to_string()
+            let mut entities = p.entities;
+            let names: Vec<String> = entities
+                .iter()
+                .map(|e| crate::normalize::normalize_key(&e.name))
+                .collect();
+            for ent in &mut entities {
+                ent.name = crate::normalize::normalize_key(&ent.name);
+            }
+            db::mcp_create_entities(conn, entities).await?;
+            serde_json::to_string(&db::mcp_open_nodes(conn, names).await?)?
         }
         "create_relations" => {
             let p: CreateRelationsParams = serde_json::from_value(args)?;
@@ -379,23 +387,43 @@ async fn handle_tools_call(
             "Relations created.".to_string()
         }
         "add_observations" => {
-            let p: AddObservationsParams = serde_json::from_value(args)?;
+            let mut p: AddObservationsParams = serde_json::from_value(args)?;
+            let mut obs_names: Vec<String> = Vec::new();
+            for obs in &mut p.observations {
+                let normalized = crate::normalize::normalize_key(&obs.entity_name);
+                obs.entity_name = normalized.clone();
+                obs_names.push(normalized);
+            }
             db::mcp_add_observations(conn, p.observations).await?;
-            "Observations added.".to_string()
+            serde_json::to_string(&db::mcp_open_nodes(conn, obs_names).await?)?
         }
         "delete_entities" => {
             let p: DeleteEntitiesParams = serde_json::from_value(args)?;
-            db::mcp_delete_entities(conn, p.entity_names).await?;
+            let entity_names = p
+                .entity_names
+                .into_iter()
+                .map(|n| crate::normalize::normalize_key(&n))
+                .collect();
+            db::mcp_delete_entities(conn, entity_names).await?;
             "Entities deleted.".to_string()
         }
         "delete_observations" => {
             let p: DeleteObservationsParams = serde_json::from_value(args)?;
-            db::mcp_delete_observations(conn, p.deletions).await?;
+            let mut deletions = p.deletions;
+            for del in &mut deletions {
+                del.entity_name = crate::normalize::normalize_key(&del.entity_name);
+            }
+            db::mcp_delete_observations(conn, deletions).await?;
             "Observations deleted.".to_string()
         }
         "delete_relations" => {
             let p: DeleteRelationsParams = serde_json::from_value(args)?;
-            db::mcp_delete_relations(conn, p.relations).await?;
+            let mut relations = p.relations;
+            for rel in &mut relations {
+                rel.from = crate::normalize::normalize_key(&rel.from);
+                rel.to = crate::normalize::normalize_key(&rel.to);
+            }
+            db::mcp_delete_relations(conn, relations).await?;
             "Relations deleted.".to_string()
         }
         "read_graph" => {

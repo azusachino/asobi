@@ -19,6 +19,7 @@ pub mod vector;
 
 // Shared Utilities
 pub mod mcp;
+pub mod normalize;
 pub mod paths;
 pub use anyhow::{Result, anyhow, bail};
 pub use tokio::task::JoinHandle;
