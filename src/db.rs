@@ -199,7 +199,8 @@ pub async fn mcp_create_entities(
     conn: &Connection,
     entities: Vec<crate::mcp::EntityInput>,
 ) -> Result<()> {
-    for ent in entities {
+    for mut ent in entities {
+        ent.name = crate::normalize::normalize_key(&ent.name);
         conn.execute(
             "INSERT OR IGNORE INTO mcp_entities (name, entity_type) VALUES (?1, ?2)",
             libsql::params![ent.name.clone(), ent.entity_type],
@@ -402,10 +403,19 @@ pub async fn mcp_search_nodes_with_limit(
         }
     }
 
-    let entities = load_entities(conn, &entity_names).await?;
-
-    // Relations between matched entities.
+    // Expand neighbors (1-hop)
     let relations = load_relations(conn, &entity_names).await?;
+    let mut all_entity_names = entity_names.clone();
+    for rel in &relations {
+        if !all_entity_names.contains(&rel.from) {
+            all_entity_names.push(rel.from.clone());
+        }
+        if !all_entity_names.contains(&rel.to) {
+            all_entity_names.push(rel.to.clone());
+        }
+    }
+
+    let entities = load_entities(conn, &all_entity_names).await?;
 
     Ok(crate::mcp::Graph {
         entities,
@@ -430,16 +440,14 @@ async fn load_relations(
     let mut relations = Vec::new();
     if !names.is_empty() {
         let placeholders = names.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+        // Update SQL to catch relations where EITHER side is in the input list
         let sql = format!(
             "SELECT from_entity, to_entity, relation_type FROM mcp_relations 
-             WHERE from_entity IN ({}) AND to_entity IN ({})",
-            placeholders, placeholders
+             WHERE from_entity IN ({0}) OR to_entity IN ({0})",
+            placeholders
         );
 
         let mut params = Vec::new();
-        for name in names {
-            params.push(libsql::Value::from(name.clone()));
-        }
         for name in names {
             params.push(libsql::Value::from(name.clone()));
         }
@@ -605,11 +613,11 @@ mod tests {
         let (_db, conn) = init_db().await.unwrap();
 
         // Entity with no observations — FTS finds nothing, LIKE fallback finds by name
-        seed_entity(&conn, "UserPreferences", "preference", &[]).await;
+        seed_entity(&conn, "user-preferences", "preference", &[]).await;
 
-        let graph = mcp_search_nodes(&conn, "UserPreferences").await.unwrap();
+        let graph = mcp_search_nodes(&conn, "user-preferences").await.unwrap();
         assert_eq!(graph.entities.len(), 1);
-        assert_eq!(graph.entities[0].name, "UserPreferences");
+        assert_eq!(graph.entities[0].name, "user-preferences");
     }
 
     #[tokio::test]
