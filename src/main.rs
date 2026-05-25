@@ -105,7 +105,10 @@ async fn init_vector(
         if std::env::var("ROSEMARY_EMBED_PROVIDER").as_deref() == Ok("claude") {
             anyhow::bail!("ClaudeProvider not yet implemented")
         } else {
-            Arc::new(rosemary::embed::FastEmbedProvider::new()?)
+            let cache_dir = std::env::var("FASTEMBED_CACHE_DIR")
+                .map(std::path::PathBuf::from)
+                .unwrap_or_else(|_| paths.data_dir.join("fastembed_cache"));
+            Arc::new(rosemary::embed::FastEmbedProvider::new(cache_dir)?)
         };
     if store.dim() != embedder.dim() {
         anyhow::bail!(

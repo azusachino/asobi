@@ -221,7 +221,7 @@ async fn corrupted_database_returns_error() {
 #[tokio::test]
 async fn graph_handles_malicious_payloads_gracefully() {
     let (_dir, conn) = test_conn().await;
-    
+
     let payloads = vec![
         "<script>alert('XSS')</script>", // XSS
         "$(rm -rf /)",                   // Command Injection
@@ -232,7 +232,7 @@ async fn graph_handles_malicious_payloads_gracefully() {
 
     for (i, payload) in payloads.iter().enumerate() {
         let raw_name = format!("hacker-{}", i);
-        
+
         // Use the malicious payload as the entity type and the observation.
         // Use a safe name so we can reliably fetch it.
         db::mcp_create_entities(
@@ -249,13 +249,13 @@ async fn graph_handles_malicious_payloads_gracefully() {
         let opened = db::mcp_open_nodes(&conn, vec![raw_name.clone()])
             .await
             .unwrap();
-        
+
         assert_eq!(opened.entities.len(), 1);
         // The entity_type should retain the exact malicious payload
         assert_eq!(opened.entities[0].entity_type, *payload);
         // The observation should retain the exact malicious payload
         assert_eq!(opened.entities[0].observations[0], *payload);
-        
+
         // Create a relation using the malicious payload as the relation type
         db::mcp_create_entities(
             &conn,
@@ -282,9 +282,13 @@ async fn graph_handles_malicious_payloads_gracefully() {
         let related = db::mcp_open_nodes(&conn, vec![raw_name.clone(), "safe-target".to_string()])
             .await
             .unwrap();
-        
+
         // Find the relation we just added
-        let rel = related.relations.iter().find(|r| r.from == raw_name && r.to == "safe-target").unwrap();
+        let rel = related
+            .relations
+            .iter()
+            .find(|r| r.from == raw_name && r.to == "safe-target")
+            .unwrap();
         // The relation type should retain the exact malicious payload
         assert_eq!(rel.relation_type, *payload);
     }

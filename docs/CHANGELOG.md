@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.3.1 — Workspace Path Discovery Fix
+
+### Fixes
+
+- **`rosemary compact` and other commands now honor the configured workspace location** when invoked from a subdirectory. Previously, `RosemaryPaths::resolve()` only checked cwd for `rosemary.toml` / `.rosemary/`, so running a command from a subdir silently fell through to XDG (or created a new `.rosemary/` in the wrong place). It now walks up from cwd to find the nearest config, matching how `cargo` and `git` discover their roots.
+- **Relative paths in `rosemary.toml` are now anchored to the config file's directory**, not cwd. The seeded `rosemary.toml` already advertised this behavior in its comment ("Paths are resolved relative to this file") — the implementation now matches.
+- **`ROSEMARY_HOME` is now the highest-priority override**, bypassing project-local discovery entirely.
+- **`fastembed` model cache no longer leaks into cwd.** The provider's default `cache_dir` was `./.fastembed_cache`, which polluted any project where `rosemary` was invoked. It now defaults to `<data_dir>/fastembed_cache` (or `FASTEMBED_CACHE_DIR` if set), keeping all workspace state inside the configured location.
+
 ## v0.3.0 — Memory Consistency & Expansion (feat/memory-improvements)
 
 ### Summary
