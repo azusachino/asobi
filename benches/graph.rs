@@ -17,130 +17,140 @@ fn main() {
         .build()
         .expect("build tokio runtime");
 
+    let sizes_env = env::var("ROSEMARY_BENCH_SIZES").unwrap_or_else(|_| "1000,10000,50000".to_string());
+    let sizes: Vec<usize> = sizes_env
+        .split(',')
+        .filter_map(|s| s.trim().parse().ok())
+        .collect();
+
+    if sizes.is_empty() {
+        eprintln!("No valid bench sizes provided");
+        return;
+    }
+
     runtime.block_on(async {
-        let dir = tempdir().expect("tempdir");
-        let db_path = dir.path().join("bench.db");
-        unsafe {
-            std::env::set_var("DATABASE_URL", db_path.to_str().expect("utf-8 path"));
-        }
-        let (_db, conn) = db::init_db().await.expect("init db");
+        for entity_count in sizes {
+            println!("\n=== Benchmarking with {} entities ===", entity_count);
 
-        let entity_count = env_usize("ROSEMARY_BENCH_ENTITIES", DEFAULT_ENTITY_COUNT);
-        seed_graph(&conn, entity_count).await;
+            let dir = tempdir().expect("tempdir");
+            let db_path = dir.path().join("bench.db");
+            unsafe {
+                std::env::set_var("DATABASE_URL", db_path.to_str().expect("utf-8 path"));
+            }
+            let (_db, conn) = db::init_db().await.expect("init db");
 
-        let selective_hits = db::mcp_search_nodes(&conn, "rareterm7777")
-            .await
-            .expect("selective search")
-            .entities
-            .len();
-        assert!(selective_hits > 0, "selective search returned no hits");
-        let selective_elapsed = time_many(SEARCH_ITERS, || async {
-            let graph = db::mcp_search_nodes(&conn, black_box("rareterm7777"))
+            seed_graph(&conn, entity_count).await;
+
+            let selective_hits = db::mcp_search_nodes(&conn, "rareterm7777")
                 .await
-                .expect("selective search");
-            black_box(graph.entities.len());
-        })
-        .await;
-
-        let capped_hits = db::mcp_search_nodes(&conn, "commonterm")
-            .await
-            .expect("broad capped search")
-            .entities
-            .len();
-        assert_eq!(
-            capped_hits,
-            db::DEFAULT_SEARCH_LIMIT,
-            "default broad search should be capped"
-        );
-        let broad_elapsed = time_many(BROAD_SEARCH_ITERS, || async {
-            let graph = db::mcp_search_nodes(&conn, black_box("commonterm"))
-                .await
-                .expect("broad capped search");
-            black_box(graph.entities.len());
-        })
-        .await;
-
-        let export_hits = db::mcp_search_nodes_with_limit(&conn, "commonterm", entity_count)
-            .await
-            .expect("broad export search")
-            .entities
-            .len();
-        assert_eq!(
-            export_hits, entity_count,
-            "explicit broad export should return every seeded entity"
-        );
-        let export_elapsed = time_many(BROAD_EXPORT_ITERS, || async {
-            let graph =
-                db::mcp_search_nodes_with_limit(&conn, black_box("commonterm"), entity_count)
+                .expect("selective search")
+                .entities
+                .len();
+            assert!(selective_hits > 0, "selective search returned no hits");
+            let selective_elapsed = time_many(SEARCH_ITERS, || async {
+                let graph = db::mcp_search_nodes(&conn, black_box("rareterm7777"))
                     .await
-                    .expect("broad export search");
-            black_box(graph.entities.len());
-        })
-        .await;
+                    .expect("selective search");
+                black_box(graph.entities.len());
+            })
+            .await;
 
-        let open_elapsed = time_many(OPEN_ITERS, || async {
-            let graph = db::mcp_open_nodes(
-                &conn,
-                black_box(vec![
-                    "entity-10".to_string(),
-                    format!("entity-{}", entity_count / 2),
-                    format!("entity-{}", entity_count - 1),
-                ]),
-            )
-            .await
-            .expect("open nodes");
-            black_box(graph.entities.len());
-        })
-        .await;
+            let capped_hits = db::mcp_search_nodes(&conn, "commonterm")
+                .await
+                .expect("broad capped search")
+                .entities
+                .len();
+            assert_eq!(
+                capped_hits,
+                db::DEFAULT_SEARCH_LIMIT,
+                "default broad search should be capped"
+            );
+            let broad_elapsed = time_many(BROAD_SEARCH_ITERS, || async {
+                let graph = db::mcp_search_nodes(&conn, black_box("commonterm"))
+                    .await
+                    .expect("broad capped search");
+                black_box(graph.entities.len());
+            })
+            .await;
 
-        let stats_elapsed = time_many(STATS_ITERS, || async {
-            let stats = db::mcp_stats(&conn).await.expect("stats");
-            black_box(stats);
-        })
-        .await;
+            let export_hits = db::mcp_search_nodes_with_limit(&conn, "commonterm", entity_count)
+                .await
+                .expect("broad export search")
+                .entities
+                .len();
+            assert_eq!(
+                export_hits, entity_count,
+                "explicit broad export should return every seeded entity"
+            );
+            let export_elapsed = time_many(BROAD_EXPORT_ITERS, || async {
+                let graph =
+                    db::mcp_search_nodes_with_limit(&conn, black_box("commonterm"), entity_count)
+                        .await
+                        .expect("broad export search");
+                black_box(graph.entities.len());
+            })
+            .await;
 
-        println!(
-            "seeded graph: entities={}, observations={}",
-            entity_count, entity_count
-        );
-        println!(
-            "search_nodes selective: total={:?}, avg={:?}, iters={}, hits={}",
-            selective_elapsed,
-            selective_elapsed / SEARCH_ITERS as u32,
-            SEARCH_ITERS,
-            selective_hits
-        );
-        println!(
-            "search_nodes broad capped: total={:?}, avg={:?}, iters={}, hits={}",
-            broad_elapsed,
-            broad_elapsed / BROAD_SEARCH_ITERS as u32,
-            BROAD_SEARCH_ITERS,
-            capped_hits
-        );
-        println!(
-            "search_nodes broad export: total={:?}, avg={:?}, iters={}, hits={}",
-            export_elapsed,
-            export_elapsed / BROAD_EXPORT_ITERS as u32,
-            BROAD_EXPORT_ITERS,
-            export_hits
-        );
-        println!(
-            "open_nodes 3 names: total={:?}, avg={:?}, iters={}",
-            open_elapsed,
-            open_elapsed / OPEN_ITERS as u32,
-            OPEN_ITERS
-        );
-        println!(
-            "stats: total={:?}, avg={:?}, iters={}",
-            stats_elapsed,
-            stats_elapsed / STATS_ITERS as u32,
-            STATS_ITERS
-        );
+            let open_elapsed = time_many(OPEN_ITERS, || async {
+                let graph = db::mcp_open_nodes(
+                    &conn,
+                    black_box(vec![
+                        "entity-10".to_string(),
+                        format!("entity-{}", entity_count / 2),
+                        format!("entity-{}", entity_count - 1),
+                    ]),
+                )
+                .await
+                .expect("open nodes");
+                black_box(graph.entities.len());
+            })
+            .await;
 
-        let reset_start = Instant::now();
-        db::mcp_reset(&conn).await.expect("reset");
-        let reset_elapsed = reset_start.elapsed();
-        println!("reset: total={:?}", reset_elapsed);
+            let stats_elapsed = time_many(STATS_ITERS, || async {
+                let stats = db::mcp_stats(&conn).await.expect("stats");
+                black_box(stats);
+            })
+            .await;
+
+            println!(
+                "search_nodes selective: total={:?}, avg={:?}, iters={}, hits={}",
+                selective_elapsed,
+                selective_elapsed / SEARCH_ITERS as u32,
+                SEARCH_ITERS,
+                selective_hits
+            );
+            println!(
+                "search_nodes broad capped: total={:?}, avg={:?}, iters={}, hits={}",
+                broad_elapsed,
+                broad_elapsed / BROAD_SEARCH_ITERS as u32,
+                BROAD_SEARCH_ITERS,
+                capped_hits
+            );
+            println!(
+                "search_nodes broad export: total={:?}, avg={:?}, iters={}, hits={}",
+                export_elapsed,
+                export_elapsed / BROAD_EXPORT_ITERS as u32,
+                BROAD_EXPORT_ITERS,
+                export_hits
+            );
+            println!(
+                "open_nodes 3 names: total={:?}, avg={:?}, iters={}",
+                open_elapsed,
+                open_elapsed / OPEN_ITERS as u32,
+                OPEN_ITERS
+            );
+            println!(
+                "stats: total={:?}, avg={:?}, iters={}",
+                stats_elapsed,
+                stats_elapsed / STATS_ITERS as u32,
+                STATS_ITERS
+            );
+
+            let reset_start = Instant::now();
+            db::mcp_reset(&conn).await.expect("reset");
+            let reset_elapsed = reset_start.elapsed();
+            println!("reset: total={:?}", reset_elapsed);
+        }
     });
 }
 

@@ -449,17 +449,27 @@ async fn load_relations(
     names: &[String],
 ) -> Result<Vec<crate::mcp::RelationInput>> {
     let mut relations = Vec::new();
-    if !names.is_empty() {
-        let placeholders = names.iter().map(|_| "?").collect::<Vec<_>>().join(",");
-        // Update SQL to catch relations where EITHER side is in the input list
+    if names.is_empty() {
+        return Ok(relations);
+    }
+
+    for chunk in names.chunks(400) {
+        let placeholders = chunk.iter().map(|_| "?").collect::<Vec<_>>().join(",");
         let sql = format!(
-            "SELECT from_entity, to_entity, relation_type FROM mcp_relations 
+            "SELECT from_entity, to_entity, relation_type FROM mcp_relations
              WHERE from_entity IN ({0}) OR to_entity IN ({0})",
             placeholders
         );
 
         let mut params = Vec::new();
-        for name in names {
+        // Since we use the same array twice in the query logic, we only pass params once, wait!
+        // The query "from_entity IN ({0}) OR to_entity IN ({0})" uses the placeholders twice.
+        // It's technically better to use different placeholders, but libsql bindings map "?" sequentially.
+        // So we need to push the parameters twice!
+        for name in chunk {
+            params.push(libsql::Value::from(name.clone()));
+        }
+        for name in chunk {
             params.push(libsql::Value::from(name.clone()));
         }
 
@@ -484,41 +494,43 @@ async fn load_entities(
         return Ok(Vec::new());
     }
 
-    let placeholders = names.iter().map(|_| "?").collect::<Vec<_>>().join(",");
-    let entity_sql = format!(
-        "SELECT name, entity_type FROM mcp_entities WHERE name IN ({})",
-        placeholders
-    );
-    let params = names
-        .iter()
-        .cloned()
-        .map(libsql::Value::from)
-        .collect::<Vec<_>>();
-
     let mut entity_types = HashMap::new();
-    let mut rows = conn.query(&entity_sql, params).await?;
-    while let Some(row) = rows.next().await? {
-        entity_types.insert(row.get::<String>(0)?, row.get::<String>(1)?);
-    }
-
-    let obs_sql = format!(
-        "SELECT entity_name, content FROM mcp_observations
-         WHERE entity_name IN ({})
-         ORDER BY created_at, id",
-        placeholders
-    );
-    let params = names
-        .iter()
-        .cloned()
-        .map(libsql::Value::from)
-        .collect::<Vec<_>>();
     let mut observations: HashMap<String, Vec<String>> = HashMap::new();
-    let mut rows = conn.query(&obs_sql, params).await?;
-    while let Some(row) = rows.next().await? {
-        observations
-            .entry(row.get::<String>(0)?)
-            .or_default()
-            .push(row.get::<String>(1)?);
+
+    for chunk in names.chunks(500) {
+        let placeholders = chunk.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+        
+        // Load entities
+        let entity_sql = format!(
+            "SELECT name, entity_type FROM mcp_entities WHERE name IN ({})",
+            placeholders
+        );
+        let params = chunk
+            .iter()
+            .cloned()
+            .map(libsql::Value::from)
+            .collect::<Vec<_>>();
+
+        let mut rows = conn.query(&entity_sql, params.clone()).await?;
+        while let Some(row) = rows.next().await? {
+            entity_types.insert(row.get::<String>(0)?, row.get::<String>(1)?);
+        }
+
+        // Load observations
+        let obs_sql = format!(
+            "SELECT entity_name, content FROM mcp_observations
+             WHERE entity_name IN ({})
+             ORDER BY created_at, id",
+            placeholders
+        );
+        
+        let mut rows = conn.query(&obs_sql, params).await?;
+        while let Some(row) = rows.next().await? {
+            observations
+                .entry(row.get::<String>(0)?)
+                .or_default()
+                .push(row.get::<String>(1)?);
+        }
     }
 
     let mut entities = Vec::new();
