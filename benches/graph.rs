@@ -8,6 +8,7 @@ const DEFAULT_ENTITY_COUNT: usize = 10_000;
 const SEARCH_ITERS: usize = 50;
 const BROAD_SEARCH_ITERS: usize = 5;
 const BROAD_EXPORT_ITERS: usize = 3;
+const STATS_ITERS: usize = 100;
 const OPEN_ITERS: usize = 1_000;
 
 fn main() {
@@ -92,6 +93,12 @@ fn main() {
         })
         .await;
 
+        let stats_elapsed = time_many(STATS_ITERS, || async {
+            let stats = db::mcp_stats(&conn).await.expect("stats");
+            black_box(stats);
+        })
+        .await;
+
         println!(
             "seeded graph: entities={}, observations={}",
             entity_count, entity_count
@@ -123,6 +130,17 @@ fn main() {
             open_elapsed / OPEN_ITERS as u32,
             OPEN_ITERS
         );
+        println!(
+            "stats: total={:?}, avg={:?}, iters={}",
+            stats_elapsed,
+            stats_elapsed / STATS_ITERS as u32,
+            STATS_ITERS
+        );
+
+        let reset_start = Instant::now();
+        db::mcp_reset(&conn).await.expect("reset");
+        let reset_elapsed = reset_start.elapsed();
+        println!("reset: total={:?}", reset_elapsed);
     });
 }
 

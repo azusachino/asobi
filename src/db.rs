@@ -719,4 +719,42 @@ mod tests {
             .unwrap();
         assert_eq!(explicit_graph.entities.len(), 7);
     }
+
+    #[tokio::test]
+    async fn test_mcp_stats_and_reset() {
+        let dir = tempdir().unwrap();
+        unsafe {
+            std::env::set_var("DATABASE_URL", dir.path().join("test.db").to_str().unwrap());
+        }
+        let (_db, conn) = init_db().await.unwrap();
+
+        // Check empty stats
+        let stats = mcp_stats(&conn).await.unwrap();
+        assert_eq!(stats, (0, 0, 0));
+
+        // Seed some data
+        seed_entity(&conn, "entity1", "project", &["obs1", "obs2"]).await;
+        seed_entity(&conn, "entity2", "project", &["obs3"]).await;
+        mcp_create_relations(
+            &conn,
+            vec![crate::mcp::RelationInput {
+                from: "entity1".to_string(),
+                to: "entity2".to_string(),
+                relation_type: "related".to_string(),
+            }],
+        )
+        .await
+        .unwrap();
+
+        // Check populated stats
+        let stats = mcp_stats(&conn).await.unwrap();
+        assert_eq!(stats, (2, 1, 3));
+
+        // Test reset
+        mcp_reset(&conn).await.unwrap();
+
+        // Check empty stats again
+        let stats = mcp_stats(&conn).await.unwrap();
+        assert_eq!(stats, (0, 0, 0));
+    }
 }

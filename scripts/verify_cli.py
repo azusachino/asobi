@@ -176,6 +176,26 @@ def main() -> None:
         assert entity_names(after_delete) == {"project-a"}
         assert after_delete["relations"] == []
 
+        # Stats test
+        stats = run(["stats"], env).stdout
+        assert "Knowledge Graph Statistics" in stats
+
+        # Export test
+        export_file = str(Path(tmp) / "backup.json")
+        run(["export", "--output", export_file], env)
+        assert Path(export_file).exists()
+
+        # Reset test
+        run(["reset", "--force"], env)
+        empty_graph = graph(["read-graph"], env)
+        assert empty_graph["entities"] == []
+        assert empty_graph["relations"] == []
+
+        # Import test
+        run(["import", export_file], env)
+        restored_graph = graph(["read-graph"], env)
+        assert "project-a" in entity_names(restored_graph)
+
     with tempfile.TemporaryDirectory(prefix="rosemary-corrupt-") as tmp:
         db_path = Path(tmp) / "corrupt.db"
         db_path.write_bytes(b"not a sqlite database")
