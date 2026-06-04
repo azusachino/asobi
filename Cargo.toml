@@ -64,3 +64,10 @@ harness = false
 [[bench]]
 name = "normalize"
 harness = false
+
+[profile.release]
+opt-level = "z"      # Optimize for size
+lto = true           # Link Time Optimization
+codegen-units = 1    # Maximize LTO impact
+strip = true         # Remove symbols
+panic = "abort"      # Remove panic handling overhead
