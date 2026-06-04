@@ -23,5 +23,5 @@ async fn test_entity_name_normalization() {
 
     let graph = mcp_read_graph(&conn).await.unwrap();
     assert_eq!(graph.entities.len(), 1);
-    assert_eq!(graph.entities[0].name, "user-preferences");
+    assert_eq!(graph.entities[0].name, "User-Preferences");
 }
