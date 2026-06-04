@@ -1,5 +1,20 @@
 # Changelog
 
+## v0.4.2 — Hierarchical Normalization
+
+### New features
+
+- **Hierarchical Key Normalization**: Re-designed the entity name normalization to support hierarchical naming schemes.
+    - **Symbol Preservation**: Characters like `:`, `.`, `_`, and `-` are now preserved in entity names.
+    - **Case Preservation**: Entity names now maintain their original casing (e.g., `UserPreferences` stays `UserPreferences`), avoiding the memory fragmentation caused by aggressive `kebab-case` folding.
+    - **FTS-Friendly**: The FTS5 index naturally supports discovery of key segments. Searching for `ame` or `mobile` will correctly find `ame:mobile-support:task-1`.
+
+### Fixes
+
+- **Case-Fold Duplicate Bug**: Fixed a bug where `UserPreferences` and `userpreferences` would be treated as the same entity during normalization but could conflict in the database.
+
+---
+
 ## v0.4.1 — Environment Isolation & Safety
 
 ### Fixes
