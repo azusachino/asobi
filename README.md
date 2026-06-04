@@ -25,9 +25,9 @@ cargo install --git https://github.com/azusachino/rosemary
    rosemary init --local
    ```
 
-2. Store context as you work:
+2. Store context as you work (supports hierarchical naming like `ame:task-1`):
    ```bash
-   rosemary add-observations "my-task" "Decided to use WAL mode for concurrency"
+   rosemary add-observations "ame:mobile-support:task-1" "Decided to use WAL mode for concurrency"
    ```
 
 3. Search for context later:

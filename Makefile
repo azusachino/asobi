@@ -49,7 +49,7 @@ check: fmt lint test test-scripts
 check-documents: build-documents test-documents
 
 bench:
-	cargo bench --bench graph
+	cargo bench
 
 clean:
 	cargo clean

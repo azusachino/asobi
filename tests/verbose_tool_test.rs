@@ -32,7 +32,7 @@ async fn test_create_entities_returns_graph_state() {
     let graph: rosemary::mcp::Graph = serde_json::from_str(result_content).unwrap();
 
     assert_eq!(graph.entities.len(), 1);
-    assert_eq!(graph.entities[0].name, "project-alpha");
+    assert_eq!(graph.entities[0].name, "Project-Alpha");
 }
 
 #[tokio::test]

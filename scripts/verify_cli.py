@@ -110,13 +110,11 @@ def main() -> None:
 
         opened = graph(["open-nodes", "project-a", "UserPreferences"], env)
         names = entity_names(opened)
-        if names != {"project-a", "userpreferences"}:
-            print(f"DEBUG: opened entity names are {names}")
-        assert names == {"project-a", "userpreferences"}
+        assert names == {"project-a", "UserPreferences"}
         assert opened["relations"] == [
             {
                 "from": "project-a",
-                "to": "userpreferences",
+                "to": "UserPreferences",
                 "relationType": "follows",
             }
         ]
@@ -132,13 +130,14 @@ def main() -> None:
         assert len(limited["entities"]) == 3
 
         name_fallback = graph(["search-nodes", "UserPreferences"], env)
-        assert "userpreferences" in entity_names(name_fallback)
+        assert "UserPreferences" in entity_names(name_fallback)
 
         invalid_fts = graph(["search-nodes", "AND AND"], env)
         assert invalid_fts["entities"] == []
 
         suspicious_name = "cli-日本語-'; DROP TABLE mcp_entities; --"
-        normalized_suspicious_name = "cli-ri-ben-yu-drop-table-mcp-entities"
+        # New normalization drops non-ascii and collapses separators
+        normalized_suspicious_name = "cli-DROP-TABLE-mcp_entities"
         suspicious_observation = "quote:' newline:\n control:\x07 percent:%"
         run(["create-entities", suspicious_name, "project"], env)
         run(["add-observations", suspicious_name, suspicious_observation], env)
@@ -153,26 +152,26 @@ def main() -> None:
         still_there = graph(["read-graph"], env)
         assert {
             "project-a",
-            "project-a-session",
-            "userpreferences",
+            "project-a:session",
+            "UserPreferences",
             normalized_suspicious_name,
         }.issubset(entity_names(still_there))
 
         run(
             [
                 "delete-observations",
-                "project-a-session",
+                "project-a:session",
                 "status: IN_PROGRESS; next: verify CLI handoff",
             ],
             env,
         )
-        run(["add-observations", "project-a-session", "status: DONE"], env)
+        run(["add-observations", "project-a:session", "status: DONE"], env)
 
-        session = graph(["open-nodes", "project-a-session"], env)
-        assert observations(session, "project-a-session") == ["status: DONE"]
+        session = graph(["open-nodes", "project-a:session"], env)
+        assert observations(session, "project-a:session") == ["status: DONE"]
 
-        run(["delete-entities", "userpreferences"], env)
-        after_delete = graph(["open-nodes", "project-a", "userpreferences"], env)
+        run(["delete-entities", "UserPreferences"], env)
+        after_delete = graph(["open-nodes", "project-a", "UserPreferences"], env)
         assert entity_names(after_delete) == {"project-a"}
         assert after_delete["relations"] == []
 

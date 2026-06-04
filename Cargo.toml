@@ -1,6 +1,6 @@
 [package]
 name = "rosemary"
-version = "0.4.1"
+version = "0.4.2"
 edition = "2024"
 authors = ["haru <azusachino@proton.me>"]
 description = "A persistent, project-local knowledge graph CLI for AI agents."
@@ -60,3 +60,14 @@ tempfile = "3"
 [[bench]]
 name = "graph"
 harness = false
+
+[[bench]]
+name = "normalize"
+harness = false
+
+[profile.release]
+opt-level = "s"      # Optimize for size
+lto = true           # Link Time Optimization
+codegen-units = 1    # Maximize LTO impact
+strip = true         # Remove symbols
+panic = "abort"      # Remove panic handling overhead

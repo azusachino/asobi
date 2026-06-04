@@ -65,25 +65,26 @@ Add `.rosemary/` to `.gitignore`; the `rosemary.toml` itself can be checked in.
 rosemary search-nodes "session"
 rosemary open-nodes "my-project:session"
 ```
-
-**Store a decision:**
+**Store a decision (supports hierarchical naming):**
 
 ```bash
-rosemary create-entities "my-project" "project"
-rosemary add-observations "my-project" "Switched from serde_yaml to toml crate — better error messages"
+rosemary create-entities "project-x:architecture" "project"
+rosemary add-observations "project-x:architecture" "Switched from serde_yaml to toml crate — better error messages"
 ```
 
-**Link related concepts:**
+**Link related concepts (preserves case and dots):**
 
 ```bash
 rosemary create-entities "UserPreferences" "preference"
-rosemary create-relations "my-project" "UserPreferences" "follows"
+rosemary create-entities "CLAUDE.md" "reference"
+rosemary create-relations "project-x" "UserPreferences" "follows"
 ```
 
-**Search (supports FTS5 operators):**
+**Search (supports FTS5 and segment matching):**
 
 ```bash
 rosemary search-nodes "tokio"           # finds "tokio", "tokio-util", stemmed variants
+rosemary search-nodes "mobile"          # finds "ame:mobile-support:task-1" (segment match)
 rosemary search-nodes "auth*"           # prefix: matches "auth", "authentication", "authorize"
 rosemary search-nodes "async AND error" # both words must appear
 rosemary search-nodes "deploy OR ship"  # either word
