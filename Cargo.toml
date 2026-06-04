@@ -60,3 +60,7 @@ tempfile = "3"
 [[bench]]
 name = "graph"
 harness = false
+
+[[bench]]
+name = "normalize"
+harness = false
