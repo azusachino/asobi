@@ -1,19 +1,28 @@
 pub fn normalize_key(key: &str) -> String {
     let mut out = String::with_capacity(key.len());
-    let mut prev_dash = false;
+    let mut last_type = 0; // 0: None/Alpha, 1: Connector, 2: Separator (:)
+
     for ch in key.trim().chars() {
-        if ch.is_ascii_alphanumeric() || matches!(ch, ':' | '-' | '_' | '.') {
+        if ch.is_ascii_alphanumeric() {
             out.push(ch);
-            prev_dash = false;
-        } else if ch.is_whitespace() {
-            if !prev_dash {
-                out.push('-');
-                prev_dash = true;
+            last_type = 0;
+        } else if ch == ':' {
+            if last_type != 0 {
+                out.pop();
             }
+            out.push(':');
+            last_type = 2;
+        } else if matches!(ch, '-' | '_' | '.') || ch.is_whitespace() {
+            let connector = if ch.is_whitespace() { '-' } else { ch };
+            if last_type == 0 {
+                out.push(connector);
+                last_type = 1;
+            }
+            // If last_type is 1 or 2, we ignore additional connectors
         }
-        // else: drop unsafe char
     }
-    out.trim_matches('-').to_string()
+    out.trim_matches(|c| c == '-' || c == ':' || c == '_' || c == '.')
+        .to_string()
 }
 
 #[cfg(test)]
