@@ -1,6 +1,9 @@
 // Environment Variables
 pub const ENV_DATABASE_URL: &str = "ROSEMARY_DATABASE_URL";
 
+// Pragmas
+pub const PRAGMA_FOREIGN_KEYS_ON: &str = "PRAGMA foreign_keys = ON";
+
 // Table schema statements
 pub const SCHEMA_CREATE_TOPICS: &str = "CREATE TABLE IF NOT EXISTS topics (
             id        TEXT PRIMARY KEY,
@@ -119,6 +122,7 @@ pub const SQL_DELETE_RELATION: &str =
     "DELETE FROM mcp_relations WHERE from_entity = ?1 AND to_entity = ?2 AND relation_type = ?3";
 
 pub const SQL_SELECT_ALL_ENTITIES: &str = "SELECT name, entity_type FROM mcp_entities";
+pub const SQL_SELECT_ALL_TOPIC_IDS: &str = "SELECT id FROM topics";
 pub const SQL_SELECT_OBSERVATIONS_FOR_ENTITY: &str =
     "SELECT content FROM mcp_observations WHERE entity_name = ?1";
 pub const SQL_SELECT_ALL_RELATIONS: &str =
@@ -169,3 +173,11 @@ pub const SQL_SEARCH_CHUNKS: &str = "SELECT c.id, c.topic_id, c.text, c.source, 
              ORDER BY score";
 
 pub const SQL_DELETE_CHUNKS_BY_TOPIC: &str = "DELETE FROM chunks WHERE topic_id = ?1";
+
+// Backup / restore
+// VACUUM INTO cannot bind parameters, so the destination is embedded as an
+// escaped SQL string literal at the call site (single quotes doubled).
+pub const SQL_VACUUM_INTO_TEMPLATE: &str = "VACUUM INTO '{}'";
+pub const SQL_TABLE_EXISTS: &str =
+    "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?1";
+pub const SQL_INTEGRITY_CHECK: &str = "PRAGMA integrity_check";

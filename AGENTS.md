@@ -12,6 +12,7 @@ Rosemary is a persistent **knowledge graph CLI** for humans and LLM agents. It m
   - `fastembed` for the document tier — chunked, embedded Markdown for semantic recall.
 - **Async runtime**: `tokio`.
 - **CLI**: `clap` (derive).
+- **Logging**: `tracing` + `tracing-subscriber` (logs to stderr; `RUST_LOG`-controlled, default `info`).
 - **Other**: `serde`/`serde_json`, `anyhow`, `chrono`, `uuid`, `directories`; optional document-tier crates include `walkdir`, `text-splitter`, and `fastembed`.
 
 ## Repository Layout
@@ -24,6 +25,7 @@ Rosemary is a persistent **knowledge graph CLI** for humans and LLM agents. It m
 - `src/init.rs` — `rosemary init` workspace bootstrap.
 - `src/ingest.rs`, `src/chunk.rs`, `src/embed/`, `src/vector.rs`, `src/recall.rs` — document tier pipeline.
 - `src/compact.rs`, `src/digest.rs` — maintenance and session digest helpers.
+- `src/backup.rs` — single-file DB backup/restore (`VACUUM INTO`, WAL-safe).
 - `docs/` — architecture, usage guide, design plans, changelog.
 - `scripts/` — Python utilities (managed via `uv`).
 
@@ -37,7 +39,7 @@ All nine `@modelcontextprotocol/server-memory` graph methods are implemented as 
 - `delete-entities`, `delete-observations`, `delete-relations`
 - `read-graph`, `search-nodes`, `open-nodes`
 
-Plus document/maintenance/workflow commands: `ingest`, `query`, `compact`, `init`, `mcp`.
+Plus document/maintenance/workflow commands: `ingest`, `query`, `compact`, `init`, `mcp`, `backup`, `restore`.
 
 See [`SKILL.md`](SKILL.md) and [`docs/usage.md`](docs/usage.md) for the full reference.
 

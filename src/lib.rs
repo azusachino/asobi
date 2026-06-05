@@ -1,6 +1,7 @@
 //! Rosemary — Knowledge Graph & Document Memory
 
 // Graph + optional Document/Vector (libSQL) tiers
+pub mod backup;
 #[cfg(feature = "documents")]
 pub mod chunk;
 #[cfg(feature = "documents")]

@@ -113,7 +113,9 @@ pub async fn find_duplicate_clusters(
     threshold: f32,
 ) -> anyhow::Result<Vec<Vec<String>>> {
     // Get all topic IDs
-    let mut rows = conn.query("SELECT id FROM topics", ()).await?;
+    let mut rows = conn
+        .query(crate::constant::SQL_SELECT_ALL_TOPIC_IDS, ())
+        .await?;
     let mut topic_ids = Vec::new();
     while let Some(row) = rows.next().await? {
         topic_ids.push(row.get::<String>(0)?);

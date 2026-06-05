@@ -17,7 +17,8 @@ pub async fn init_db() -> Result<(Database, Connection)> {
     let db = Builder::new_local(&db_path).build().await?;
     let conn = db.connect()?;
 
-    conn.execute("PRAGMA foreign_keys = ON", ()).await?;
+    conn.execute(crate::constant::PRAGMA_FOREIGN_KEYS_ON, ())
+        .await?;
 
     conn.execute(crate::constant::SCHEMA_CREATE_TOPICS, ())
         .await?;

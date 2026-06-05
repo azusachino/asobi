@@ -29,7 +29,7 @@ pub async fn recall(
     let fts_results = search_fts(conn, &format!("\"{}\"", safe_query), top_k * 2)
         .await
         .unwrap_or_else(|e| {
-            eprintln!("warn: FTS5 search failed, falling back to ANN-only: {e}");
+            tracing::warn!("FTS5 search failed, falling back to ANN-only: {e}");
             vec![]
         });
 
