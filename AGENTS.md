@@ -8,11 +8,11 @@ Rosemary is a persistent **knowledge graph CLI** for humans and LLM agents. It m
 
 - **Language**: Rust (edition 2024); Python 3.14 for ancillary scripts.
 - **Storage**:
-  - libSQL (SQLite-compatible) for the graph tier — entities, observations, relations, FTS5 indexes.
-  - LanceDB + `fastembed` for the document tier — chunked, embedded Markdown for semantic recall.
+  - libSQL (SQLite-compatible) for both graph and document tiers — entities, observations, relations, FTS5, and vector embeddings.
+  - `fastembed` for the document tier — chunked, embedded Markdown for semantic recall.
 - **Async runtime**: `tokio`.
 - **CLI**: `clap` (derive).
-- **Other**: `serde`/`serde_json`, `anyhow`, `chrono`, `uuid`, `directories`; optional document-tier crates include `walkdir`, `text-splitter`, `fastembed`, and LanceDB/Arrow.
+- **Other**: `serde`/`serde_json`, `anyhow`, `chrono`, `uuid`, `directories`; optional document-tier crates include `walkdir`, `text-splitter`, and `fastembed`.
 
 ## Repository Layout
 

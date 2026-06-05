@@ -2,11 +2,11 @@ use crate::{
     chunk::chunk_text,
     db::upsert_topic,
     embed::EmbeddingProvider,
+    normalize::slugify,
     vector::{Chunk, VectorStore},
 };
 use anyhow::Result;
 use libsql::Connection;
-use slug::slugify;
 use std::path::Path;
 use uuid::Uuid;
 use walkdir::WalkDir;
@@ -15,7 +15,7 @@ pub async fn ingest_file(
     path: &Path,
     conn: &Connection,
     store: &VectorStore,
-    embedder: &dyn EmbeddingProvider,
+    embedder: &impl EmbeddingProvider,
 ) -> Result<()> {
     let raw = std::fs::read_to_string(path)?;
 
@@ -78,7 +78,7 @@ pub async fn ingest_dir(
     dir: &Path,
     conn: &Connection,
     store: &VectorStore,
-    embedder: &dyn EmbeddingProvider,
+    embedder: &impl EmbeddingProvider,
 ) -> Result<usize> {
     let mut count = 0;
     for entry in WalkDir::new(dir).into_iter().filter_map(|e| e.ok()) {
@@ -126,12 +126,10 @@ mod tests {
     use super::*;
     use crate::db::init_db;
     use crate::vector::VectorStore;
-    use async_trait::async_trait;
     use std::io::Write;
     use tempfile::tempdir;
 
     struct FakeEmbedder(usize);
-    #[async_trait]
     impl EmbeddingProvider for FakeEmbedder {
         async fn embed(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
             Ok(texts.iter().map(|_| vec![0.1f32; self.0]).collect())
@@ -157,10 +155,8 @@ mod tests {
         .unwrap();
 
         let (_db, conn) = init_db().await.unwrap();
-        let store = VectorStore::new_with_dim(dir.path().join("lance").to_str().unwrap(), 4)
-            .await
-            .unwrap();
-        let embedder = FakeEmbedder(4);
+        let store = VectorStore::new_with_dim(conn.clone(), 384);
+        let embedder = FakeEmbedder(384);
 
         ingest_file(
             dir.path().join("rust-pinning.md").as_path(),
@@ -194,10 +190,8 @@ mod tests {
         }
 
         let (_db, conn) = init_db().await.unwrap();
-        let store = VectorStore::new_with_dim(dir.path().join("lance2").to_str().unwrap(), 4)
-            .await
-            .unwrap();
-        let embedder = FakeEmbedder(4);
+        let store = VectorStore::new_with_dim(conn.clone(), 384);
+        let embedder = FakeEmbedder(384);
 
         let count = ingest_dir(dir.path(), &conn, &store, &embedder)
             .await

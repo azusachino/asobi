@@ -1,7 +1,6 @@
 use anyhow::Result;
-use async_trait::async_trait;
 
-#[async_trait]
+#[allow(async_fn_in_trait)]
 pub trait EmbeddingProvider: Send + Sync {
     async fn embed(&self, texts: &[String]) -> Result<Vec<Vec<f32>>>;
     fn dim(&self) -> usize;
@@ -16,7 +15,6 @@ mod tests {
 
     struct DummyProvider;
 
-    #[async_trait]
     impl EmbeddingProvider for DummyProvider {
         async fn embed(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
             Ok(texts.iter().map(|_| vec![0.0f32; 4]).collect())

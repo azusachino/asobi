@@ -1,6 +1,8 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 #[cfg(feature = "documents")]
+use rosemary::embed::EmbeddingProvider;
+#[cfg(feature = "documents")]
 use rosemary::paths::RosemaryPaths;
 #[cfg(feature = "documents")]
 use std::path::Path;
@@ -111,22 +113,20 @@ fn needs_vector(_: &Commands) -> bool {
     false
 }
 
-pub const ENV_LANCEDB_PATH: &str = "ROSEMARY_LANCEDB_PATH";
 pub const ENV_FASTEMBED_CACHE_DIR: &str = "ROSEMARY_FASTEMBED_CACHE_DIR";
 pub const ENV_EMBED_PROVIDER: &str = "ROSEMARY_EMBED_PROVIDER";
 pub const ENV_TOPICS_DIR: &str = "ROSEMARY_TOPICS_DIR";
 
 #[cfg(feature = "documents")]
 async fn init_vector(
+    conn: libsql::Connection,
     paths: &RosemaryPaths,
 ) -> Result<(
     rosemary::vector::VectorStore,
-    Arc<dyn rosemary::embed::EmbeddingProvider>,
+    Arc<rosemary::embed::FastEmbedProvider>,
 )> {
-    let lance_path = std::env::var(ENV_LANCEDB_PATH)
-        .unwrap_or_else(|_| paths.data_dir.join("lancedb").to_str().unwrap().to_string());
-    let store = rosemary::vector::VectorStore::new(&lance_path).await?;
-    let embedder: Arc<dyn rosemary::embed::EmbeddingProvider> =
+    let store = rosemary::vector::VectorStore::new(conn);
+    let embedder: Arc<rosemary::embed::FastEmbedProvider> =
         if std::env::var(ENV_EMBED_PROVIDER).as_deref() == Ok("claude") {
             anyhow::bail!("ClaudeProvider not yet implemented")
         } else {
@@ -173,27 +173,37 @@ async fn main() -> Result<()> {
     if needs_vector(&cli.command) {
         #[cfg(feature = "documents")]
         {
-            let (store, embedder) = init_vector(&paths).await?;
+            let (store, embedder) = init_vector(conn, &paths).await?;
             match cli.command {
                 Commands::Ingest { path } => {
                     let p = Path::new(&path);
                     if p.is_dir() {
                         println!("Ingesting directory: {:?}...", p);
-                        let count =
-                            rosemary::ingest::ingest_dir(p, &conn, &store, embedder.as_ref())
-                                .await?;
+                        let count = rosemary::ingest::ingest_dir(
+                            p,
+                            store.conn(),
+                            &store,
+                            embedder.as_ref(),
+                        )
+                        .await?;
                         println!("Done. Ingested {} files.", count);
                     } else {
                         println!("Ingesting file: {:?}...", p);
-                        rosemary::ingest::ingest_file(p, &conn, &store, embedder.as_ref()).await?;
+                        rosemary::ingest::ingest_file(p, store.conn(), &store, embedder.as_ref())
+                            .await?;
                         println!("Done.");
                     }
                 }
                 Commands::Query { query } => {
                     println!("Searching: {}...", query);
-                    let results =
-                        rosemary::recall::recall(&query, &conn, &store, embedder.as_ref(), 5)
-                            .await?;
+                    let results = rosemary::recall::recall(
+                        &query,
+                        store.conn(),
+                        &store,
+                        embedder.as_ref(),
+                        5,
+                    )
+                    .await?;
                     if results.is_empty() {
                         println!("No results found.");
                     } else {
@@ -212,13 +222,17 @@ async fn main() -> Result<()> {
                     println!("Pruned {} old session files.", pruned);
 
                     let clusters =
-                        rosemary::compact::find_duplicate_clusters(&store, &conn, 0.85).await?;
+                        rosemary::compact::find_duplicate_clusters(&store, store.conn(), 0.85)
+                            .await?;
                     println!("Found {} near-duplicate topic clusters.", clusters.len());
 
                     println!("Syncing Graph to Markdown...");
-                    let synced =
-                        rosemary::compact::sync_graph_to_markdown(&conn, &store, embedder.as_ref())
-                            .await?;
+                    let synced = rosemary::compact::sync_graph_to_markdown(
+                        store.conn(),
+                        &store,
+                        embedder.as_ref(),
+                    )
+                    .await?;
                     println!("Done. Synced {} entities to Markdown.", synced);
                 }
                 _ => unreachable!(),

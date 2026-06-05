@@ -97,7 +97,7 @@ Available only in binaries built with Cargo feature `documents`
 rosemary ingest <PATH>
 ```
 
-Ingests a file or directory of Markdown files into the document tier (chunks, embeds, stores in LanceDB). Used for semantic search across long-form content.
+Ingests a file or directory of Markdown files into the document tier (chunks, embeds, stores in libSQL). Used for semantic search across long-form content.
 
 ```
 rosemary query <QUERY>
@@ -223,8 +223,7 @@ rosemary create-entities "<project>:session" "session"
 ```
 .rosemary/
   data/
-    rosemary.db        # libSQL: mcp_entities, mcp_observations, mcp_relations, topics, topics_fts
-    lancedb/           # LanceDB: vector chunks
+    rosemary.db        # libSQL: mcp_entities, mcp_observations, mcp_relations, topics, topics_fts, chunks
   topics/              # Markdown snapshots synced by `compact`
     <slug>.md
     sessions/          # Session files pruned by compact --older-than

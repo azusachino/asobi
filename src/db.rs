@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::env;
 
 pub const DEFAULT_SEARCH_LIMIT: usize = 100;
-pub const ENV_DATABASE_URL: &str = "ROSEMARY_DATABASE_URL";
+pub use crate::constant::ENV_DATABASE_URL;
 
 pub async fn init_db() -> Result<(Database, Connection)> {
     let paths = crate::paths::RosemaryPaths::resolve();
@@ -19,132 +19,59 @@ pub async fn init_db() -> Result<(Database, Connection)> {
 
     conn.execute("PRAGMA foreign_keys = ON", ()).await?;
 
-    conn.execute(
-        "CREATE TABLE IF NOT EXISTS topics (
-            id        TEXT PRIMARY KEY,
-            title     TEXT NOT NULL,
-            file_path TEXT NOT NULL,
-            body      TEXT NOT NULL DEFAULT '',
-            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-        )",
-        (),
-    )
-    .await?;
+    conn.execute(crate::constant::SCHEMA_CREATE_TOPICS, ())
+        .await?;
 
     // FTS5 for full-text keyword search
-    conn.execute(
-        "CREATE VIRTUAL TABLE IF NOT EXISTS topics_fts
-         USING fts5(title, body, content='topics', content_rowid='rowid', tokenize='porter unicode61')",
-        (),
-    ).await?;
+    conn.execute(crate::constant::SCHEMA_CREATE_TOPICS_FTS, ())
+        .await?;
 
-    conn.execute(
-        "CREATE TABLE IF NOT EXISTS sessions (
-            id        TEXT PRIMARY KEY,
-            summary   TEXT NOT NULL,
-            file_path TEXT NOT NULL,
-            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-        )",
-        (),
-    )
-    .await?;
+    conn.execute(crate::constant::SCHEMA_CREATE_SESSIONS, ())
+        .await?;
 
     // Graph Tier (Hot)
-    conn.execute(
-        "CREATE TABLE IF NOT EXISTS mcp_entities (
-            name        TEXT PRIMARY KEY,
-            entity_type TEXT NOT NULL,
-            created_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
-            updated_at  DATETIME DEFAULT CURRENT_TIMESTAMP
-        )",
-        (),
-    )
-    .await?;
+    conn.execute(crate::constant::SCHEMA_CREATE_MCP_ENTITIES, ())
+        .await?;
 
-    conn.execute(
-        "CREATE TABLE IF NOT EXISTS mcp_observations (
-            id          TEXT PRIMARY KEY,
-            entity_name TEXT NOT NULL,
-            content     TEXT NOT NULL,
-            created_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (entity_name) REFERENCES mcp_entities(name) ON DELETE CASCADE
-        )",
-        (),
-    )
-    .await?;
+    conn.execute(crate::constant::SCHEMA_CREATE_MCP_OBSERVATIONS, ())
+        .await?;
 
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_mcp_observations_entity_name
-         ON mcp_observations(entity_name)",
-        (),
-    )
-    .await?;
+    conn.execute(crate::constant::SCHEMA_CREATE_IDX_MCP_OBSERVATIONS, ())
+        .await?;
 
-    conn.execute(
-        "CREATE TABLE IF NOT EXISTS mcp_relations (
-            from_entity   TEXT NOT NULL,
-            to_entity     TEXT NOT NULL,
-            relation_type TEXT NOT NULL,
-            created_at    DATETIME DEFAULT CURRENT_TIMESTAMP,
-            PRIMARY KEY (from_entity, to_entity, relation_type),
-            FOREIGN KEY (from_entity) REFERENCES mcp_entities(name) ON DELETE CASCADE,
-            FOREIGN KEY (to_entity)   REFERENCES mcp_entities(name) ON DELETE CASCADE
-        )",
-        (),
-    )
-    .await?;
+    conn.execute(crate::constant::SCHEMA_CREATE_MCP_RELATIONS, ())
+        .await?;
+
+    // Document Tier (Vectors)
+    conn.execute(crate::constant::SCHEMA_CREATE_CHUNKS, ())
+        .await?;
+
+    conn.execute(crate::constant::SCHEMA_CREATE_IDX_CHUNKS_TOPIC_ID, ())
+        .await?;
+
+    // Vector index - metric=cosine is default
+    conn.execute(crate::constant::SCHEMA_CREATE_IDX_CHUNKS_VECTOR, ())
+        .await?;
 
     // Triggers to keep FTS5 in sync with topics
-    conn.execute(
-        "CREATE TRIGGER IF NOT EXISTS topics_ai AFTER INSERT ON topics BEGIN
-            INSERT INTO topics_fts(rowid, title, body) VALUES (new.rowid, new.title, new.body);
-        END",
-        (),
-    )
-    .await?;
-    conn.execute(
-        "CREATE TRIGGER IF NOT EXISTS topics_ad AFTER DELETE ON topics BEGIN
-            INSERT INTO topics_fts(topics_fts, rowid, title, body) VALUES('delete', old.rowid, old.title, old.body);
-        END",
-        (),
-    ).await?;
-    conn.execute(
-        "CREATE TRIGGER IF NOT EXISTS topics_au AFTER UPDATE ON topics BEGIN
-            INSERT INTO topics_fts(topics_fts, rowid, title, body) VALUES('delete', old.rowid, old.title, old.body);
-            INSERT INTO topics_fts(rowid, title, body) VALUES (new.rowid, new.title, new.body);
-        END",
-        (),
-    ).await?;
+    conn.execute(crate::constant::SCHEMA_CREATE_TRIGGER_TOPICS_AI, ())
+        .await?;
+    conn.execute(crate::constant::SCHEMA_CREATE_TRIGGER_TOPICS_AD, ())
+        .await?;
+    conn.execute(crate::constant::SCHEMA_CREATE_TRIGGER_TOPICS_AU, ())
+        .await?;
 
     // FTS5 for graph observation search (porter stemming, BM25 ranking)
-    conn.execute(
-        "CREATE VIRTUAL TABLE IF NOT EXISTS mcp_obs_fts
-         USING fts5(content, content='mcp_observations', content_rowid='rowid', tokenize='porter unicode61')",
-        (),
-    ).await?;
+    conn.execute(crate::constant::SCHEMA_CREATE_MCP_OBS_FTS, ())
+        .await?;
 
     // Triggers to keep mcp_obs_fts in sync with mcp_observations
-    conn.execute(
-        "CREATE TRIGGER IF NOT EXISTS mcp_obs_ai AFTER INSERT ON mcp_observations BEGIN
-            INSERT INTO mcp_obs_fts(rowid, content) VALUES (new.rowid, new.content);
-        END",
-        (),
-    )
-    .await?;
-    conn.execute(
-        "CREATE TRIGGER IF NOT EXISTS mcp_obs_ad AFTER DELETE ON mcp_observations BEGIN
-            INSERT INTO mcp_obs_fts(mcp_obs_fts, rowid, content) VALUES('delete', old.rowid, old.content);
-        END",
-        (),
-    ).await?;
-    conn.execute(
-        "CREATE TRIGGER IF NOT EXISTS mcp_obs_au AFTER UPDATE ON mcp_observations BEGIN
-            INSERT INTO mcp_obs_fts(mcp_obs_fts, rowid, content) VALUES('delete', old.rowid, old.content);
-            INSERT INTO mcp_obs_fts(rowid, content) VALUES (new.rowid, new.content);
-        END",
-        (),
-    ).await?;
+    conn.execute(crate::constant::SCHEMA_CREATE_TRIGGER_MCP_OBS_AI, ())
+        .await?;
+    conn.execute(crate::constant::SCHEMA_CREATE_TRIGGER_MCP_OBS_AD, ())
+        .await?;
+    conn.execute(crate::constant::SCHEMA_CREATE_TRIGGER_MCP_OBS_AU, ())
+        .await?;
 
     Ok((db, conn))
 }
@@ -155,14 +82,11 @@ pub async fn search_fts(
     query: &str,
     limit: usize,
 ) -> Result<Vec<(String, String, String, f64)>> {
-    let sql = "SELECT t.id, t.title, t.file_path, bm25(topics_fts) AS score
-               FROM topics_fts
-               JOIN topics t ON topics_fts.rowid = t.rowid
-               WHERE topics_fts MATCH ?1
-               ORDER BY score
-               LIMIT ?2";
     let mut rows = conn
-        .query(sql, libsql::params![query, limit as i64])
+        .query(
+            crate::constant::SQL_SEARCH_FTS,
+            libsql::params![query, limit as i64],
+        )
         .await?;
     let mut results = Vec::new();
     while let Some(row) = rows.next().await? {
@@ -184,12 +108,7 @@ pub async fn upsert_topic(
     body: &str,
 ) -> Result<()> {
     conn.execute(
-        "INSERT INTO topics (id, title, file_path, body) VALUES (?1, ?2, ?3, ?4)
-         ON CONFLICT(id) DO UPDATE SET 
-            title=excluded.title, 
-            file_path=excluded.file_path,
-            body=excluded.body,
-            updated_at=CURRENT_TIMESTAMP",
+        crate::constant::SQL_UPSERT_TOPIC,
         libsql::params![id, title, file_path, body],
     )
     .await?;
@@ -200,21 +119,23 @@ pub async fn mcp_create_entities(
     conn: &Connection,
     entities: Vec<crate::mcp::EntityInput>,
 ) -> Result<()> {
+    let tx = conn.transaction().await?;
     for mut ent in entities {
         ent.name = crate::normalize::normalize_key(&ent.name);
-        conn.execute(
-            "INSERT OR IGNORE INTO mcp_entities (name, entity_type) VALUES (?1, ?2)",
+        tx.execute(
+            crate::constant::SQL_INSERT_ENTITY,
             libsql::params![ent.name.clone(), ent.entity_type],
         )
         .await?;
         for obs in ent.observations {
-            conn.execute(
-                "INSERT INTO mcp_observations (id, entity_name, content) VALUES (?1, ?2, ?3)",
+            tx.execute(
+                crate::constant::SQL_INSERT_OBSERVATION,
                 libsql::params![uuid::Uuid::new_v4().to_string(), ent.name.clone(), obs],
             )
             .await?;
         }
     }
+    tx.commit().await?;
     Ok(())
 }
 
@@ -222,11 +143,12 @@ pub async fn mcp_add_observations(
     conn: &Connection,
     observations: Vec<crate::mcp::ObservationInput>,
 ) -> Result<()> {
+    let tx = conn.transaction().await?;
     for mut obs_batch in observations {
         obs_batch.entity_name = crate::normalize::normalize_key(&obs_batch.entity_name);
         for content in obs_batch.contents {
-            conn.execute(
-                "INSERT INTO mcp_observations (id, entity_name, content) VALUES (?1, ?2, ?3)",
+            tx.execute(
+                crate::constant::SQL_INSERT_OBSERVATION,
                 libsql::params![
                     uuid::Uuid::new_v4().to_string(),
                     obs_batch.entity_name.clone(),
@@ -236,6 +158,7 @@ pub async fn mcp_add_observations(
             .await?;
         }
     }
+    tx.commit().await?;
     Ok(())
 }
 
@@ -243,26 +166,31 @@ pub async fn mcp_create_relations(
     conn: &Connection,
     relations: Vec<crate::mcp::RelationInput>,
 ) -> Result<()> {
+    let tx = conn.transaction().await?;
     for mut rel in relations {
         rel.from = crate::normalize::normalize_key(&rel.from);
         rel.to = crate::normalize::normalize_key(&rel.to);
-        conn.execute(
-            "INSERT OR REPLACE INTO mcp_relations (from_entity, to_entity, relation_type) VALUES (?1, ?2, ?3)",
+        tx.execute(
+            crate::constant::SQL_INSERT_RELATION,
             libsql::params![rel.from, rel.to, rel.relation_type],
-        ).await?;
+        )
+        .await?;
     }
+    tx.commit().await?;
     Ok(())
 }
 
 pub async fn mcp_delete_entities(conn: &Connection, names: Vec<String>) -> Result<()> {
+    let tx = conn.transaction().await?;
     for name in names {
         let norm_name = crate::normalize::normalize_key(&name);
-        conn.execute(
-            "DELETE FROM mcp_entities WHERE name = ?1",
+        tx.execute(
+            crate::constant::SQL_DELETE_ENTITY,
             libsql::params![norm_name],
         )
         .await?;
     }
+    tx.commit().await?;
     Ok(())
 }
 
@@ -270,16 +198,18 @@ pub async fn mcp_delete_observations(
     conn: &Connection,
     deletions: Vec<crate::mcp::ObservationDeletion>,
 ) -> Result<()> {
+    let tx = conn.transaction().await?;
     for mut del in deletions {
         del.entity_name = crate::normalize::normalize_key(&del.entity_name);
         for obs in del.observations {
-            conn.execute(
-                "DELETE FROM mcp_observations WHERE entity_name = ?1 AND content = ?2",
+            tx.execute(
+                crate::constant::SQL_DELETE_OBSERVATION,
                 libsql::params![del.entity_name.clone(), obs],
             )
             .await?;
         }
     }
+    tx.commit().await?;
     Ok(())
 }
 
@@ -287,21 +217,24 @@ pub async fn mcp_delete_relations(
     conn: &Connection,
     relations: Vec<crate::mcp::RelationInput>,
 ) -> Result<()> {
+    let tx = conn.transaction().await?;
     for mut rel in relations {
         rel.from = crate::normalize::normalize_key(&rel.from);
         rel.to = crate::normalize::normalize_key(&rel.to);
-        conn.execute(
-            "DELETE FROM mcp_relations WHERE from_entity = ?1 AND to_entity = ?2 AND relation_type = ?3",
+        tx.execute(
+            crate::constant::SQL_DELETE_RELATION,
             libsql::params![rel.from, rel.to, rel.relation_type],
-        ).await?;
+        )
+        .await?;
     }
+    tx.commit().await?;
     Ok(())
 }
 
 pub async fn mcp_read_graph(conn: &Connection) -> Result<crate::mcp::Graph> {
     let mut entities = Vec::new();
     let mut rows = conn
-        .query("SELECT name, entity_type FROM mcp_entities", ())
+        .query(crate::constant::SQL_SELECT_ALL_ENTITIES, ())
         .await?;
     while let Some(row) = rows.next().await? {
         let name: String = row.get(0)?;
@@ -309,7 +242,7 @@ pub async fn mcp_read_graph(conn: &Connection) -> Result<crate::mcp::Graph> {
 
         let mut obs_rows = conn
             .query(
-                "SELECT content FROM mcp_observations WHERE entity_name = ?1",
+                crate::constant::SQL_SELECT_OBSERVATIONS_FOR_ENTITY,
                 libsql::params![name.clone()],
             )
             .await?;
@@ -327,10 +260,7 @@ pub async fn mcp_read_graph(conn: &Connection) -> Result<crate::mcp::Graph> {
 
     let mut relations = Vec::new();
     let mut rel_rows = conn
-        .query(
-            "SELECT from_entity, to_entity, relation_type FROM mcp_relations",
-            (),
-        )
+        .query(crate::constant::SQL_SELECT_ALL_RELATIONS, ())
         .await?;
     while let Some(row) = rel_rows.next().await? {
         relations.push(crate::mcp::RelationInput {
@@ -361,16 +291,13 @@ pub async fn mcp_search_nodes_with_limit(
     // Primary: FTS5 on observation content — porter stemming + BM25 ranking.
     // Wrapped in an async block so any error (invalid syntax, bad token) is
     // caught at the boundary and we fall through to the LIKE path.
-    let fts_sql = "SELECT o.entity_name
-                   FROM mcp_obs_fts
-                   JOIN mcp_observations o ON mcp_obs_fts.rowid = o.rowid
-                   WHERE mcp_obs_fts MATCH ?1
-                   ORDER BY bm25(mcp_obs_fts)
-                   LIMIT ?2";
     let fts_hits: Vec<String> = async {
         let fts_fetch_limit = limit.saturating_mul(8).max(limit) as i64;
         let mut rows = conn
-            .query(fts_sql, libsql::params![query, fts_fetch_limit])
+            .query(
+                crate::constant::SQL_SEARCH_OBSERVATIONS_FTS,
+                libsql::params![query, fts_fetch_limit],
+            )
             .await?;
         let mut names = Vec::new();
         while let Some(row) = rows.next().await? {
@@ -394,10 +321,7 @@ pub async fn mcp_search_nodes_with_limit(
     let pattern = format!("%{}%", query);
     let mut rows = conn
         .query(
-            "SELECT name FROM mcp_entities
-             WHERE name LIKE ?1 OR entity_type LIKE ?1
-             ORDER BY name
-             LIMIT ?2",
+            crate::constant::SQL_SEARCH_ENTITIES_LIKE,
             libsql::params![pattern, limit as i64],
         )
         .await?;
@@ -456,11 +380,7 @@ async fn load_relations(
 
     for chunk in names.chunks(400) {
         let placeholders = chunk.iter().map(|_| "?").collect::<Vec<_>>().join(",");
-        let sql = format!(
-            "SELECT from_entity, to_entity, relation_type FROM mcp_relations
-             WHERE from_entity IN ({0}) OR to_entity IN ({0})",
-            placeholders
-        );
+        let sql = crate::constant::SQL_SELECT_RELATIONS_IN_TEMPLATE.replace("{0}", &placeholders);
 
         let mut params = Vec::new();
         // Since we use the same array twice in the query logic, we only pass params once, wait!
@@ -502,10 +422,8 @@ async fn load_entities(
         let placeholders = chunk.iter().map(|_| "?").collect::<Vec<_>>().join(",");
 
         // Load entities
-        let entity_sql = format!(
-            "SELECT name, entity_type FROM mcp_entities WHERE name IN ({})",
-            placeholders
-        );
+        let entity_sql =
+            crate::constant::SQL_SELECT_ENTITIES_IN_TEMPLATE.replace("{}", &placeholders);
         let params = chunk
             .iter()
             .cloned()
@@ -518,12 +436,8 @@ async fn load_entities(
         }
 
         // Load observations
-        let obs_sql = format!(
-            "SELECT entity_name, content FROM mcp_observations
-             WHERE entity_name IN ({})
-             ORDER BY created_at, id",
-            placeholders
-        );
+        let obs_sql =
+            crate::constant::SQL_SELECT_OBSERVATIONS_IN_TEMPLATE.replace("{}", &placeholders);
 
         let mut rows = conn.query(&obs_sql, params).await?;
         while let Some(row) = rows.next().await? {
@@ -548,14 +462,14 @@ async fn load_entities(
 }
 
 pub async fn mcp_stats(conn: &Connection) -> Result<(usize, usize, usize)> {
-    let mut rows = conn.query("SELECT COUNT(*) FROM mcp_entities", ()).await?;
+    let mut rows = conn.query(crate::constant::SQL_COUNT_ENTITIES, ()).await?;
     let entities_count: i64 = if let Some(row) = rows.next().await? {
         row.get(0)?
     } else {
         0
     };
 
-    let mut rows = conn.query("SELECT COUNT(*) FROM mcp_relations", ()).await?;
+    let mut rows = conn.query(crate::constant::SQL_COUNT_RELATIONS, ()).await?;
     let relations_count: i64 = if let Some(row) = rows.next().await? {
         row.get(0)?
     } else {
@@ -563,7 +477,7 @@ pub async fn mcp_stats(conn: &Connection) -> Result<(usize, usize, usize)> {
     };
 
     let mut rows = conn
-        .query("SELECT COUNT(*) FROM mcp_observations", ())
+        .query(crate::constant::SQL_COUNT_OBSERVATIONS, ())
         .await?;
     let observations_count: i64 = if let Some(row) = rows.next().await? {
         row.get(0)?
@@ -579,9 +493,12 @@ pub async fn mcp_stats(conn: &Connection) -> Result<(usize, usize, usize)> {
 }
 
 pub async fn mcp_reset(conn: &Connection) -> Result<()> {
-    conn.execute("DELETE FROM mcp_relations", ()).await?;
-    conn.execute("DELETE FROM mcp_observations", ()).await?;
-    conn.execute("DELETE FROM mcp_entities", ()).await?;
+    conn.execute(crate::constant::SQL_DELETE_ALL_RELATIONS, ())
+        .await?;
+    conn.execute(crate::constant::SQL_DELETE_ALL_OBSERVATIONS, ())
+        .await?;
+    conn.execute(crate::constant::SQL_DELETE_ALL_ENTITIES, ())
+        .await?;
     Ok(())
 }
 

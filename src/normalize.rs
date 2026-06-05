@@ -25,6 +25,17 @@ pub fn normalize_key(key: &str) -> String {
         .to_string()
 }
 
+pub fn slugify(text: &str) -> String {
+    text.to_lowercase()
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect::<String>()
+        .split('-')
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>()
+        .join("-")
+}
+
 #[cfg(test)]
 #[path = "normalize_test.rs"]
 mod tests;

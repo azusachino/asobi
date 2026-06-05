@@ -4,10 +4,10 @@
 help:
 	@echo "Available tasks:"
 	@echo "  build         - Compile the Rosemary CLI and library"
-	@echo "  build-documents - Compile with LanceDB/fastembed document commands"
+	@echo "  build-documents - Compile with libSQL/fastembed document commands"
 	@echo "  run           - Run the Rosemary CLI via cargo"
 	@echo "  test          - Run all Rust tests"
-	@echo "  test-documents - Run tests with LanceDB/fastembed document feature"
+	@echo "  test-documents - Run tests with libSQL/fastembed document feature"
 	@echo "  test-scripts  - Run uv-managed CLI integration checks"
 	@echo "  fmt           - Format Rust, Python, JSON, and YAML code"
 	@echo "  lint          - Run Rust clippy and Python ruff"

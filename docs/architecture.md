@@ -19,16 +19,17 @@ LLM agents lose context between sessions. The `@modelcontextprotocol/server-memo
 │  └─────────────────────────────────────────────────┘   │
 │  ┌─────────────────────────────────────────────────┐   │
 │  │  Document tier (topics)                         │   │
-│  │  topics · topics_fts · sessions                 │   │
+│  │  topics · topics_fts · sessions · chunks        │   │
+│  │  idx_chunks_vector (libSQL vector index)        │   │
 │  └─────────────────────────────────────────────────┘   │
 └────────────────────────────────────────────────────────┘
            │
            │  compact --sync-only
            ▼
-┌──────────────────────┐     ┌──────────────────────────┐
-│  .rosemary/topics/   │     │  .rosemary/data/lancedb/  │
-│  *.md (cold storage) │     │  vector chunks (LanceDB)  │
-└──────────────────────┘     └──────────────────────────┘
+┌──────────────────────┐
+│  .rosemary/topics/   │
+│  *.md (cold storage) │
+└──────────────────────┘
 ```
 
 ### Graph tier (hot)
@@ -43,10 +44,10 @@ Plus `mcp_obs_fts` — a FTS5 virtual table that mirrors `mcp_observations.conte
 
 ### Document tier (cold)
 
-Ingested Markdown files chunked, embedded, and stored in LanceDB for semantic search. This tier is **optional** — graph operations never touch it. Only `ingest`, `query`, and `compact` initialize LanceDB and the fastembed model.
+Ingested Markdown files chunked, embedded, and stored in the same libSQL database for semantic search. This tier is **optional** — graph operations never touch it. Only `ingest`, `query`, and `compact` initialize the vector search capabilities and the fastembed model.
 
-The tier is also compile-time optional. The default Cargo build excludes LanceDB,
-fastembed, Arrow, token splitting, and directory ingest dependencies. Build with
+The tier is also compile-time optional. The default Cargo build excludes
+fastembed, token splitting, and directory ingest dependencies. Build with
 `--features documents` to enable `ingest`, `query`, and `compact`.
 
 ---
@@ -95,17 +96,17 @@ This means different projects keep separate graphs automatically — no namespac
 
 ## Startup cost by command
 
-| Command            | Default build | Initializes DB | Initializes LanceDB+fastembed | Typical cold start |
-| ------------------ | ------------- | -------------- | ----------------------------- | ------------------ |
-| `create-entities`  | yes           | yes            | **no**                        | ~5ms               |
-| `add-observations` | yes           | yes            | **no**                        | ~5ms               |
-| `read-graph`       | yes           | yes            | **no**                        | ~5ms               |
-| `search-nodes`     | yes           | yes            | **no**                        | ~5ms               |
-| `open-nodes`       | yes           | yes            | **no**                        | ~5ms               |
-| `delete-*`         | yes           | yes            | **no**                        | ~5ms               |
-| `ingest`           | documents     | yes            | yes                           | 3–30s              |
-| `query`            | documents     | yes            | yes                           | 3–30s              |
-| `compact`          | documents     | yes            | yes                           | 3–30s              |
+| Command            | Default build | Initializes DB | Initializes fastembed | Typical cold start |
+| ------------------ | ------------- | -------------- | --------------------- | ------------------ |
+| `create-entities`  | yes           | yes            | **no**                | ~5ms               |
+| `add-observations` | yes           | yes            | **no**                | ~5ms               |
+| `read-graph`       | yes           | yes            | **no**                | ~5ms               |
+| `search-nodes`     | yes           | yes            | **no**                | ~5ms               |
+| `open-nodes`       | yes           | yes            | **no**                | ~5ms               |
+| `delete-*`         | yes           | yes            | **no**                | ~5ms               |
+| `ingest`           | documents     | yes            | yes                   | 3–30s              |
+| `query`            | documents     | yes            | yes                   | 3–30s              |
+| `compact`          | documents     | yes            | yes                   | 3–30s              |
 
 The lazy-init split is enforced in `main.rs` via `needs_vector()`. Graph commands never pay the model load cost, and default builds do not link the document-tier crates.
 
@@ -159,7 +160,7 @@ The two search paths in `mcp_search_nodes` are sequential. With a connection poo
 
 ### 5. `compact` without re-embedding _(medium)_
 
-`compact` always re-embeds every entity into LanceDB. It could skip entities whose Markdown file hash hasn't changed since last sync. Add a `content_hash` column to `topics`.
+`compact` always re-embeds every entity into libSQL. It could skip entities whose Markdown file hash hasn't changed since last sync. Add a `content_hash` column to `topics`.
 
 ---
 
@@ -173,10 +174,10 @@ entity_type           id (UUID PK)              to_entity (FK)
 created_at            content          ◄─ FTS5  relation_type
 updated_at            created_at       mcp_obs_fts
 
-topics                topics_fts (FTS5)         sessions
-──────                ─────────────────         ────────
-id (PK)               title                     id (PK)
-title                 body                      summary
-file_path                                       file_path
-body
+topics                topics_fts (FTS5)         sessions         chunks
+──────                ─────────────────         ────────         ──────
+id (PK)               title                     id (PK)          id (PK)
+title                 body                      summary          topic_id (FK)
+file_path                                       file_path        embedding (F32_BLOB)
+body                                                             text
 ```
