@@ -1,5 +1,16 @@
 # Changelog
 
+## v0.5.0 — Unified libSQL Storage
+
+### Changed
+
+- **Unified libSQL Storage**: Moved vector embeddings from LanceDB to libSQL using its native vector search support.
+- **Dependency Reduction**: Removed `lancedb` and `arrow` dependencies, significantly reducing build times and binary size overhead.
+- **Single Source of Truth**: All data (graph, FTS, and vectors) now resides in a single `rosemary.db` file.
+- **Simplified Initialization**: Graph and document tiers now share the same libSQL connection, eliminating separate database initialization paths.
+
+---
+
 ## v0.4.2 — Hierarchical Normalization
 
 ### New features

@@ -35,7 +35,10 @@ fn main() {
             let dir = tempdir().expect("tempdir");
             let db_path = dir.path().join("bench.db");
             unsafe {
-                std::env::set_var("DATABASE_URL", db_path.to_str().expect("utf-8 path"));
+                // Must be ROSEMARY_DATABASE_URL (the constant), not "DATABASE_URL".
+                // The wrong name is silently ignored by init_db(), causing the bench
+                // to seed and mcp_reset() the user's REAL global graph. See db::ENV_DATABASE_URL.
+                std::env::set_var(db::ENV_DATABASE_URL, db_path.to_str().expect("utf-8 path"));
             }
             let (_db, conn) = db::init_db().await.expect("init db");
 

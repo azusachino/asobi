@@ -16,7 +16,7 @@ pub async fn recall(
     query: &str,
     conn: &Connection,
     store: &VectorStore,
-    embedder: &dyn EmbeddingProvider,
+    embedder: &impl EmbeddingProvider,
     top_k: usize,
 ) -> Result<Vec<RecallResult>> {
     // --- ANN search (weight 0.7) ---
@@ -29,7 +29,7 @@ pub async fn recall(
     let fts_results = search_fts(conn, &format!("\"{}\"", safe_query), top_k * 2)
         .await
         .unwrap_or_else(|e| {
-            eprintln!("warn: FTS5 search failed, falling back to ANN-only: {e}");
+            tracing::warn!("FTS5 search failed, falling back to ANN-only: {e}");
             vec![]
         });
 
@@ -115,12 +115,10 @@ pub async fn recall(
 mod tests {
     use super::*;
     use crate::{db::init_db, ingest::ingest_file, vector::VectorStore};
-    use async_trait::async_trait;
     use std::io::Write;
     use tempfile::tempdir;
 
     struct FakeEmbedder(usize);
-    #[async_trait]
     impl EmbeddingProvider for FakeEmbedder {
         async fn embed(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
             // Make "pinning" queries return a distinctive vector
@@ -152,10 +150,8 @@ mod tests {
         writeln!(f, "---\ntitle: Rust Pinning\nslug: rust-pinning\n---\n\nPinning is a mechanism to prevent moves.").unwrap();
 
         let (_db, conn) = init_db().await.unwrap();
-        let store = VectorStore::new_with_dim(dir.path().join("lance").to_str().unwrap(), 4)
-            .await
-            .unwrap();
-        let embedder = FakeEmbedder(4);
+        let store = VectorStore::new_with_dim(conn.clone(), 384);
+        let embedder = FakeEmbedder(384);
 
         ingest_file(
             dir.path().join("rust-pinning.md").as_path(),

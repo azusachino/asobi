@@ -25,6 +25,33 @@ pub fn normalize_key(key: &str) -> String {
         .to_string()
 }
 
+fn fnv1a(s: &str) -> u64 {
+    let mut h: u64 = 0xcbf29ce484222325;
+    for b in s.as_bytes() {
+        h ^= *b as u64;
+        h = h.wrapping_mul(0x100000001b3);
+    }
+    h
+}
+
+pub fn slugify(text: &str) -> String {
+    let slug = text
+        .to_lowercase()
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect::<String>()
+        .split('-')
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>()
+        .join("-");
+
+    if slug.is_empty() {
+        format!("t-{:016x}", fnv1a(text))
+    } else {
+        slug
+    }
+}
+
 #[cfg(test)]
 #[path = "normalize_test.rs"]
 mod tests;

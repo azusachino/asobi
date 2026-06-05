@@ -1,5 +1,4 @@
 use anyhow::Result;
-use async_trait::async_trait;
 use fastembed::{EmbeddingModel, InitOptions, TextEmbedding};
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -27,7 +26,6 @@ impl FastEmbedProvider {
     }
 }
 
-#[async_trait]
 impl EmbeddingProvider for FastEmbedProvider {
     async fn embed(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
         let mut model = self

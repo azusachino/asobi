@@ -1,11 +1,15 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 #[cfg(feature = "documents")]
+use rosemary::embed::EmbeddingProvider;
+#[cfg(feature = "documents")]
 use rosemary::paths::RosemaryPaths;
 #[cfg(feature = "documents")]
 use std::path::Path;
 #[cfg(feature = "documents")]
 use std::sync::Arc;
+use tracing::info;
+use tracing_subscriber::EnvFilter;
 
 #[derive(Parser)]
 #[command(name = "rosemary")]
@@ -96,6 +100,23 @@ enum Commands {
         #[arg(long)]
         force: bool,
     },
+    /// Snapshot the database to a single consistent file (VACUUM INTO)
+    Backup {
+        /// Destination path (default: `<data_dir>/backups/rosemary-<timestamp>.db`)
+        #[arg(short, long)]
+        output: Option<String>,
+        /// Snapshots to retain in the default backup directory (oldest pruned)
+        #[arg(long, default_value_t = 3)]
+        keep: usize,
+    },
+    /// Replace the live database with a snapshot file
+    Restore {
+        /// Path to the snapshot file to restore from
+        file: String,
+        /// Skip the confirmation prompt
+        #[arg(long)]
+        force: bool,
+    },
 }
 
 #[cfg(feature = "documents")]
@@ -111,22 +132,20 @@ fn needs_vector(_: &Commands) -> bool {
     false
 }
 
-pub const ENV_LANCEDB_PATH: &str = "ROSEMARY_LANCEDB_PATH";
 pub const ENV_FASTEMBED_CACHE_DIR: &str = "ROSEMARY_FASTEMBED_CACHE_DIR";
 pub const ENV_EMBED_PROVIDER: &str = "ROSEMARY_EMBED_PROVIDER";
 pub const ENV_TOPICS_DIR: &str = "ROSEMARY_TOPICS_DIR";
 
 #[cfg(feature = "documents")]
 async fn init_vector(
+    conn: libsql::Connection,
     paths: &RosemaryPaths,
 ) -> Result<(
     rosemary::vector::VectorStore,
-    Arc<dyn rosemary::embed::EmbeddingProvider>,
+    Arc<rosemary::embed::FastEmbedProvider>,
 )> {
-    let lance_path = std::env::var(ENV_LANCEDB_PATH)
-        .unwrap_or_else(|_| paths.data_dir.join("lancedb").to_str().unwrap().to_string());
-    let store = rosemary::vector::VectorStore::new(&lance_path).await?;
-    let embedder: Arc<dyn rosemary::embed::EmbeddingProvider> =
+    let store = rosemary::vector::VectorStore::new(conn);
+    let embedder: Arc<rosemary::embed::FastEmbedProvider> =
         if std::env::var(ENV_EMBED_PROVIDER).as_deref() == Ok("claude") {
             anyhow::bail!("ClaudeProvider not yet implemented")
         } else {
@@ -145,8 +164,23 @@ async fn init_vector(
     Ok((store, embedder))
 }
 
+/// Initialise the global tracing subscriber. Logs go to **stderr** so the
+/// stdout channel stays clean for machine-readable data (graph JSON, stats) and
+/// the MCP JSON-RPC stream. Level is controlled by `RUST_LOG` (default `info`).
+fn init_tracing() {
+    tracing_subscriber::fmt()
+        .with_writer(std::io::stderr)
+        .with_env_filter(
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
+        )
+        .with_target(false)
+        .compact()
+        .init();
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
+    init_tracing();
     let cli = Cli::parse();
 
     // `init` is special: it runs before any DB or config resolution, since
@@ -165,7 +199,7 @@ async fn main() -> Result<()> {
 
     #[cfg(feature = "documents")]
     let paths = RosemaryPaths::resolve();
-    let (_db, conn) = rosemary::db::init_db().await?;
+    let (db, conn) = rosemary::db::init_db().await?;
 
     // Vector store + embedder are only initialised for commands that need them.
     // Graph-only operations (create-entities, read-graph, etc.) skip the heavy
@@ -173,29 +207,39 @@ async fn main() -> Result<()> {
     if needs_vector(&cli.command) {
         #[cfg(feature = "documents")]
         {
-            let (store, embedder) = init_vector(&paths).await?;
+            let (store, embedder) = init_vector(conn, &paths).await?;
             match cli.command {
                 Commands::Ingest { path } => {
                     let p = Path::new(&path);
                     if p.is_dir() {
-                        println!("Ingesting directory: {:?}...", p);
-                        let count =
-                            rosemary::ingest::ingest_dir(p, &conn, &store, embedder.as_ref())
-                                .await?;
-                        println!("Done. Ingested {} files.", count);
+                        info!("Ingesting directory: {:?}...", p);
+                        let count = rosemary::ingest::ingest_dir(
+                            p,
+                            store.conn(),
+                            &store,
+                            embedder.as_ref(),
+                        )
+                        .await?;
+                        info!("Done. Ingested {} files.", count);
                     } else {
-                        println!("Ingesting file: {:?}...", p);
-                        rosemary::ingest::ingest_file(p, &conn, &store, embedder.as_ref()).await?;
-                        println!("Done.");
+                        info!("Ingesting file: {:?}...", p);
+                        rosemary::ingest::ingest_file(p, store.conn(), &store, embedder.as_ref())
+                            .await?;
+                        info!("Done.");
                     }
                 }
                 Commands::Query { query } => {
-                    println!("Searching: {}...", query);
-                    let results =
-                        rosemary::recall::recall(&query, &conn, &store, embedder.as_ref(), 5)
-                            .await?;
+                    info!("Searching: {}...", query);
+                    let results = rosemary::recall::recall(
+                        &query,
+                        store.conn(),
+                        &store,
+                        embedder.as_ref(),
+                        5,
+                    )
+                    .await?;
                     if results.is_empty() {
-                        println!("No results found.");
+                        info!("No results found.");
                     } else {
                         for r in results {
                             println!(
@@ -209,17 +253,21 @@ async fn main() -> Result<()> {
                     let topics_root = std::env::var(ENV_TOPICS_DIR)
                         .unwrap_or_else(|_| paths.topics_dir.to_str().unwrap().to_string());
                     let pruned = rosemary::compact::prune_old_sessions(&topics_root, older_than)?;
-                    println!("Pruned {} old session files.", pruned);
+                    info!("Pruned {} old session files.", pruned);
 
                     let clusters =
-                        rosemary::compact::find_duplicate_clusters(&store, &conn, 0.85).await?;
-                    println!("Found {} near-duplicate topic clusters.", clusters.len());
-
-                    println!("Syncing Graph to Markdown...");
-                    let synced =
-                        rosemary::compact::sync_graph_to_markdown(&conn, &store, embedder.as_ref())
+                        rosemary::compact::find_duplicate_clusters(&store, store.conn(), 0.85)
                             .await?;
-                    println!("Done. Synced {} entities to Markdown.", synced);
+                    info!("Found {} near-duplicate topic clusters.", clusters.len());
+
+                    info!("Syncing Graph to Markdown...");
+                    let synced = rosemary::compact::sync_graph_to_markdown(
+                        store.conn(),
+                        &store,
+                        embedder.as_ref(),
+                    )
+                    .await?;
+                    info!("Done. Synced {} entities to Markdown.", synced);
                 }
                 _ => unreachable!(),
             }
@@ -238,7 +286,7 @@ async fn main() -> Result<()> {
                 }],
             )
             .await?;
-            println!("Entity '{}' created.", name);
+            info!("Entity '{}' created.", name);
         }
         Commands::CreateRelations {
             from,
@@ -254,7 +302,7 @@ async fn main() -> Result<()> {
                 }],
             )
             .await?;
-            println!("Relation created.");
+            info!("Relation created.");
         }
         Commands::AddObservations { name, content } => {
             rosemary::db::mcp_add_observations(
@@ -265,11 +313,11 @@ async fn main() -> Result<()> {
                 }],
             )
             .await?;
-            println!("Observation added.");
+            info!("Observation added.");
         }
         Commands::DeleteEntities { names } => {
             rosemary::db::mcp_delete_entities(&conn, names).await?;
-            println!("Entities deleted.");
+            info!("Entities deleted.");
         }
         Commands::DeleteObservations { name, content } => {
             rosemary::db::mcp_delete_observations(
@@ -280,7 +328,7 @@ async fn main() -> Result<()> {
                 }],
             )
             .await?;
-            println!("Observations deleted.");
+            info!("Observations deleted.");
         }
         Commands::DeleteRelations {
             from,
@@ -296,7 +344,7 @@ async fn main() -> Result<()> {
                 }],
             )
             .await?;
-            println!("Relations deleted.");
+            info!("Relations deleted.");
         }
         Commands::ReadGraph => {
             let graph = rosemary::db::mcp_read_graph(&conn).await?;
@@ -325,7 +373,7 @@ async fn main() -> Result<()> {
             let json = serde_json::to_string_pretty(&graph)?;
             if let Some(path) = output {
                 std::fs::write(&path, json)?;
-                println!("Graph exported to {}", path);
+                info!("Graph exported to {}", path);
             } else {
                 println!("{}", json);
             }
@@ -346,13 +394,13 @@ async fn main() -> Result<()> {
 
             if !entities.is_empty() {
                 rosemary::db::mcp_create_entities(&conn, entities).await?;
-                println!("Imported entities and observations.");
+                info!("Imported entities and observations.");
             }
             if !graph.relations.is_empty() {
                 rosemary::db::mcp_create_relations(&conn, graph.relations).await?;
-                println!("Imported relations.");
+                info!("Imported relations.");
             }
-            println!("Import complete.");
+            info!("Import complete.");
         }
         Commands::Reset { force } => {
             if !force {
@@ -362,12 +410,20 @@ async fn main() -> Result<()> {
                 let mut input = String::new();
                 std::io::stdin().read_line(&mut input)?;
                 if input.trim().to_lowercase() != "y" {
-                    println!("Reset aborted.");
+                    info!("Reset aborted.");
                     return Ok(());
                 }
             }
             rosemary::db::mcp_reset(&conn).await?;
-            println!("Knowledge graph reset successfully.");
+            info!("Knowledge graph reset successfully.");
+        }
+        Commands::Backup { output, keep } => {
+            let dest =
+                rosemary::backup::backup(&conn, output.map(std::path::PathBuf::from), keep).await?;
+            info!("Backup written to {}", dest.display());
+        }
+        Commands::Restore { file, force } => {
+            rosemary::backup::restore(db, conn, std::path::Path::new(&file), force).await?;
         }
         _ => unreachable!(),
     }

@@ -1,19 +1,28 @@
-use text_splitter::{ChunkConfig, TextSplitter};
-use tiktoken_rs::cl100k_base;
-
-pub fn chunk_text(text: &str, max_tokens: usize, overlap: usize) -> Vec<String> {
+pub fn chunk_text(text: &str, max_chars: usize, overlap: usize) -> Vec<String> {
     if text.trim().is_empty() {
         return vec![];
     }
+    if max_chars == 0 {
+        return vec![text.to_string()];
+    }
 
-    let tokenizer = cl100k_base().unwrap();
-    let config = ChunkConfig::new(max_tokens)
-        .with_sizer(tokenizer)
-        .with_overlap(overlap)
-        .expect("Overlap must be less than chunk size");
+    let mut chunks = Vec::new();
+    let chars: Vec<char> = text.chars().collect();
+    let mut start = 0;
 
-    let splitter = TextSplitter::new(config);
-    splitter.chunks(text).map(|s| s.to_string()).collect()
+    while start < chars.len() {
+        let end = (start + max_chars).min(chars.len());
+        let chunk: String = chars[start..end].iter().collect();
+        chunks.push(chunk);
+
+        if end == chars.len() {
+            break;
+        }
+
+        start += max_chars - overlap.min(max_chars - 1);
+    }
+
+    chunks
 }
 
 #[cfg(test)]
@@ -22,46 +31,40 @@ mod tests {
 
     #[test]
     fn test_short_text_is_one_chunk() {
-        let text = "Hello world. This is a short paragraph.";
-        let chunks = chunk_text(text, 512, 64);
+        let text = "Hello world.";
+        let chunks = chunk_text(text, 100, 10);
         assert_eq!(chunks.len(), 1);
         assert_eq!(chunks[0], text);
     }
 
     #[test]
-    fn test_long_text_splits_into_multiple_chunks() {
-        // ~600 tokens worth of text
-        let para = "word ".repeat(200);
-        let text = format!("{}\n\n{}\n\n{}", para, para, para);
-        let chunks = chunk_text(&text, 256, 32);
-        assert!(
-            chunks.len() >= 2,
-            "expected multiple chunks, got {}",
-            chunks.len()
-        );
+    fn test_long_text_splits() {
+        let text = "abcdefghij"; // 10 chars
+        let chunks = chunk_text(text, 4, 2);
+        // "abcd" (start 0, end 4)
+        // start += 4 - 2 = 2
+        // "cdef" (start 2, end 6)
+        // start += 4 - 2 = 4
+        // "efgh" (start 4, end 8)
+        // start += 4 - 2 = 6
+        // "ghij" (start 6, end 10)
+        assert_eq!(chunks.len(), 4);
+        assert_eq!(chunks[0], "abcd");
+        assert_eq!(chunks[1], "cdef");
+        assert_eq!(chunks[2], "efgh");
+        assert_eq!(chunks[3], "ghij");
     }
 
     #[test]
-    fn test_empty_text_returns_empty() {
-        let chunks = chunk_text("", 512, 64);
-        assert!(chunks.is_empty());
-    }
-
-    #[test]
-    fn test_overlap_content_appears_in_adjacent_chunks() {
-        let para_a = "alpha ".repeat(500);
-        let para_b = "beta ".repeat(500);
-        let text = format!("{}\n\n{}", para_a, para_b);
-        let chunks = chunk_text(&text, 200, 50);
-
-        assert!(
-            chunks.len() >= 2,
-            "expected multiple chunks, got {}",
-            chunks.len()
-        );
-        // Verify that some "alpha" is in the second chunk OR some "beta" is in the first (depending on split point)
-        // With text-splitter, overlap behavior might vary based on semantic boundaries.
-        // We just want to ensure chunks aren't disjoint if they split.
-        assert!(chunks[1].contains("alpha") || chunks[0].contains("beta"));
+    fn test_zero_overlap_abuts() {
+        let text = "abcdefgh"; // 8 chars
+        let chunks = chunk_text(text, 4, 0);
+        // overlap=0, max_chars=4 → min(0, 3)=0 → step=4
+        // "abcd" (start 0, end 4)
+        // start += 4 - 0 = 4
+        // "efgh" (start 4, end 8)
+        assert_eq!(chunks.len(), 2);
+        assert_eq!(chunks[0], "abcd");
+        assert_eq!(chunks[1], "efgh");
     }
 }

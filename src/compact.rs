@@ -1,9 +1,9 @@
 use crate::db;
 use crate::ingest::ingest_file;
+use crate::normalize::slugify;
 use crate::vector::VectorStore;
 use anyhow::Result;
-use libsql::Connection;
-use slug::slugify;
+use libsql::{Connection, params};
 use std::io::Write;
 use std::path::PathBuf;
 use std::time::{Duration, SystemTime};
@@ -11,7 +11,7 @@ use std::time::{Duration, SystemTime};
 pub async fn sync_graph_to_markdown(
     conn: &Connection,
     store: &VectorStore,
-    embedder: &dyn crate::embed::EmbeddingProvider,
+    embedder: &impl crate::embed::EmbeddingProvider,
 ) -> Result<usize> {
     let paths = crate::paths::RosemaryPaths::resolve();
     let topics_dir = paths.topics_dir;
@@ -112,11 +112,10 @@ pub async fn find_duplicate_clusters(
     conn: &libsql::Connection,
     threshold: f32,
 ) -> anyhow::Result<Vec<Vec<String>>> {
-    use futures::StreamExt;
-    use lancedb::query::{ExecutableQuery, QueryBase};
-
     // Get all topic IDs
-    let mut rows = conn.query("SELECT id FROM topics", ()).await?;
+    let mut rows = conn
+        .query(crate::constant::SQL_SELECT_ALL_TOPIC_IDS, ())
+        .await?;
     let mut topic_ids = Vec::new();
     while let Some(row) = rows.next().await? {
         topic_ids.push(row.get::<String>(0)?);
@@ -131,44 +130,33 @@ pub async fn find_duplicate_clusters(
         }
 
         // Fetch representative vector for this topic (first chunk)
-        let table = store.db().open_table("chunks").execute().await?;
-        let mut results = table
-            .query()
-            .only_if(format!("topic_id = '{}'", id.replace('\'', "''")))
-            .limit(1)
-            .execute()
+        let mut rows = conn
+            .query(
+                "SELECT embedding FROM chunks WHERE topic_id = ?1 LIMIT 1",
+                params![id.clone()],
+            )
             .await?;
 
-        if let Some(batch) = results.next().await {
-            let batch = batch?;
-            if batch.num_rows() > 0 {
-                let vectors = batch
-                    .column_by_name("vector")
-                    .unwrap()
-                    .as_any()
-                    .downcast_ref::<arrow_array::FixedSizeListArray>()
-                    .unwrap();
-                let vector_val = vectors.value(0);
-                let vector_data = vector_val
-                    .as_any()
-                    .downcast_ref::<arrow_array::Float32Array>()
-                    .unwrap();
-                let vector: Vec<f32> = vector_data.values().to_vec();
+        if let Some(row) = rows.next().await? {
+            let blob: Vec<u8> = row.get(0)?;
+            // F32_BLOB is stored as little-endian f32s
+            let vector: Vec<f32> = blob
+                .chunks_exact(4)
+                .map(|c| f32::from_le_bytes(c.try_into().unwrap()))
+                .collect();
 
-                let similar = store.search(&vector, 10).await?;
-                let mut cluster = vec![id.clone()];
-                for s in similar {
-                    if s.score >= threshold && s.topic_id != *id && !clustered.contains(&s.topic_id)
-                    {
-                        cluster.push(s.topic_id.clone());
-                        clustered.insert(s.topic_id.clone());
-                    }
+            let similar = store.search(&vector, 10).await?;
+            let mut cluster = vec![id.clone()];
+            for s in similar {
+                if s.score >= threshold && s.topic_id != *id && !clustered.contains(&s.topic_id) {
+                    cluster.push(s.topic_id.clone());
+                    clustered.insert(s.topic_id.clone());
                 }
+            }
 
-                if cluster.len() > 1 {
-                    clustered.insert(id.clone());
-                    clusters.push(cluster);
-                }
+            if cluster.len() > 1 {
+                clustered.insert(id.clone());
+                clusters.push(cluster);
             }
         }
     }
