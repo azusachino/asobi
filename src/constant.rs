@@ -103,9 +103,8 @@ pub const SQL_SEARCH_FTS: &str = "SELECT t.id, t.title, t.file_path, bm25(topics
                ORDER BY score
                LIMIT ?2";
 
-pub const SQL_UPSERT_TOPIC: &str =
-    "INSERT OR REPLACE INTO topics (id, title, file_path, body, updated_at)
-     VALUES (?1, ?2, ?3, ?4, CURRENT_TIMESTAMP)";
+pub const SQL_UPSERT_TOPIC: &str = "INSERT INTO topics (id, title, file_path, body) VALUES (?1, ?2, ?3, ?4) \
+     ON CONFLICT(id) DO UPDATE SET title=excluded.title, file_path=excluded.file_path, body=excluded.body, updated_at=CURRENT_TIMESTAMP";
 
 // Queries - MCP Entities / Observations / Relations
 pub const SQL_INSERT_ENTITY: &str =
@@ -160,8 +159,13 @@ pub const SQL_DELETE_ALL_ENTITIES: &str = "DELETE FROM mcp_entities";
 pub const SQL_INSERT_CHUNK: &str = "INSERT INTO chunks (id, topic_id, chunk_idx, text, source, embedding) \
              VALUES (?1, ?2, ?3, ?4, ?5, vector32(?6))";
 
-pub const SQL_SEARCH_CHUNKS: &str = "SELECT c.id, c.topic_id, c.text, c.source, 0.0 \
+// COALESCE guards against NULL distance: vector_distance_cos is undefined for a
+// zero-magnitude vector, and a NULL would panic the f64 column read. Treat it as
+// maximally distant (1.0 → similarity 0.0).
+pub const SQL_SEARCH_CHUNKS: &str = "SELECT c.id, c.topic_id, c.text, c.source, \
+             COALESCE(vector_distance_cos(c.embedding, vector32(?1)), 1.0) AS score \
              FROM vector_top_k('idx_chunks_vector', vector32(?1), ?2) AS v \
-             JOIN chunks c ON c.rowid = v.id";
+             JOIN chunks c ON c.rowid = v.id \
+             ORDER BY score";
 
 pub const SQL_DELETE_CHUNKS_BY_TOPIC: &str = "DELETE FROM chunks WHERE topic_id = ?1";

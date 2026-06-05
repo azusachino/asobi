@@ -19,7 +19,7 @@ pub fn chunk_text(text: &str, max_chars: usize, overlap: usize) -> Vec<String> {
             break;
         }
 
-        start += max_chars - overlap.min(max_chars - 1).max(1);
+        start += max_chars - overlap.min(max_chars - 1);
     }
 
     chunks
@@ -53,5 +53,18 @@ mod tests {
         assert_eq!(chunks[1], "cdef");
         assert_eq!(chunks[2], "efgh");
         assert_eq!(chunks[3], "ghij");
+    }
+
+    #[test]
+    fn test_zero_overlap_abuts() {
+        let text = "abcdefgh"; // 8 chars
+        let chunks = chunk_text(text, 4, 0);
+        // overlap=0, max_chars=4 → min(0, 3)=0 → step=4
+        // "abcd" (start 0, end 4)
+        // start += 4 - 0 = 4
+        // "efgh" (start 4, end 8)
+        assert_eq!(chunks.len(), 2);
+        assert_eq!(chunks[0], "abcd");
+        assert_eq!(chunks[1], "efgh");
     }
 }

@@ -222,7 +222,7 @@ async fn corrupted_database_returns_error() {
 async fn graph_handles_malicious_payloads_gracefully() {
     let (_dir, conn) = test_conn().await;
 
-    let payloads = vec![
+    let payloads = [
         "<script>alert('XSS')</script>", // XSS
         "$(rm -rf /)",                   // Command Injection
         "../../../etc/passwd",           // Path Traversal

@@ -548,6 +548,49 @@ mod tests {
         assert_eq!(results[0].1, "Rust Pinning");
     }
 
+    #[tokio::test]
+    async fn test_upsert_topic_preserves_created_at() {
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("test.db");
+        unsafe {
+            std::env::set_var(ENV_DATABASE_URL, db_path.to_str().unwrap());
+        }
+        let (_db, conn) = init_db().await.unwrap();
+
+        // Seed a row with a fixed, distinguishable created_at so a reset would
+        // be detectable even within the same wall-clock second.
+        conn.execute(
+            "INSERT INTO topics (id, title, file_path, body, created_at) \
+             VALUES ('t1', 'Old Title', '/old', 'old body', '2000-01-01 00:00:00')",
+            (),
+        )
+        .await
+        .unwrap();
+
+        // Re-upsert the same id with new content.
+        upsert_topic(&conn, "t1", "New Title", "/new", "new body")
+            .await
+            .unwrap();
+
+        let mut rows = conn
+            .query(
+                "SELECT title, body, created_at FROM topics WHERE id = 't1'",
+                (),
+            )
+            .await
+            .unwrap();
+        let row = rows.next().await.unwrap().expect("row should exist");
+        let title: String = row.get(0).unwrap();
+        let body: String = row.get(1).unwrap();
+        let created_at: String = row.get(2).unwrap();
+
+        // Update was applied...
+        assert_eq!(title, "New Title");
+        assert_eq!(body, "new body");
+        // ...but created_at must be preserved (INSERT OR REPLACE would reset it).
+        assert_eq!(created_at, "2000-01-01 00:00:00");
+    }
+
     async fn seed_entity(conn: &Connection, name: &str, entity_type: &str, obs: &[&str]) {
         mcp_create_entities(
             conn,
