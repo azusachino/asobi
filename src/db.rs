@@ -43,6 +43,9 @@ pub async fn init_db() -> Result<(Database, Connection)> {
     conn.execute(crate::constant::SCHEMA_CREATE_MCP_RELATIONS, ())
         .await?;
 
+    conn.execute(crate::constant::SCHEMA_CREATE_MCP_TRUTHS, ())
+        .await?;
+
     // Document Tier (Vectors)
     conn.execute(crate::constant::SCHEMA_CREATE_CHUNKS, ())
         .await?;
@@ -503,6 +506,69 @@ pub async fn mcp_reset(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
+pub async fn truth_upsert(conn: &Connection, entity: &str, key: &str, value: &str) -> Result<()> {
+    let norm_entity = crate::normalize::normalize_key(entity);
+    conn.execute(
+        crate::constant::SQL_UPSERT_TRUTH,
+        libsql::params![norm_entity, key, value],
+    )
+    .await?;
+    Ok(())
+}
+
+pub async fn truth_delete(conn: &Connection, entity: &str, key: &str) -> Result<()> {
+    let norm_entity = crate::normalize::normalize_key(entity);
+    conn.execute(
+        crate::constant::SQL_DELETE_TRUTH,
+        libsql::params![norm_entity, key],
+    )
+    .await?;
+    Ok(())
+}
+
+pub async fn select_truths(
+    conn: &Connection,
+    names: &[impl AsRef<str>],
+) -> Result<HashMap<String, Vec<(String, String)>>> {
+    let mut results = HashMap::new();
+    if names.is_empty() {
+        return Ok(results);
+    }
+
+    let normalized_names: Vec<String> = names
+        .iter()
+        .map(|n| crate::normalize::normalize_key(n.as_ref()))
+        .filter(|n| !n.is_empty())
+        .collect();
+
+    if normalized_names.is_empty() {
+        return Ok(results);
+    }
+
+    for chunk in normalized_names.chunks(500) {
+        let placeholders = chunk.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+        let sql = crate::constant::SQL_SELECT_TRUTHS_FOR_ENTITIES.replace("{}", &placeholders);
+        let params = chunk
+            .iter()
+            .cloned()
+            .map(libsql::Value::from)
+            .collect::<Vec<_>>();
+
+        let mut rows = conn.query(&sql, params).await?;
+        while let Some(row) = rows.next().await? {
+            let entity_name: String = row.get(0)?;
+            let key: String = row.get(1)?;
+            let value: String = row.get(2)?;
+            results
+                .entry(entity_name)
+                .or_insert_with(Vec::new)
+                .push((key, value));
+        }
+    }
+
+    Ok(results)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -748,5 +814,121 @@ mod tests {
         // Check empty stats again
         let stats = mcp_stats(&conn).await.unwrap();
         assert_eq!(stats, (0, 0, 0));
+    }
+
+    #[tokio::test]
+    async fn test_truth_upsert_twice_same_key() {
+        let dir = tempdir().unwrap();
+        unsafe {
+            std::env::set_var(
+                ENV_DATABASE_URL,
+                dir.path().join("test.db").to_str().unwrap(),
+            );
+        }
+        let (_db, conn) = init_db().await.unwrap();
+
+        seed_entity(&conn, "test-entity", "concept", &[]).await;
+
+        truth_upsert(&conn, "test-entity", "version", "1.0.0")
+            .await
+            .unwrap();
+        truth_upsert(&conn, "test-entity", "version", "1.0.1")
+            .await
+            .unwrap();
+
+        let truths = select_truths(&conn, &["test-entity"]).await.unwrap();
+        let entity_truths = truths.get("test-entity").expect("should have truths");
+        assert_eq!(entity_truths.len(), 1);
+        assert_eq!(
+            entity_truths[0],
+            ("version".to_string(), "1.0.1".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn test_truth_upsert_two_keys() {
+        let dir = tempdir().unwrap();
+        unsafe {
+            std::env::set_var(
+                ENV_DATABASE_URL,
+                dir.path().join("test.db").to_str().unwrap(),
+            );
+        }
+        let (_db, conn) = init_db().await.unwrap();
+
+        seed_entity(&conn, "test-entity", "concept", &[]).await;
+
+        truth_upsert(&conn, "test-entity", "version", "1.0.0")
+            .await
+            .unwrap();
+        truth_upsert(&conn, "test-entity", "author", "Alice")
+            .await
+            .unwrap();
+
+        let truths = select_truths(&conn, &["test-entity"]).await.unwrap();
+        let entity_truths = truths.get("test-entity").expect("should have truths");
+        assert_eq!(entity_truths.len(), 2);
+
+        let mut sorted = entity_truths.clone();
+        sorted.sort();
+        assert_eq!(sorted[0], ("author".to_string(), "Alice".to_string()));
+        assert_eq!(sorted[1], ("version".to_string(), "1.0.0".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_truth_delete() {
+        let dir = tempdir().unwrap();
+        unsafe {
+            std::env::set_var(
+                ENV_DATABASE_URL,
+                dir.path().join("test.db").to_str().unwrap(),
+            );
+        }
+        let (_db, conn) = init_db().await.unwrap();
+
+        seed_entity(&conn, "test-entity", "concept", &[]).await;
+
+        truth_upsert(&conn, "test-entity", "k1", "v1")
+            .await
+            .unwrap();
+        truth_upsert(&conn, "test-entity", "k2", "v2")
+            .await
+            .unwrap();
+
+        truth_delete(&conn, "test-entity", "k1").await.unwrap();
+
+        let truths = select_truths(&conn, &["test-entity"]).await.unwrap();
+        let entity_truths = truths.get("test-entity").expect("should have truths");
+        assert_eq!(entity_truths.len(), 1);
+        assert_eq!(entity_truths[0], ("k2".to_string(), "v2".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_delete_entities_cascades_truths() {
+        let dir = tempdir().unwrap();
+        unsafe {
+            std::env::set_var(
+                ENV_DATABASE_URL,
+                dir.path().join("test.db").to_str().unwrap(),
+            );
+        }
+        let (_db, conn) = init_db().await.unwrap();
+
+        seed_entity(&conn, "test-entity", "concept", &[]).await;
+        truth_upsert(&conn, "test-entity", "k1", "v1")
+            .await
+            .unwrap();
+
+        mcp_delete_entities(&conn, vec!["test-entity".to_string()])
+            .await
+            .unwrap();
+
+        // Check if the truth was deleted.
+        let mut rows = conn
+            .query("SELECT COUNT(*) FROM mcp_truths", ())
+            .await
+            .unwrap();
+        let count: i64 = rows.next().await.unwrap().unwrap().get(0).unwrap();
+        assert_eq!(count, 0);
     }
 }

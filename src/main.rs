@@ -48,6 +48,14 @@ enum Commands {
         #[arg(num_args = 1..)]
         contents: Vec<String>,
     },
+    /// Add or update a truth for an entity
+    AddTruth {
+        name: String,
+        key: String,
+        value: String,
+    },
+    /// Delete a specific truth for an entity
+    DeleteTruth { name: String, key: String },
     /// Delete entities and their relations
     DeleteEntities { names: Vec<String> },
     /// Delete specific observations
@@ -318,6 +326,14 @@ async fn main() -> Result<()> {
             )
             .await?;
             info!("Observation added.");
+        }
+        Commands::AddTruth { name, key, value } => {
+            rosemary::db::truth_upsert(&conn, &name, &key, &value).await?;
+            info!("Truth added.");
+        }
+        Commands::DeleteTruth { name, key } => {
+            rosemary::db::truth_delete(&conn, &name, &key).await?;
+            info!("Truth deleted.");
         }
         Commands::DeleteEntities { names } => {
             rosemary::db::mcp_delete_entities(&conn, names).await?;

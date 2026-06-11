@@ -53,6 +53,15 @@ pub const SCHEMA_CREATE_MCP_RELATIONS: &str = "CREATE TABLE IF NOT EXISTS mcp_re
             FOREIGN KEY (to_entity)   REFERENCES mcp_entities(name) ON DELETE CASCADE
         )";
 
+pub const SCHEMA_CREATE_MCP_TRUTHS: &str = "CREATE TABLE IF NOT EXISTS mcp_truths (
+            entity_name TEXT NOT NULL,
+            key         TEXT NOT NULL,
+            value       TEXT NOT NULL,
+            updated_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (entity_name, key),
+            FOREIGN KEY (entity_name) REFERENCES mcp_entities(name) ON DELETE CASCADE
+        )";
+
 pub const SCHEMA_CREATE_CHUNKS: &str = "CREATE TABLE IF NOT EXISTS chunks (
             id        TEXT PRIMARY KEY,
             topic_id  TEXT NOT NULL,
@@ -121,6 +130,10 @@ pub const SQL_DELETE_OBSERVATION: &str =
 pub const SQL_DELETE_RELATION: &str =
     "DELETE FROM mcp_relations WHERE from_entity = ?1 AND to_entity = ?2 AND relation_type = ?3";
 
+pub const SQL_UPSERT_TRUTH: &str = "INSERT INTO mcp_truths (entity_name, key, value) VALUES (?1, ?2, ?3) \
+     ON CONFLICT(entity_name, key) DO UPDATE SET value=excluded.value, updated_at=CURRENT_TIMESTAMP";
+pub const SQL_DELETE_TRUTH: &str = "DELETE FROM mcp_truths WHERE entity_name = ?1 AND key = ?2";
+
 pub const SQL_SELECT_ALL_ENTITIES: &str = "SELECT name, entity_type FROM mcp_entities";
 pub const SQL_SELECT_ALL_TOPIC_IDS: &str = "SELECT id FROM topics";
 pub const SQL_SELECT_OBSERVATIONS_FOR_ENTITY: &str =
@@ -150,6 +163,10 @@ pub const SQL_SELECT_ENTITIES_IN_TEMPLATE: &str =
 pub const SQL_SELECT_OBSERVATIONS_IN_TEMPLATE: &str = "SELECT entity_name, content FROM mcp_observations \
              WHERE entity_name IN ({}) \
              ORDER BY created_at, id";
+
+pub const SQL_SELECT_TRUTHS_FOR_ENTITIES: &str = "SELECT entity_name, key, value FROM mcp_truths \
+             WHERE entity_name IN ({}) \
+             ORDER BY key";
 
 pub const SQL_COUNT_ENTITIES: &str = "SELECT COUNT(*) FROM mcp_entities";
 pub const SQL_COUNT_RELATIONS: &str = "SELECT COUNT(*) FROM mcp_relations";
