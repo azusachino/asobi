@@ -1,4 +1,4 @@
-use rosemary::{db, mcp};
+use miku::{db, mcp};
 use std::fs;
 use tempfile::tempdir;
 
@@ -89,7 +89,7 @@ async fn graph_crud_handles_edges() {
 async fn graph_accepts_irregular_text_without_sql_injection() {
     let (_dir, conn) = test_conn().await;
     let raw_name = "node-日本語-'; DROP TABLE mcp_entities; --";
-    let normalized_name = rosemary::normalize::normalize_key(raw_name);
+    let normalized_name = miku::normalize::normalize_key(raw_name);
     let odd_observation = "日本語 русский عربى control:\u{0007}\nquote:' double:\" percent:%";
     let large_observation = "large-observation ".repeat(16_384);
 

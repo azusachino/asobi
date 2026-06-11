@@ -1,6 +1,6 @@
-# Contributing to Rosemary
+# Contributing to Miku
 
-Thank you for your interest in improving Rosemary!
+Thank you for your interest in improving Miku!
 
 ## Standards
 

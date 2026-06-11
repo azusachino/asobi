@@ -1,10 +1,13 @@
 # ── Rust ─────────────────────────────────────────────────────────────────────
 target/
 
-# ── Rosemary runtime data ─────────────────────────────────────────────────────
-# Project-local graph + vector store (created by rosemary.toml / auto-detection)
+# ── Miku runtime data ─────────────────────────────────────────────────────
+# Project-local graph + vector store (created by miku.toml / auto-detection)
+.miku/
+# Stale root-level DB (real one lives in .miku/data/)
+miku.db
+# Legacy pre-rename workspace (rosemary → miku); ignore stale local data
 .rosemary/
-# Stale root-level DB (real one lives in .rosemary/data/)
 rosemary.db
 
 # ── Fastembed model cache ─────────────────────────────────────────────────────

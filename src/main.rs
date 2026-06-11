@@ -1,17 +1,17 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 #[cfg(feature = "documents")]
-use rosemary::embed::EmbeddingProvider;
-use rosemary::paths::RosemaryPaths;
+use miku::embed::EmbeddingProvider;
+use miku::paths::MikuPaths;
 #[cfg(feature = "documents")]
 use std::sync::Arc;
 use tracing::{info, warn};
 use tracing_subscriber::EnvFilter;
 
 #[derive(Parser)]
-#[command(name = "rosemary")]
+#[command(name = "miku")]
 #[command(version)]
-#[command(about = "Rosemary: Knowledge Graph & Memory CLI", long_about = None)]
+#[command(about = "Miku: Knowledge Graph & Memory CLI", long_about = None)]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
@@ -69,7 +69,7 @@ enum Commands {
     SearchNodes {
         query: String,
         /// Maximum number of matched nodes to return
-        #[arg(long, default_value_t = rosemary::db::DEFAULT_SEARCH_LIMIT)]
+        #[arg(long, default_value_t = miku::db::DEFAULT_SEARCH_LIMIT)]
         limit: usize,
     },
     /// Retrieve specific nodes by name
@@ -83,9 +83,9 @@ enum Commands {
     },
     /// Start the MCP stdio server (legacy/compatibility)
     Mcp,
-    /// Initialise a Rosemary workspace (XDG by default, `--local` for cwd)
+    /// Initialise a Miku workspace (XDG by default, `--local` for cwd)
     Init {
-        /// Create `.rosemary/` and `rosemary.toml` in the current directory
+        /// Create `.miku/` and `miku.toml` in the current directory
         /// instead of the user-level XDG paths.
         #[arg(long)]
         local: bool,
@@ -111,7 +111,7 @@ enum Commands {
     },
     /// Snapshot the database to a single consistent file (VACUUM INTO)
     Backup {
-        /// Destination path (default: `<data_dir>/backups/rosemary-<timestamp>.db`)
+        /// Destination path (default: `<data_dir>/backups/miku-<timestamp>.db`)
         #[arg(short, long)]
         output: Option<String>,
         /// Snapshots to retain in the default backup directory (oldest pruned)
@@ -176,27 +176,27 @@ fn needs_vector(_: &Commands) -> bool {
     false
 }
 
-pub const ENV_FASTEMBED_CACHE_DIR: &str = "ROSEMARY_FASTEMBED_CACHE_DIR";
-pub const ENV_EMBED_PROVIDER: &str = "ROSEMARY_EMBED_PROVIDER";
-pub const ENV_TOPICS_DIR: &str = "ROSEMARY_TOPICS_DIR";
+pub const ENV_FASTEMBED_CACHE_DIR: &str = "MIKU_FASTEMBED_CACHE_DIR";
+pub const ENV_EMBED_PROVIDER: &str = "MIKU_EMBED_PROVIDER";
+pub const ENV_TOPICS_DIR: &str = "MIKU_TOPICS_DIR";
 
 #[cfg(feature = "documents")]
 async fn init_vector(
     conn: libsql::Connection,
-    paths: &RosemaryPaths,
+    paths: &MikuPaths,
 ) -> Result<(
-    rosemary::vector::VectorStore,
-    Arc<rosemary::embed::FastEmbedProvider>,
+    miku::vector::VectorStore,
+    Arc<miku::embed::FastEmbedProvider>,
 )> {
-    let store = rosemary::vector::VectorStore::new(conn);
-    let embedder: Arc<rosemary::embed::FastEmbedProvider> =
+    let store = miku::vector::VectorStore::new(conn);
+    let embedder: Arc<miku::embed::FastEmbedProvider> =
         if std::env::var(ENV_EMBED_PROVIDER).as_deref() == Ok("claude") {
             anyhow::bail!("ClaudeProvider not yet implemented")
         } else {
             let cache_dir = std::env::var(ENV_FASTEMBED_CACHE_DIR)
                 .map(std::path::PathBuf::from)
                 .unwrap_or_else(|_| paths.data_dir.join("fastembed_cache"));
-            Arc::new(rosemary::embed::FastEmbedProvider::new(cache_dir)?)
+            Arc::new(miku::embed::FastEmbedProvider::new(cache_dir)?)
         };
     if store.dim() != embedder.dim() {
         anyhow::bail!(
@@ -240,7 +240,7 @@ fn get_or_update_cached_repo(
     caches_dir: &std::path::Path,
 ) -> Result<(std::path::PathBuf, String)> {
     ensure_git_available()?;
-    let slug = rosemary::skills::derive_source_slug(git_url);
+    let slug = miku::skills::derive_source_slug(git_url);
     let repo_cache_dir = caches_dir.join(&slug);
 
     std::fs::create_dir_all(caches_dir)?;
@@ -326,17 +326,17 @@ async fn main() -> Result<()> {
     if let Commands::Init { local } = cli.command {
         let cwd = std::env::current_dir()?;
         let target = if local {
-            rosemary::init::InitTarget::Local
+            miku::init::InitTarget::Local
         } else {
-            rosemary::init::InitTarget::Xdg
+            miku::init::InitTarget::Xdg
         };
-        let report = rosemary::init::init_workspace(target, &cwd)?;
+        let report = miku::init::init_workspace(target, &cwd)?;
         print_init_report(&report);
         return Ok(());
     }
 
-    let paths = RosemaryPaths::resolve();
-    let (db, conn) = rosemary::db::init_db().await?;
+    let paths = MikuPaths::resolve();
+    let (db, conn) = miku::db::init_db().await?;
 
     // Vector store + embedder are only initialised for commands that need them.
     // Graph-only operations (create-entities, read-graph, etc.) skip the heavy
@@ -350,31 +350,22 @@ async fn main() -> Result<()> {
                     let p = std::path::Path::new(&path);
                     if p.is_dir() {
                         info!("Ingesting directory: {:?}...", p);
-                        let count = rosemary::ingest::ingest_dir(
-                            p,
-                            store.conn(),
-                            &store,
-                            embedder.as_ref(),
-                        )
-                        .await?;
+                        let count =
+                            miku::ingest::ingest_dir(p, store.conn(), &store, embedder.as_ref())
+                                .await?;
                         info!("Done. Ingested {} files.", count);
                     } else {
                         info!("Ingesting file: {:?}...", p);
-                        rosemary::ingest::ingest_file(p, store.conn(), &store, embedder.as_ref())
+                        miku::ingest::ingest_file(p, store.conn(), &store, embedder.as_ref())
                             .await?;
                         info!("Done.");
                     }
                 }
                 Commands::Query { query } => {
                     info!("Searching: {}...", query);
-                    let results = rosemary::recall::recall(
-                        &query,
-                        store.conn(),
-                        &store,
-                        embedder.as_ref(),
-                        5,
-                    )
-                    .await?;
+                    let results =
+                        miku::recall::recall(&query, store.conn(), &store, embedder.as_ref(), 5)
+                            .await?;
                     if results.is_empty() {
                         info!("No results found.");
                     } else {
@@ -389,16 +380,15 @@ async fn main() -> Result<()> {
                 Commands::Compact { older_than } => {
                     let topics_root = std::env::var(ENV_TOPICS_DIR)
                         .unwrap_or_else(|_| paths.topics_dir.to_str().unwrap().to_string());
-                    let pruned = rosemary::compact::prune_old_sessions(&topics_root, older_than)?;
+                    let pruned = miku::compact::prune_old_sessions(&topics_root, older_than)?;
                     info!("Pruned {} old session files.", pruned);
 
                     let clusters =
-                        rosemary::compact::find_duplicate_clusters(&store, store.conn(), 0.85)
-                            .await?;
+                        miku::compact::find_duplicate_clusters(&store, store.conn(), 0.85).await?;
                     info!("Found {} near-duplicate topic clusters.", clusters.len());
 
                     info!("Syncing Graph to Markdown...");
-                    let synced = rosemary::compact::sync_graph_to_markdown(
+                    let synced = miku::compact::sync_graph_to_markdown(
                         store.conn(),
                         &store,
                         embedder.as_ref(),
@@ -414,9 +404,9 @@ async fn main() -> Result<()> {
 
     match cli.command {
         Commands::CreateEntities { name, entity_type } => {
-            rosemary::db::mcp_create_entities(
+            miku::db::mcp_create_entities(
                 &conn,
-                vec![rosemary::mcp::EntityInput {
+                vec![miku::mcp::EntityInput {
                     name: name.clone(),
                     entity_type,
                     observations: vec![],
@@ -430,9 +420,9 @@ async fn main() -> Result<()> {
             to,
             relation_type,
         } => {
-            rosemary::db::mcp_create_relations(
+            miku::db::mcp_create_relations(
                 &conn,
-                vec![rosemary::mcp::RelationInput {
+                vec![miku::mcp::RelationInput {
                     from,
                     to,
                     relation_type,
@@ -442,14 +432,14 @@ async fn main() -> Result<()> {
             info!("Relation created.");
         }
         Commands::AddObservations { name, contents } => {
-            let paths = rosemary::paths::RosemaryPaths::resolve();
-            let limit = std::env::var(rosemary::constant::ENV_OBSERVATION_LIMIT)
+            let paths = miku::paths::MikuPaths::resolve();
+            let limit = std::env::var(miku::constant::ENV_OBSERVATION_LIMIT)
                 .ok()
                 .and_then(|v| v.parse::<usize>().ok())
                 .unwrap_or(paths.observation_limit.unwrap_or(50));
-            rosemary::db::mcp_add_observations(
+            miku::db::mcp_add_observations(
                 &conn,
-                vec![rosemary::mcp::ObservationInput {
+                vec![miku::mcp::ObservationInput {
                     entity_name: name,
                     contents,
                 }],
@@ -459,21 +449,21 @@ async fn main() -> Result<()> {
             info!("Observation added.");
         }
         Commands::AddTruth { name, key, value } => {
-            rosemary::db::truth_upsert(&conn, &name, &key, &value).await?;
+            miku::db::truth_upsert(&conn, &name, &key, &value).await?;
             info!("Truth added.");
         }
         Commands::DeleteTruth { name, key } => {
-            rosemary::db::truth_delete(&conn, &name, &key).await?;
+            miku::db::truth_delete(&conn, &name, &key).await?;
             info!("Truth deleted.");
         }
         Commands::DeleteEntities { names } => {
-            rosemary::db::mcp_delete_entities(&conn, names).await?;
+            miku::db::mcp_delete_entities(&conn, names).await?;
             info!("Entities deleted.");
         }
         Commands::DeleteObservations { name, content } => {
-            rosemary::db::mcp_delete_observations(
+            miku::db::mcp_delete_observations(
                 &conn,
-                vec![rosemary::mcp::ObservationDeletion {
+                vec![miku::mcp::ObservationDeletion {
                     entity_name: name,
                     observations: vec![content],
                 }],
@@ -486,9 +476,9 @@ async fn main() -> Result<()> {
             to,
             relation_type,
         } => {
-            rosemary::db::mcp_delete_relations(
+            miku::db::mcp_delete_relations(
                 &conn,
-                vec![rosemary::mcp::RelationInput {
+                vec![miku::mcp::RelationInput {
                     from,
                     to,
                     relation_type,
@@ -498,29 +488,29 @@ async fn main() -> Result<()> {
             info!("Relations deleted.");
         }
         Commands::ReadGraph => {
-            let graph = rosemary::db::mcp_read_graph(&conn).await?;
+            let graph = miku::db::mcp_read_graph(&conn).await?;
             println!("{}", serde_json::to_string_pretty(&graph)?);
         }
         Commands::SearchNodes { query, limit } => {
-            let graph = rosemary::db::mcp_search_nodes_with_limit(&conn, &query, limit).await?;
+            let graph = miku::db::mcp_search_nodes_with_limit(&conn, &query, limit).await?;
             println!("{}", serde_json::to_string_pretty(&graph)?);
         }
         Commands::OpenNodes { names } => {
-            let graph = rosemary::db::mcp_open_nodes(&conn, names).await?;
+            let graph = miku::db::mcp_open_nodes(&conn, names).await?;
             println!("{}", serde_json::to_string_pretty(&graph)?);
         }
         Commands::Mcp => {
-            rosemary::mcp::run_server(conn).await?;
+            miku::mcp::run_server(conn).await?;
         }
         Commands::Stats => {
-            let (entities, relations, observations) = rosemary::db::mcp_stats(&conn).await?;
+            let (entities, relations, observations) = miku::db::mcp_stats(&conn).await?;
             println!("Knowledge Graph Statistics:");
             println!("  Entities:     {}", entities);
             println!("  Relations:    {}", relations);
             println!("  Observations: {}", observations);
         }
         Commands::Export { output } => {
-            let graph = rosemary::db::mcp_read_graph_eager(&conn).await?;
+            let graph = miku::db::mcp_read_graph_eager(&conn).await?;
             let json = serde_json::to_string_pretty(&graph)?;
             if let Some(path) = output {
                 std::fs::write(&path, json)?;
@@ -531,12 +521,12 @@ async fn main() -> Result<()> {
         }
         Commands::Import { file } => {
             let content = std::fs::read_to_string(&file)?;
-            let graph: rosemary::mcp::Graph = serde_json::from_str(&content)?;
+            let graph: miku::mcp::Graph = serde_json::from_str(&content)?;
 
             // Re-construct entity inputs
             let mut entities = Vec::new();
             for e in graph.entities {
-                entities.push(rosemary::mcp::EntityInput {
+                entities.push(miku::mcp::EntityInput {
                     name: e.name,
                     entity_type: e.entity_type,
                     observations: e.observations,
@@ -544,11 +534,11 @@ async fn main() -> Result<()> {
             }
 
             if !entities.is_empty() {
-                rosemary::db::mcp_create_entities(&conn, entities).await?;
+                miku::db::mcp_create_entities(&conn, entities).await?;
                 info!("Imported entities and observations.");
             }
             if !graph.relations.is_empty() {
-                rosemary::db::mcp_create_relations(&conn, graph.relations).await?;
+                miku::db::mcp_create_relations(&conn, graph.relations).await?;
                 info!("Imported relations.");
             }
             info!("Import complete.");
@@ -565,28 +555,28 @@ async fn main() -> Result<()> {
                     return Ok(());
                 }
             }
-            rosemary::db::mcp_reset(&conn).await?;
+            miku::db::mcp_reset(&conn).await?;
             info!("Knowledge graph reset successfully.");
         }
         Commands::Backup { output, keep } => {
             let dest =
-                rosemary::backup::backup(&conn, output.map(std::path::PathBuf::from), keep).await?;
+                miku::backup::backup(&conn, output.map(std::path::PathBuf::from), keep).await?;
             info!("Backup written to {}", dest.display());
         }
         Commands::Restore { file, force } => {
-            rosemary::backup::restore(db, conn, std::path::Path::new(&file), force).await?;
+            miku::backup::restore(db, conn, std::path::Path::new(&file), force).await?;
         }
         Commands::Skills { subcommand } => {
             use std::io::IsTerminal;
             match subcommand {
                 None => {
-                    let skills = rosemary::db::list_skills(&conn).await?;
+                    let skills = miku::db::list_skills(&conn).await?;
                     if skills.is_empty() {
                         println!("No skills installed.");
                     } else {
                         let mut grouped: std::collections::BTreeMap<
                             String,
-                            Vec<rosemary::db::SkillRow>,
+                            Vec<miku::db::SkillRow>,
                         > = std::collections::BTreeMap::new();
                         for s in skills {
                             grouped.entry(s.source.clone()).or_default().push(s);
@@ -628,11 +618,11 @@ async fn main() -> Result<()> {
                     };
 
                     let mode = if all {
-                        rosemary::skills::SelectionMode::All
+                        miku::skills::SelectionMode::All
                     } else if let Some(sel) = select {
-                        rosemary::skills::SelectionMode::Select(sel)
+                        miku::skills::SelectionMode::Select(sel)
                     } else {
-                        rosemary::skills::SelectionMode::Interactive
+                        miku::skills::SelectionMode::Interactive
                     };
 
                     let is_tty = std::io::stdin().is_terminal();
@@ -644,9 +634,9 @@ async fn main() -> Result<()> {
 
                     // `--all` is a full sync of the source: prune skills that
                     // vanished upstream. `--select` / interactive stay additive.
-                    let prune = matches!(mode, rosemary::skills::SelectionMode::All);
+                    let prune = matches!(mode, miku::skills::SelectionMode::All);
 
-                    rosemary::skills::install_skills_from_dir(
+                    miku::skills::install_skills_from_dir(
                         &conn,
                         &target_path,
                         &git_url,
@@ -667,11 +657,11 @@ async fn main() -> Result<()> {
                     #[cfg(feature = "documents")]
                     let vector_ctx = Some((&store, embedder.as_ref()));
 
-                    let skills = rosemary::db::list_skills(&conn).await?;
+                    let skills = miku::db::list_skills(&conn).await?;
                     let mut unique_sources = std::collections::HashSet::new();
                     for s in skills {
                         if let Some(ref filter_src) = source {
-                            let slug = rosemary::skills::derive_source_slug(&s.source);
+                            let slug = miku::skills::derive_source_slug(&s.source);
                             if &s.source == filter_src || &slug == filter_src {
                                 unique_sources.insert(s.source.clone());
                             }
@@ -717,12 +707,12 @@ async fn main() -> Result<()> {
                             (local_path.to_path_buf(), "local".to_string())
                         };
 
-                        rosemary::skills::install_skills_from_dir(
+                        miku::skills::install_skills_from_dir(
                             &conn,
                             &target_path,
                             &git_url,
                             &version,
-                            rosemary::skills::SelectionMode::All,
+                            miku::skills::SelectionMode::All,
                             false,
                             true,
                             #[cfg(feature = "documents")]
@@ -733,10 +723,10 @@ async fn main() -> Result<()> {
                     }
                 }
                 Some(SkillsCommands::Remove { target }) => {
-                    let skills = rosemary::db::list_skills(&conn).await?;
+                    let skills = miku::db::list_skills(&conn).await?;
                     let mut entities_to_delete = Vec::new();
                     for s in skills {
-                        let slug = rosemary::skills::derive_source_slug(&s.source);
+                        let slug = miku::skills::derive_source_slug(&s.source);
                         if s.entity_name == target || s.source == target || slug == target {
                             entities_to_delete.push(s.entity_name.clone());
                         }
@@ -744,11 +734,11 @@ async fn main() -> Result<()> {
 
                     if !entities_to_delete.is_empty() {
                         info!("Deleting {} skill entities...", entities_to_delete.len());
-                        rosemary::db::mcp_delete_entities(&conn, entities_to_delete).await?;
+                        miku::db::mcp_delete_entities(&conn, entities_to_delete).await?;
                         info!("Skills removed successfully.");
                     } else if target.starts_with("skill:") {
                         info!("Deleting skill entity {}...", target);
-                        rosemary::db::mcp_delete_entities(&conn, vec![target.clone()]).await?;
+                        miku::db::mcp_delete_entities(&conn, vec![target.clone()]).await?;
                         info!("Skills removed successfully.");
                     } else {
                         anyhow::bail!("No installed skills found matching target {:?}", target);
@@ -757,7 +747,7 @@ async fn main() -> Result<()> {
                 Some(SkillsCommands::Show { name }) => {
                     let mut entity_name = name.clone();
                     if !entity_name.starts_with("skill:") {
-                        let skills = rosemary::db::list_skills(&conn).await?;
+                        let skills = miku::db::list_skills(&conn).await?;
                         let matches: Vec<_> = skills
                             .iter()
                             .filter(|s| {
@@ -783,7 +773,7 @@ async fn main() -> Result<()> {
                         }
                     }
 
-                    match rosemary::db::skill_body(&conn, &entity_name).await? {
+                    match miku::db::skill_body(&conn, &entity_name).await? {
                         Some(body) => {
                             print!("{}", body);
                         }
@@ -800,10 +790,10 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-fn print_init_report(report: &rosemary::init::InitReport) {
+fn print_init_report(report: &miku::init::InitReport) {
     let label = match report.target {
-        rosemary::init::InitTarget::Xdg => "Initialised Rosemary workspace (XDG)",
-        rosemary::init::InitTarget::Local => "Initialised Rosemary workspace (project-local)",
+        miku::init::InitTarget::Xdg => "Initialised Miku workspace (XDG)",
+        miku::init::InitTarget::Local => "Initialised Miku workspace (project-local)",
     };
     println!("{}", label);
     for dir in &report.created_dirs {

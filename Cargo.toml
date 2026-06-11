@@ -1,13 +1,23 @@
 [package]
-name = "rosemary"
-version = "0.6.1"
+name = "miku"
+version = "0.7.0"
 edition = "2024"
 authors = ["haru <azusachino@proton.me>"]
 description = "A persistent, project-local knowledge graph CLI for AI agents."
 license = "MIT"
-repository = "https://github.com/azusachino/rosemary"
+repository = "https://github.com/azusachino/miku"
 keywords = ["knowledge-graph", "cli", "ai-agents", "persistent-memory", "rust"]
 categories = ["development-tools"]
+# Never ship runtime data / model caches in the published crate. These dirs are
+# gitignored, so a fresh CI checkout omits them anyway — this is belt-and-braces
+# for local `cargo publish` where a stale workspace would otherwise be swept in.
+exclude = [
+  ".miku/",
+  ".rosemary/",
+  ".fastembed_cache/",
+  "memory_export.json",
+  "tools_list.json",
+]
 
 [features]
 default = []

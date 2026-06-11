@@ -1,6 +1,6 @@
-# Rosemary
+# Miku
 
-Rosemary is a persistent, project-local knowledge graph CLI for AI agents. Agents use it to keep memory, track session state, and share context across conversations — stored in a local libSQL/SQLite file, no server required.
+Miku is a persistent, project-local knowledge graph CLI for AI agents. Agents use it to keep memory, track session state, and share context across conversations — stored in a local libSQL/SQLite file, no server required.
 
 ## Features
 
@@ -9,7 +9,7 @@ Rosemary is a persistent, project-local knowledge graph CLI for AI agents. Agent
 - **Fast search** — `search-nodes` over FTS5 (porter stemming + BM25) with a substring fallback.
 - **Lazy reads** — `read-graph`/`search-nodes` return truths + counts; `open-nodes` returns the full body. Cheap to load, cheap on tokens.
 - **Skills** — install reusable agent instructions from a git repo or local path.
-- **MCP server** — `rosemary mcp` serves the graph over stdio to MCP-aware clients.
+- **MCP server** — `miku mcp` serves the graph over stdio to MCP-aware clients.
 - **Document tier** (optional, `--features documents`) — `ingest` + semantic `query` over Markdown.
 
 ## Installation
@@ -17,7 +17,7 @@ Rosemary is a persistent, project-local knowledge graph CLI for AI agents. Agent
 From source (Rust 1.85+, Edition 2024):
 
 ```bash
-cargo install --git https://github.com/azusachino/rosemary
+cargo install --git https://github.com/azusachino/miku
 ```
 
 Build locally with `make build` (graph/MCP CLI) or `make build-documents` (adds `ingest`/`query`/`compact`).
@@ -25,22 +25,22 @@ Build locally with `make build` (graph/MCP CLI) or `make build-documents` (adds 
 ## Quick Start
 
 ```bash
-rosemary init                  # one-time setup (XDG); use --local for a project-scoped graph
+miku init                  # one-time setup (XDG); use --local for a project-scoped graph
 
 # Store and recall context (names are hierarchical, e.g. ame:mobile-support:task-1)
-rosemary add-observations "my-project" "Decided to use WAL mode for concurrency"
-rosemary add-truth "my-project" "status" "in-progress"
-rosemary search-nodes "WAL"
-rosemary open-nodes "my-project"
+miku add-observations "my-project" "Decided to use WAL mode for concurrency"
+miku add-truth "my-project" "status" "in-progress"
+miku search-nodes "WAL"
+miku open-nodes "my-project"
 ```
 
 ## Common Commands
 
-- `rosemary read-graph` / `search-nodes <q>` / `open-nodes <name>...` — read the graph.
-- `rosemary add-truth <name> <key> <value>` / `delete-truth <name> <key>` — manage truths.
-- `rosemary skills install <src> --all` / `update` / `skills` / `skills show <name>` — manage skills (`--all` and `update` sync, pruning skills dropped upstream; `--select` is additive).
-- `rosemary mcp` — run as an MCP stdio server.
-- `rosemary stats` / `export -o graph.json` / `import graph.json` / `reset` — inspect & manage.
+- `miku read-graph` / `search-nodes <q>` / `open-nodes <name>...` — read the graph.
+- `miku add-truth <name> <key> <value>` / `delete-truth <name> <key>` — manage truths.
+- `miku skills install <src> --all` / `update` / `skills` / `skills show <name>` — manage skills (`--all` and `update` sync, pruning skills dropped upstream; `--select` is additive).
+- `miku mcp` — run as an MCP stdio server.
+- `miku stats` / `export -o graph.json` / `import graph.json` / `reset` — inspect & manage.
 
 ## Development
 

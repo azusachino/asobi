@@ -3,9 +3,9 @@
 # Default task: Show help
 help:
 	@echo "Available tasks:"
-	@echo "  build         - Compile the Rosemary CLI and library"
+	@echo "  build         - Compile the Miku CLI and library"
 	@echo "  build-documents - Compile with libSQL/fastembed document commands"
-	@echo "  run           - Run the Rosemary CLI via cargo"
+	@echo "  run           - Run the Miku CLI via cargo"
 	@echo "  test          - Run all Rust tests"
 	@echo "  test-documents - Run tests with libSQL/fastembed document feature"
 	@echo "  test-scripts  - Run uv-managed CLI integration checks"

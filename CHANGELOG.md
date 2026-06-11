@@ -1,10 +1,20 @@
 # Changelog
 
+## v0.7.0 — Rename: rosemary → miku
+
+### Changed
+
+- **Project renamed `rosemary` → `miku`** and first published to crates.io (`cargo install miku`). This is a breaking change: the binary is now `miku`, env vars are `MIKU_*` (`MIKU_HOME`, `MIKU_DATABASE_URL`, `MIKU_OBSERVATION_LIMIT`, …), the workspace dir is `.miku/`, config is `miku.toml`, the database is `miku.db`, and the XDG root is `$XDG_DATA_HOME/miku/`. Existing `.rosemary/` workspaces do not migrate automatically — re-init under the new layout.
+- **Release pipeline publishes to crates.io**: tagging `v*` now runs `cargo publish` (gated on `CARGO_REGISTRY_TOKEN`) alongside the GitHub binary release.
+- **`CHANGELOG.md` moved to the repository root.**
+
+---
+
 ## v0.6.1 — XDG Layout & Skill Sync
 
 ### Changed
 
-- **Unified XDG workspace**: The user-level layout now lives under a single `$XDG_DATA_HOME/rosemary/` root holding the same `{data,config,topics,caches}` subtree as a project-local `.rosemary/`, instead of splitting across `~/.local/share` and `~/.config`. `XDG_DATA_HOME` is honored on **every** platform — dropped the `directories` crate, which previously ignored XDG vars on macOS and stored data under `~/Library/Application Support` (and dumped skill clones into a shared `Application Support/caches`).
+- **Unified XDG workspace**: The user-level layout now lives under a single `$XDG_DATA_HOME/miku/` root holding the same `{data,config,topics,caches}` subtree as a project-local `.miku/`, instead of splitting across `~/.local/share` and `~/.config`. `XDG_DATA_HOME` is honored on **every** platform — dropped the `directories` crate, which previously ignored XDG vars on macOS and stored data under `~/Library/Application Support` (and dumped skill clones into a shared `Application Support/caches`).
 
 ### Fixed
 
@@ -17,12 +27,12 @@
 ### New features
 
 - **Truths Tier**: Added support for structured, non-text-searchable key-value pairs (truths) attached to entities, providing a durable structured knowledge tier. Supported via CLI (`add-truth`, `delete-truth`) and MCP tools (`add_truth`, `delete_truth`).
-- **Observation Cap**: Added a rolling history cap for observations (`RosemaryConfig.observation_limit` / `ROSEMARY_OBSERVATION_LIMIT`, default 50). Inserting observations beyond the cap evicts oldest observations in the same transaction.
+- **Observation Cap**: Added a rolling history cap for observations (`MikuConfig.observation_limit` / `MIKU_OBSERVATION_LIMIT`, default 50). Inserting observations beyond the cap evicts oldest observations in the same transaction.
 - **Lazy-Read Contract**: Optimizes token overhead for agents. `read-graph` and `search-nodes` are now lazy (returning only `truths` and `observation_count` with empty `observations`), while `open-nodes` remains eager (populating all observations).
 - **Skills Subsystem**: Reusable agent instructions and technical workflows. Added CLI command group `skills` (`install`, `update`, `remove`, `list`) supporting installation from git clones, frontmatter metadata parsing, and cascading body storage.
-- **Persistent Skills Cache**: Repositories are now cloned to `.rosemary/caches/{slug}` instead of a transient directory, allowing offline browsing and faster incremental updates via `git fetch` and `git reset --hard`.
+- **Persistent Skills Cache**: Repositories are now cloned to `.miku/caches/{slug}` instead of a transient directory, allowing offline browsing and faster incremental updates via `git fetch` and `git reset --hard`.
 - **Flexible Frontmatter Parsing**: Relaxes frontmatter requirements by falling back to the file-stem or parent directory name for the skill name, and defaulting the description to an empty string.
-- **Skill Show Command**: Added `rosemary skills show <name>` to output raw unescaped markdown body contents of skills for humans to read without JSON escaping.
+- **Skill Show Command**: Added `miku skills show <name>` to output raw unescaped markdown body contents of skills for humans to read without JSON escaping.
 - **Line Ending Normalization**: Automatically normalizes CRLF (`\r\n`) to LF (`\n`) for all imported skill bodies and frontmatters.
 - **Document Feature Skill Embedding**: Enabled embedding skill bodies into the document-tier vector store on install/update under the `--features documents` build gate.
 
@@ -34,7 +44,7 @@
 
 - **Unified libSQL Storage**: Moved vector embeddings from LanceDB to libSQL using its native vector search support.
 - **Dependency Reduction**: Removed `lancedb` and `arrow` dependencies, significantly reducing build times and binary size overhead.
-- **Single Source of Truth**: All data (graph, FTS, and vectors) now resides in a single `rosemary.db` file.
+- **Single Source of Truth**: All data (graph, FTS, and vectors) now resides in a single `miku.db` file.
 - **Simplified Initialization**: Graph and document tiers now share the same libSQL connection, eliminating separate database initialization paths.
 
 ---
@@ -59,29 +69,29 @@
 ### Fixes
 
 - **Environment Variable Isolation**: Removed automatic `.env` loading from the current directory. Global CLI tools should not "leach" from local project environments, which frequently caused `DATABASE_URL` collisions in developer projects.
-- **Namespaced Environment Variables**: Prefixed all tool-specific variables with `ROSEMARY_` to prevent namespace pollution.
-    - `DATABASE_URL` → `ROSEMARY_DATABASE_URL`
-    - `LANCEDB_PATH` → `ROSEMARY_LANCEDB_PATH`
-    - `FASTEMBED_CACHE_DIR` → `ROSEMARY_FASTEMBED_CACHE_DIR`
-- **API Key Safety**: Added support for `ROSEMARY_ANTHROPIC_API_KEY` to allow isolating memory-assistant keys from project-level keys.
+- **Namespaced Environment Variables**: Prefixed all tool-specific variables with `MIKU_` to prevent namespace pollution.
+    - `DATABASE_URL` → `MIKU_DATABASE_URL`
+    - `LANCEDB_PATH` → `MIKU_LANCEDB_PATH`
+    - `FASTEMBED_CACHE_DIR` → `MIKU_FASTEMBED_CACHE_DIR`
+- **API Key Safety**: Added support for `MIKU_ANTHROPIC_API_KEY` to allow isolating memory-assistant keys from project-level keys.
 
 ## v0.4.0 — CLI Enhancements
 
 ### New features
 
-- **`--version` support**: Added native clap support for displaying the current CLI version via `rosemary --version`.
-- **`stats` subcommand**: New `rosemary stats` command to quickly inspect the knowledge graph size (entities, relations, observations).
-- **`export` / `import` subcommands**: New `rosemary export -o graph.json` and `rosemary import graph.json` commands to backup, share, and restore the knowledge graph.
-- **`reset` subcommand**: New `rosemary reset` command to clear the knowledge graph (requires interactive `[y/N]` confirmation, or `--force`).
+- **`--version` support**: Added native clap support for displaying the current CLI version via `miku --version`.
+- **`stats` subcommand**: New `miku stats` command to quickly inspect the knowledge graph size (entities, relations, observations).
+- **`export` / `import` subcommands**: New `miku export -o graph.json` and `miku import graph.json` commands to backup, share, and restore the knowledge graph.
+- **`reset` subcommand**: New `miku reset` command to clear the knowledge graph (requires interactive `[y/N]` confirmation, or `--force`).
 
 ## v0.3.1 — Workspace Path Discovery Fix
 
 ### Fixes
 
-- **`rosemary compact` and other commands now honor the configured workspace location** when invoked from a subdirectory. Previously, `RosemaryPaths::resolve()` only checked cwd for `rosemary.toml` / `.rosemary/`, so running a command from a subdir silently fell through to XDG (or created a new `.rosemary/` in the wrong place). It now walks up from cwd to find the nearest config, matching how `cargo` and `git` discover their roots.
-- **Relative paths in `rosemary.toml` are now anchored to the config file's directory**, not cwd. The seeded `rosemary.toml` already advertised this behavior in its comment ("Paths are resolved relative to this file") — the implementation now matches.
-- **`ROSEMARY_HOME` is now the highest-priority override**, bypassing project-local discovery entirely.
-- **`fastembed` model cache no longer leaks into cwd.** The provider's default `cache_dir` was `./.fastembed_cache`, which polluted any project where `rosemary` was invoked. It now defaults to `<data_dir>/fastembed_cache` (or `FASTEMBED_CACHE_DIR` if set), keeping all workspace state inside the configured location.
+- **`miku compact` and other commands now honor the configured workspace location** when invoked from a subdirectory. Previously, `MikuPaths::resolve()` only checked cwd for `miku.toml` / `.miku/`, so running a command from a subdir silently fell through to XDG (or created a new `.miku/` in the wrong place). It now walks up from cwd to find the nearest config, matching how `cargo` and `git` discover their roots.
+- **Relative paths in `miku.toml` are now anchored to the config file's directory**, not cwd. The seeded `miku.toml` already advertised this behavior in its comment ("Paths are resolved relative to this file") — the implementation now matches.
+- **`MIKU_HOME` is now the highest-priority override**, bypassing project-local discovery entirely.
+- **`fastembed` model cache no longer leaks into cwd.** The provider's default `cache_dir` was `./.fastembed_cache`, which polluted any project where `miku` was invoked. It now defaults to `<data_dir>/fastembed_cache` (or `FASTEMBED_CACHE_DIR` if set), keeping all workspace state inside the configured location.
 
 ## v0.3.0 — Memory Consistency & Expansion (feat/memory-improvements)
 
@@ -110,7 +120,7 @@ This release introduces canonical key normalization for the MCP memory graph, en
 
 ### Summary
 
-Rosemary pivots from an async Rust learning project to a production-grade knowledge graph CLI for LLM agents. The graph tier is now the primary interface.
+Miku pivots from an async Rust learning project to a production-grade knowledge graph CLI for LLM agents. The graph tier is now the primary interface.
 
 ### Breaking changes
 
@@ -153,14 +163,14 @@ All graph operations complete in <10ms. No model startup cost.
 
 #### MCP stdio server
 
-`rosemary mcp` is a fully compliant MCP 2024-11-05 server:
+`miku mcp` is a fully compliant MCP 2024-11-05 server:
 
 - `initialize` handshake with capabilities negotiation
 - `tools/list` with input schemas for all 9 tools
 - `tools/call` dispatch with `content[{type, text}]` response format
 - Notifications (`notifications/initialized`) correctly ignored
 
-Register with Claude Code: `claude mcp add rosemary -- rosemary mcp`
+Register with Claude Code: `claude mcp add miku -- miku mcp`
 
 #### Lazy vector initialization
 
@@ -176,11 +186,11 @@ LanceDB, fastembed, Arrow, token splitting, and directory ingest dependencies ar
 
 #### Project-local storage
 
-Rosemary auto-detects project scope in priority order:
+Miku auto-detects project scope in priority order:
 
-1. `rosemary.toml` in current directory
-2. `.rosemary/` directory in current directory
-3. XDG paths (`~/.local/share/rosemary/`)
+1. `miku.toml` in current directory
+2. `.miku/` directory in current directory
+3. XDG paths (`~/.local/share/miku/`)
 
 Agents in different repos keep separate graphs automatically.
 

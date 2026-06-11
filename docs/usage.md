@@ -1,4 +1,4 @@
-# Rosemary: Usage Guide
+# Miku: Usage Guide
 
 ## For humans
 
@@ -7,20 +7,20 @@
 From source via cargo (Rust 1.85+ toolchain required for edition 2024):
 
 ```bash
-cargo install --git https://github.com/azusachino/rosemary rosemary
+cargo install --git https://github.com/azusachino/miku miku
 ```
 
 Prebuilt binary via `cargo-binstall` (once GitHub releases are published):
 
 ```bash
-cargo binstall rosemary
+cargo binstall miku
 ```
 
 Or build locally:
 
 ```bash
-git clone https://github.com/azusachino/rosemary && cd rosemary
-make build            # graph/MCP CLI at ./target/debug/rosemary
+git clone https://github.com/azusachino/miku && cd miku
+make build            # graph/MCP CLI at ./target/debug/miku
 make build-documents  # includes ingest/query/compact
 ```
 
@@ -29,66 +29,66 @@ make build-documents  # includes ingest/query/compact
 Run once on a new machine — defaults to user-level XDG paths:
 
 ```bash
-rosemary init
-# created  ~/.local/share/rosemary/data
-# created  ~/.local/share/rosemary/topics
-# created  ~/.local/share/rosemary/config
+miku init
+# created  ~/.local/share/miku/data
+# created  ~/.local/share/miku/topics
+# created  ~/.local/share/miku/config
 ```
 
-The user-level workspace is a single `$XDG_DATA_HOME/rosemary/` root (default `~/.local/share/rosemary/`) holding the same `{data,config,topics,caches}` subtree as a project-local `.rosemary/`. `XDG_DATA_HOME` is honored on every platform — macOS included. No root or elevation needed: it lives inside `$HOME` and is owned by the invoking user.
+The user-level workspace is a single `$XDG_DATA_HOME/miku/` root (default `~/.local/share/miku/`) holding the same `{data,config,topics,caches}` subtree as a project-local `.miku/`. `XDG_DATA_HOME` is honored on every platform — macOS included. No root or elevation needed: it lives inside `$HOME` and is owned by the invoking user.
 
 To keep a project's graph isolated and checked in alongside the code, use the local layout:
 
 ```bash
 cd ~/code/my-project
-rosemary init --local
-# writes ./rosemary.toml + ./.rosemary/{data,topics,config}/
+miku init --local
+# writes ./miku.toml + ./.miku/{data,topics,config}/
 ```
 
-`rosemary.toml` (project-local mode):
+`miku.toml` (project-local mode):
 
 ```toml
-data_dir   = ".rosemary/data"
-config_dir = ".rosemary/config"
-topics_dir = ".rosemary/topics"
+data_dir   = ".miku/data"
+config_dir = ".miku/config"
+topics_dir = ".miku/topics"
 ```
 
-Path resolution order at runtime: project-local `rosemary.toml` → project-local `.rosemary/` → XDG. Both `init` modes are idempotent.
+Path resolution order at runtime: project-local `miku.toml` → project-local `.miku/` → XDG. Both `init` modes are idempotent.
 
-Add `.rosemary/` to `.gitignore`; the `rosemary.toml` itself can be checked in.
+Add `.miku/` to `.gitignore`; the `miku.toml` itself can be checked in.
 
 ### Common workflows
 
 **Start a work session — load prior context:**
 
 ```bash
-rosemary search-nodes "session"
-rosemary open-nodes "my-project:session"
+miku search-nodes "session"
+miku open-nodes "my-project:session"
 ```
 **Store a decision (supports hierarchical naming):**
 
 ```bash
-rosemary create-entities "project-x:architecture" "project"
-rosemary add-observations "project-x:architecture" "Switched from serde_yaml to toml crate — better error messages"
+miku create-entities "project-x:architecture" "project"
+miku add-observations "project-x:architecture" "Switched from serde_yaml to toml crate — better error messages"
 ```
 
 **Link related concepts (preserves case and dots):**
 
 ```bash
-rosemary create-entities "UserPreferences" "preference"
-rosemary create-entities "CLAUDE.md" "reference"
-rosemary create-relations "project-x" "UserPreferences" "follows"
+miku create-entities "UserPreferences" "preference"
+miku create-entities "CLAUDE.md" "reference"
+miku create-relations "project-x" "UserPreferences" "follows"
 ```
 
 **Search (supports FTS5 and segment matching):**
 
 ```bash
-rosemary search-nodes "tokio"           # finds "tokio", "tokio-util", stemmed variants
-rosemary search-nodes "mobile"          # finds "ame:mobile-support:task-1" (segment match)
-rosemary search-nodes "auth*"           # prefix: matches "auth", "authentication", "authorize"
-rosemary search-nodes "async AND error" # both words must appear
-rosemary search-nodes "deploy OR ship"  # either word
-rosemary search-nodes "auth" --limit 25 # override the default top 100 matches
+miku search-nodes "tokio"           # finds "tokio", "tokio-util", stemmed variants
+miku search-nodes "mobile"          # finds "ame:mobile-support:task-1" (segment match)
+miku search-nodes "auth*"           # prefix: matches "auth", "authentication", "authorize"
+miku search-nodes "async AND error" # both words must appear
+miku search-nodes "deploy OR ship"  # either word
+miku search-nodes "auth" --limit 25 # override the default top 100 matches
 ```
 
 Use `read-graph` for full export. `search-nodes` is intentionally top-K by default so a broad term does not accidentally return the whole graph.
@@ -96,43 +96,43 @@ Use `read-graph` for full export. `search-nodes` is intentionally top-K by defau
 **End a session — persist state:**
 
 ```bash
-rosemary delete-observations "my-project:session" "status: IN_PROGRESS"
-rosemary add-observations "my-project:session" "status: DONE"
-rosemary add-observations "my-project:session" "next: implement FTS5 index"
-rosemary add-observations "my-project:session" "last-updated: 2026-05-21"
-rosemary compact  # syncs graph → markdown files for durable backup
+miku delete-observations "my-project:session" "status: IN_PROGRESS"
+miku add-observations "my-project:session" "status: DONE"
+miku add-observations "my-project:session" "next: implement FTS5 index"
+miku add-observations "my-project:session" "last-updated: 2026-05-21"
+miku compact  # syncs graph → markdown files for durable backup
 ```
 
 **Inspect the full graph:**
 
 ```bash
-rosemary stats                                # Quick count of entities, relations, observations
-rosemary read-graph | jq '.entities[] | select(.entityType == "session")'
+miku stats                                # Quick count of entities, relations, observations
+miku read-graph | jq '.entities[] | select(.entityType == "session")'
 ```
 
 **Backup, Restore, and Reset:**
 
 ```bash
-rosemary export -o backup.json                # Export the entire graph to JSON
-rosemary import backup.json                   # Import entities and relations from a JSON backup
-rosemary reset                                # Interactively clear the entire graph (use --force to bypass)
+miku export -o backup.json                # Export the entire graph to JSON
+miku import backup.json                   # Import entities and relations from a JSON backup
+miku reset                                # Interactively clear the entire graph (use --force to bypass)
 ```
 
 **Manage truths (structured key-value attributes):**
 
 ```bash
-rosemary add-truth "project-x" "language" "rust"
-rosemary delete-truth "project-x" "language"
+miku add-truth "project-x" "language" "rust"
+miku delete-truth "project-x" "language"
 ```
 
 **Manage skills (reusable workflows and knowledge):**
 
 ```bash
-rosemary skills install https://github.com/azusachino/rosemary-skills --all
-rosemary skills
-rosemary skills show my-skill
-rosemary skills update
-rosemary skills remove rosemary-skills
+miku skills install https://github.com/azusachino/miku-skills --all
+miku skills
+miku skills show my-skill
+miku skills update
+miku skills remove miku-skills
 ```
 
 
@@ -141,8 +141,8 @@ rosemary skills remove rosemary-skills
 These commands require a binary built with `--features documents`:
 
 ```bash
-rosemary ingest ./notes/             # directory of .md files
-rosemary query "async cancellation"  # semantic + FTS search
+miku ingest ./notes/             # directory of .md files
+miku query "async cancellation"  # semantic + FTS search
 ```
 
 ---
@@ -151,7 +151,7 @@ rosemary query "async cancellation"  # semantic + FTS search
 
 ### Overview
 
-Rosemary is a persistent, project-local knowledge graph. Agents use it to:
+Miku is a persistent, project-local knowledge graph. Agents use it to:
 
 - **Persist** decisions, task state, and user preferences across sessions
 - **Share** context with other agents working on the same project
@@ -165,42 +165,42 @@ All operations are CLI commands. No server to start. No authentication. Latency 
 
 ```bash
 # Option A: load a specific entity
-rosemary open-nodes "<project>:session"
+miku open-nodes "<project>:session"
 
 # Option B: keyword search
-rosemary search-nodes "session"
+miku search-nodes "session"
 
 # Option C: full graph (small projects)
-rosemary read-graph
+miku read-graph
 ```
 
 **During session — record facts as you learn them:**
 
 ```bash
-rosemary add-observations "<project>" "Decided to use WAL mode for concurrent agent access"
-rosemary add-observations "<project>:session" "status: IN_PROGRESS"
+miku add-observations "<project>" "Decided to use WAL mode for concurrent agent access"
+miku add-observations "<project>:session" "status: IN_PROGRESS"
 ```
 
 **At session end:**
 
 ```bash
 # Update volatile state
-rosemary delete-observations "<project>:session" "<old status line>"
-rosemary add-observations "<project>:session" "status: DONE"
-rosemary add-observations "<project>:session" "completed: implemented FTS5 search"
-rosemary add-observations "<project>:session" "next: add WAL mode and entity_name index"
-rosemary add-observations "<project>:session" "last-updated: 2026-05-21"
+miku delete-observations "<project>:session" "<old status line>"
+miku add-observations "<project>:session" "status: DONE"
+miku add-observations "<project>:session" "completed: implemented FTS5 search"
+miku add-observations "<project>:session" "next: add WAL mode and entity_name index"
+miku add-observations "<project>:session" "last-updated: 2026-05-21"
 
 # Archive to markdown (durable, re-indexed)
-rosemary compact
+miku compact
 ```
 
 **Full session reset (next agent starts clean):**
 
 ```bash
-rosemary delete-entities "<project>:session"
+miku delete-entities "<project>:session"
 # Next agent creates it fresh
-rosemary create-entities "<project>:session" "session"
+miku create-entities "<project>:session" "session"
 ```
 
 ### Entity naming conventions
@@ -216,7 +216,7 @@ rosemary create-entities "<project>:session" "session"
 
 ### Output format
 
-Rosemary operates under a **lazy-read contract** to minimize token overhead.
+Miku operates under a **lazy-read contract** to minimize token overhead.
 
 `read-graph` and `search-nodes` return a lazy JSON structure (excluding `observations` and skill `body`, only providing `truths` and `observationCount`):
 
@@ -276,12 +276,12 @@ When Agent A finishes and Agent B picks up:
 
 ```bash
 # Agent A (end of session)
-rosemary add-observations "project-x:session" "status: BLOCKED"
-rosemary add-observations "project-x:session" "next: Agent B should implement WAL mode in src/db.rs init_db()"
-rosemary compact
+miku add-observations "project-x:session" "status: BLOCKED"
+miku add-observations "project-x:session" "next: Agent B should implement WAL mode in src/db.rs init_db()"
+miku compact
 
 # Agent B (start of session)
-rosemary open-nodes "project-x:session"
+miku open-nodes "project-x:session"
 # → reads: status BLOCKED, next action, last-updated
 ```
 
@@ -301,7 +301,7 @@ No files to pass, no state to reconstruct. The graph is the handoff.
 For exact entity retrieval, prefer `open-nodes` over `search-nodes`:
 
 ```bash
-rosemary open-nodes "project-x:session" "UserPreferences"
+miku open-nodes "project-x:session" "UserPreferences"
 ```
 
 ### MCP server mode (optional)
@@ -310,7 +310,7 @@ If your agent framework supports MCP stdio servers:
 
 ```bash
 # Register once
-claude mcp add rosemary -- rosemary mcp
+claude mcp add miku -- miku mcp
 
 # Protocol: MCP 2024-11-05, 11 tools
 # Tools: create_entities, create_relations, add_observations,
@@ -319,6 +319,6 @@ claude mcp add rosemary -- rosemary mcp
 #        read_graph, search_nodes, open_nodes
 ```
 
-The MCP server uses the same storage as the CLI — data written via `rosemary mcp` is immediately readable via `rosemary read-graph` and vice versa.
+The MCP server uses the same storage as the CLI — data written via `miku mcp` is immediately readable via `miku read-graph` and vice versa.
 
 `search_nodes` accepts an optional `limit` argument. Omit it for the default top 100 matches; set it explicitly for larger ranked exports.
