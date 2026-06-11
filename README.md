@@ -38,7 +38,7 @@ rosemary open-nodes "my-project"
 
 - `rosemary read-graph` / `search-nodes <q>` / `open-nodes <name>...` — read the graph.
 - `rosemary add-truth <name> <key> <value>` / `delete-truth <name> <key>` — manage truths.
-- `rosemary skills install <src> --all` / `skills` / `skills show <name>` — manage skills.
+- `rosemary skills install <src> --all` / `update` / `skills` / `skills show <name>` — manage skills (`--all` and `update` sync, pruning skills dropped upstream; `--select` is additive).
 - `rosemary mcp` — run as an MCP stdio server.
 - `rosemary stats` / `export -o graph.json` / `import graph.json` / `reset` — inspect & manage.
 
