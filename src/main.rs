@@ -43,7 +43,11 @@ enum Commands {
         relation_type: String,
     },
     /// Add observations to existing entities
-    AddObservations { name: String, content: String },
+    AddObservations {
+        name: String,
+        #[arg(num_args = 1..)]
+        contents: Vec<String>,
+    },
     /// Delete entities and their relations
     DeleteEntities { names: Vec<String> },
     /// Delete specific observations
@@ -304,12 +308,12 @@ async fn main() -> Result<()> {
             .await?;
             info!("Relation created.");
         }
-        Commands::AddObservations { name, content } => {
+        Commands::AddObservations { name, contents } => {
             rosemary::db::mcp_add_observations(
                 &conn,
                 vec![rosemary::mcp::ObservationInput {
                     entity_name: name,
-                    contents: vec![content],
+                    contents,
                 }],
             )
             .await?;
