@@ -1,5 +1,17 @@
 # Changelog
 
+## v0.6.0 — Truths, Observation Cap, Lazy Reads, and Skills Subsystem
+
+### New features
+
+- **Truths Tier**: Added support for structured, non-text-searchable key-value pairs (truths) attached to entities, providing a durable structured knowledge tier. Supported via CLI (`add-truth`, `delete-truth`) and MCP tools (`add_truth`, `delete_truth`).
+- **Observation Cap**: Added a rolling history cap for observations (`RosemaryConfig.observation_limit` / `ROSEMARY_OBSERVATION_LIMIT`, default 50). Inserting observations beyond the cap evicts oldest observations in the same transaction.
+- **Lazy-Read Contract**: Optimizes token overhead for agents. `read-graph` and `search-nodes` are now lazy (returning only `truths` and `observation_count` with empty `observations`), while `open-nodes` remains eager (populating all observations).
+- **Skills Subsystem**: Reusable agent instructions and technical workflows. Added CLI command group `skills` (`install`, `update`, `remove`, `list`) supporting installation from git clones, frontmatter metadata parsing, and cascading body storage.
+- **Document Feature Skill Embedding**: Enabled embedding skill bodies into the document-tier vector store on install/update under the `--features documents` build gate.
+
+---
+
 ## v0.5.0 — Unified libSQL Storage
 
 ### Changed

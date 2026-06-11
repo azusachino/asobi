@@ -139,13 +139,16 @@ pub fn resolve_selection(
     }
 }
 
-pub async fn install_skills_from_dir(
+pub async fn install_skills_from_dir<
+    #[cfg(feature = "documents")] E: crate::embed::EmbeddingProvider,
+>(
     conn: &libsql::Connection,
     dir_path: &Path,
     source: &str,
     version: &str,
     mode: SelectionMode,
     is_tty: bool,
+    #[cfg(feature = "documents")] vector_ctx: Option<(&crate::vector::VectorStore, &E)>,
 ) -> Result<()> {
     let mut parsed_skills = Vec::new();
     let mut skill_contents = HashMap::new();
@@ -211,6 +214,34 @@ pub async fn install_skills_from_dir(
 
         // 3. Upsert into mcp_skills
         crate::db::skill_upsert(conn, &entity_name, &body, source, version).await?;
+
+        // 4. Chunk and embed into document store if available
+        #[cfg(feature = "documents")]
+        if let Some((store, embedder)) = vector_ctx {
+            // Delete old chunks for this topic before re-indexing
+            store.delete_by_topic(&entity_name).await?;
+            crate::db::delete_topic(conn, &entity_name).await?;
+
+            let texts = crate::chunk::chunk_text(&body, 512, 64);
+            if !texts.is_empty() {
+                let vectors = embedder.embed(&texts).await?;
+                let chunks: Vec<crate::vector::Chunk> = texts
+                    .into_iter()
+                    .zip(vectors)
+                    .enumerate()
+                    .map(|(i, (text, vector))| crate::vector::Chunk {
+                        id: uuid::Uuid::new_v4().to_string(),
+                        topic_id: entity_name.clone(),
+                        chunk_idx: i as u32,
+                        text,
+                        source: source.to_string(),
+                        vector,
+                    })
+                    .collect();
+                store.insert_chunks(chunks).await?;
+            }
+            crate::db::upsert_topic(conn, &entity_name, &name, source, &body).await?;
+        }
     }
 
     Ok(())
@@ -373,6 +404,11 @@ mod tests {
             &head_commit,
             SelectionMode::All,
             false,
+            #[cfg(feature = "documents")]
+            None::<(
+                &crate::vector::VectorStore,
+                &crate::embed::fastembed_provider::FastEmbedProvider,
+            )>,
         )
         .await
         .unwrap();
@@ -388,5 +424,128 @@ mod tests {
             ))
         );
         assert_eq!(skills[0].version, head_commit);
+    }
+
+    #[cfg(feature = "documents")]
+    #[tokio::test]
+    async fn test_install_skills_document_embedding() {
+        use tempfile::tempdir;
+        let git_dir = tempdir().unwrap();
+        let repo_path = git_dir.path();
+
+        // 1. Initialize git repo
+        std::process::Command::new("git")
+            .arg("init")
+            .current_dir(repo_path)
+            .status()
+            .unwrap();
+
+        // Set git config
+        std::process::Command::new("git")
+            .arg("config")
+            .arg("user.name")
+            .arg("Test User")
+            .current_dir(repo_path)
+            .status()
+            .unwrap();
+        std::process::Command::new("git")
+            .arg("config")
+            .arg("user.email")
+            .arg("test@example.com")
+            .current_dir(repo_path)
+            .status()
+            .unwrap();
+
+        // 2. Create a skill file with unique content
+        let skill_file = repo_path.join("test-skill.md");
+        std::fs::write(
+            &skill_file,
+            "---\nname: doc-skill\ndescription: searchable skill\n---\nHere is some unique knowledge about quantum cryptography.\n",
+        )
+        .unwrap();
+
+        // 3. Commit
+        std::process::Command::new("git")
+            .arg("add")
+            .arg("test-skill.md")
+            .current_dir(repo_path)
+            .status()
+            .unwrap();
+        std::process::Command::new("git")
+            .arg("commit")
+            .arg("-m")
+            .arg("initial commit")
+            .current_dir(repo_path)
+            .status()
+            .unwrap();
+
+        // Get HEAD commit hash
+        let output = std::process::Command::new("git")
+            .arg("rev-parse")
+            .arg("HEAD")
+            .current_dir(repo_path)
+            .output()
+            .unwrap();
+        let head_commit = String::from_utf8(output.stdout).unwrap().trim().to_string();
+
+        // 4. Setup temp database
+        let db_dir = tempdir().unwrap();
+        unsafe {
+            std::env::set_var(
+                crate::db::ENV_DATABASE_URL,
+                db_dir.path().join("test.db").to_str().unwrap(),
+            );
+        }
+        let (_db, conn) = crate::db::init_db().await.unwrap();
+
+        // Initialize VectorStore and FakeEmbedder
+        let store = crate::vector::VectorStore::new_with_dim(conn.clone(), 384);
+
+        struct FakeEmbedder(usize);
+        impl crate::embed::EmbeddingProvider for FakeEmbedder {
+            async fn embed(&self, texts: &[String]) -> anyhow::Result<Vec<Vec<f32>>> {
+                Ok(texts.iter().map(|_| vec![0.1f32; self.0]).collect())
+            }
+            fn dim(&self) -> usize {
+                self.0
+            }
+        }
+        let embedder = FakeEmbedder(384);
+
+        // 5. Clone and install passing vector context
+        let clone_temp_dir = tempdir().unwrap();
+        let clone_path = clone_temp_dir.path();
+        std::process::Command::new("git")
+            .arg("clone")
+            .arg(repo_path.to_str().unwrap())
+            .arg(clone_path.to_str().unwrap())
+            .status()
+            .unwrap();
+
+        install_skills_from_dir(
+            &conn,
+            clone_path,
+            repo_path.to_str().unwrap(),
+            &head_commit,
+            SelectionMode::All,
+            false,
+            Some((&store, &embedder)),
+        )
+        .await
+        .unwrap();
+
+        // 6. Verify skill is queryable via recall
+        let results = crate::recall::recall("cryptography", &conn, &store, &embedder, 5)
+            .await
+            .unwrap();
+        assert!(!results.is_empty(), "expected skill to be queryable");
+
+        // Topic ID should be the normalized skill entity name
+        let slug = derive_source_slug(repo_path.to_str().unwrap());
+        let expected_topic_id =
+            crate::normalize::normalize_key(&format!("skill:{}:doc-skill", slug));
+        assert_eq!(results[0].topic_id, expected_topic_id);
+        assert_eq!(results[0].title, "doc-skill");
+        assert!(results[0].snippet.contains("quantum cryptography"));
     }
 }

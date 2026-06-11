@@ -561,6 +561,11 @@ async fn main() -> Result<()> {
                         std::path::Path::new(&source)
                     };
 
+                    #[cfg(feature = "documents")]
+                    let (store, embedder) = init_vector(conn.clone(), &paths).await?;
+                    #[cfg(feature = "documents")]
+                    let vector_ctx = Some((&store, embedder.as_ref()));
+
                     rosemary::skills::install_skills_from_dir(
                         &conn,
                         target_path,
@@ -568,11 +573,19 @@ async fn main() -> Result<()> {
                         &version,
                         mode,
                         is_tty,
+                        #[cfg(feature = "documents")]
+                        vector_ctx,
                     )
                     .await?;
+
                     info!("Skills installed successfully.");
                 }
                 Some(SkillsCommands::Update { source }) => {
+                    #[cfg(feature = "documents")]
+                    let (store, embedder) = init_vector(conn.clone(), &paths).await?;
+                    #[cfg(feature = "documents")]
+                    let vector_ctx = Some((&store, embedder.as_ref()));
+
                     let skills = rosemary::db::list_skills(&conn).await?;
                     let mut unique_sources = std::collections::HashSet::new();
                     for s in skills {
@@ -645,6 +658,8 @@ async fn main() -> Result<()> {
                             &version,
                             rosemary::skills::SelectionMode::All,
                             false,
+                            #[cfg(feature = "documents")]
+                            vector_ctx,
                         )
                         .await?;
                         info!("Successfully updated skills from {}.", src);

@@ -122,6 +122,12 @@ pub async fn upsert_topic(
     Ok(())
 }
 
+pub async fn delete_topic(conn: &Connection, id: &str) -> Result<()> {
+    conn.execute("DELETE FROM topics WHERE id = ?1", libsql::params![id])
+        .await?;
+    Ok(())
+}
+
 pub async fn mcp_create_entities(
     conn: &Connection,
     entities: Vec<crate::mcp::EntityInput>,
@@ -201,6 +207,16 @@ pub async fn mcp_delete_entities(conn: &Connection, names: Vec<String>) -> Resul
         let norm_name = crate::normalize::normalize_key(&name);
         tx.execute(
             crate::constant::SQL_DELETE_ENTITY,
+            libsql::params![norm_name.clone()],
+        )
+        .await?;
+        tx.execute(
+            "DELETE FROM topics WHERE id = ?1",
+            libsql::params![norm_name.clone()],
+        )
+        .await?;
+        tx.execute(
+            "DELETE FROM chunks WHERE topic_id = ?1",
             libsql::params![norm_name],
         )
         .await?;

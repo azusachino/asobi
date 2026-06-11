@@ -15,6 +15,7 @@ LLM agents lose context between sessions. The `@modelcontextprotocol/server-memo
 │  ┌─────────────────────────────────────────────────┐   │
 │  │  Graph tier (hot)                               │   │
 │  │  mcp_entities · mcp_observations · mcp_relations│   │
+│  │  mcp_truths · mcp_skills                        │   │
 │  │  mcp_obs_fts (FTS5 virtual table)               │   │
 │  └─────────────────────────────────────────────────┘   │
 │  ┌─────────────────────────────────────────────────┐   │
@@ -34,10 +35,12 @@ LLM agents lose context between sessions. The `@modelcontextprotocol/server-memo
 
 ### Graph tier (hot)
 
-All context-sharing operations live here. Three tables:
+All context-sharing operations live here. Main tables:
 
 - `mcp_entities` — name (PK), entity_type, timestamps
 - `mcp_observations` — id (UUID), entity_name (FK), content, created_at
+- `mcp_truths` — (entity_name, key) composite PK, value, updated_at
+- `mcp_skills` — entity_name (PK, FK), body, source, version, installed_at
 - `mcp_relations` — (from_entity, to_entity, relation_type) composite PK, cascading FK deletes
 
 Plus `mcp_obs_fts` — a FTS5 virtual table that mirrors `mcp_observations.content`. Kept in sync by three triggers (`mcp_obs_ai`, `mcp_obs_ad`, `mcp_obs_au`).
@@ -100,10 +103,16 @@ This means different projects keep separate graphs automatically — no namespac
 | ------------------ | ------------- | -------------- | --------------------- | ------------------ |
 | `create-entities`  | yes           | yes            | **no**                | ~5ms               |
 | `add-observations` | yes           | yes            | **no**                | ~5ms               |
+| `add-truth`        | yes           | yes            | **no**                | ~5ms               |
+| `delete-truth`     | yes           | yes            | **no**                | ~5ms               |
 | `read-graph`       | yes           | yes            | **no**                | ~5ms               |
 | `search-nodes`     | yes           | yes            | **no**                | ~5ms               |
 | `open-nodes`       | yes           | yes            | **no**                | ~5ms               |
 | `delete-*`         | yes           | yes            | **no**                | ~5ms               |
+| `skills (list)`    | yes           | yes            | **no**                | ~5ms               |
+| `skills install`   | yes           | yes            | conditional           | ~5ms or 3–30s      |
+| `skills update`    | yes           | yes            | conditional           | ~5ms or 3–30s      |
+| `skills remove`    | yes           | yes            | **no**                | ~5ms               |
 | `ingest`           | documents     | yes            | yes                   | 3–30s              |
 | `query`            | documents     | yes            | yes                   | 3–30s              |
 | `compact`          | documents     | yes            | yes                   | 3–30s              |
@@ -118,7 +127,7 @@ The lazy-init split is enforced in `main.rs` via `needs_vector()`. Graph command
 
 1. Client sends `initialize` → server responds with protocol version `2024-11-05` and tool capabilities
 2. Client sends `notifications/initialized` (no response — it's a notification)
-3. Client sends `tools/list` → server responds with all 9 tool schemas
+3. Client sends `tools/list` → server responds with all 11 tool schemas
 4. Client sends `tools/call` with `name` + `arguments` → server dispatches to the graph tier and responds with `content[{type, text}]`
 
 This makes `rosemary mcp` a drop-in replacement for `@modelcontextprotocol/server-memory` in Claude Code:
@@ -173,6 +182,15 @@ name (PK)  ◄──── FK ─ entity_name              from_entity (FK)
 entity_type           id (UUID PK)              to_entity (FK)
 created_at            content          ◄─ FTS5  relation_type
 updated_at            created_at       mcp_obs_fts
+
+mcp_truths            mcp_skills
+──────────            ──────────
+entity_name (PK, FK)  entity_name (PK, FK)
+key (PK)              body
+value                 source
+updated_at            version
+                      installed_at
+
 
 topics                topics_fts (FTS5)         sessions         chunks
 ──────                ─────────────────         ────────         ──────
