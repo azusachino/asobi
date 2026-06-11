@@ -8,6 +8,10 @@
 - **Observation Cap**: Added a rolling history cap for observations (`RosemaryConfig.observation_limit` / `ROSEMARY_OBSERVATION_LIMIT`, default 50). Inserting observations beyond the cap evicts oldest observations in the same transaction.
 - **Lazy-Read Contract**: Optimizes token overhead for agents. `read-graph` and `search-nodes` are now lazy (returning only `truths` and `observation_count` with empty `observations`), while `open-nodes` remains eager (populating all observations).
 - **Skills Subsystem**: Reusable agent instructions and technical workflows. Added CLI command group `skills` (`install`, `update`, `remove`, `list`) supporting installation from git clones, frontmatter metadata parsing, and cascading body storage.
+- **Persistent Skills Cache**: Repositories are now cloned to `.rosemary/caches/{slug}` instead of a transient directory, allowing offline browsing and faster incremental updates via `git fetch` and `git reset --hard`.
+- **Flexible Frontmatter Parsing**: Relaxes frontmatter requirements by falling back to the file-stem or parent directory name for the skill name, and defaulting the description to an empty string.
+- **Skill Show Command**: Added `rosemary skills show <name>` to output raw unescaped markdown body contents of skills for humans to read without JSON escaping.
+- **Line Ending Normalization**: Automatically normalizes CRLF (`\r\n`) to LF (`\n`) for all imported skill bodies and frontmatters.
 - **Document Feature Skill Embedding**: Enabled embedding skill bodies into the document-tier vector store on install/update under the `--features documents` build gate.
 
 ---

@@ -101,6 +101,13 @@ impl RosemaryPaths {
     pub fn db_path(&self) -> PathBuf {
         self.data_dir.join("rosemary.db")
     }
+
+    pub fn caches_dir(&self) -> PathBuf {
+        self.data_dir
+            .parent()
+            .map(|p| p.join("caches"))
+            .unwrap_or_else(|| PathBuf::from(".rosemary/caches"))
+    }
 }
 
 /// Walk up from `start` looking for a file (or directory if `is_dir`) named `name`.

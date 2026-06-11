@@ -113,6 +113,7 @@ This means different projects keep separate graphs automatically — no namespac
 | `skills install`   | yes           | yes            | conditional           | ~5ms or 3–30s      |
 | `skills update`    | yes           | yes            | conditional           | ~5ms or 3–30s      |
 | `skills remove`    | yes           | yes            | **no**                | ~5ms               |
+| `skills show`      | yes           | yes            | **no**                | ~5ms               |
 | `ingest`           | documents     | yes            | yes                   | 3–30s              |
 | `query`            | documents     | yes            | yes                   | 3–30s              |
 | `compact`          | documents     | yes            | yes                   | 3–30s              |

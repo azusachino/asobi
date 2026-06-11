@@ -1,6 +1,6 @@
 [package]
 name = "rosemary"
-version = "0.5.0"
+version = "0.6.0"
 edition = "2024"
 authors = ["haru <azusachino@proton.me>"]
 description = "A persistent, project-local knowledge graph CLI for AI agents."
@@ -56,6 +56,16 @@ harness = false
 [[bench]]
 name = "normalize"
 harness = false
+
+[[bench]]
+name = "vector"
+harness = false
+required-features = ["documents"]
+
+[[bench]]
+name = "skills"
+harness = false
+
 
 [profile.release]
 opt-level = "s"      # Optimize for size

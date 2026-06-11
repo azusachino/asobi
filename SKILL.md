@@ -16,6 +16,20 @@ Rosemary maintains a persistent Knowledge Graph of project facts, user preferenc
 
 ---
 
+## Concepts
+
+One graph, a few node parts — knowing which to write is the skill:
+
+- **Entity** — a named node with a `type`.
+- **Observation** — append-only log line, capped (oldest evicted past the limit, default 50). The *trail*.
+- **Truth** — a `key→value` fact that upserts. The *current state* (`status`, `version`).
+- **Relation** — directed edge `(from, to, type)`.
+- **Skill** — an installed instruction: Markdown body + `description`/`source`/`version` truths.
+
+`read-graph`/`search-nodes` return truths + `observationCount` only (cheap); `open-nodes` also returns observations and the skill body.
+
+---
+
 ## Command Reference
 
 All commands print a one-line confirmation (`Entity 'X' created.`, `Observation added.`, etc.) on success. Graph-read commands print JSON to stdout.
@@ -94,19 +108,25 @@ List all installed skills, grouped by source.
 rosemary skills install <SOURCE> [--all | --select <NAME>...]
 ```
 
-Install skills from a local path or git repository (by clone). Parses frontmatter to extract skill metadata and body.
+Install skills from a local path or git repository. Git sources are shallow-cloned to a reused cache under `.rosemary/caches/<slug>`. Frontmatter gives the metadata (name falls back to the file/dir name); the body is stored, and also embedded into the vector tier when built with `documents`.
 
 ```
 rosemary skills update [SOURCE]
 ```
 
-Re-clones and updates all skills (or the specified source URL/slug) in-place.
+Refreshes installed skills (or one source) from the cache via `git fetch` + `reset --hard`, re-cloning if that fails. Needs `git` on `PATH`; unreachable remotes fail with a clear error.
 
 ```
 rosemary skills remove <NAME | SOURCE>
 ```
 
 Remove a specific skill by its name or all skills from a source URL/slug.
+
+```
+rosemary skills show <NAME>
+```
+
+Show the raw body of an installed skill without JSON escaping. Useful for humans to read. <NAME> can be fully-qualified (e.g. `skill:slug:name`) or just the short name.
 
 ### Delete
 
@@ -144,6 +164,14 @@ rosemary query <QUERY>
 ```
 
 Hybrid semantic + FTS keyword search over ingested topics. Returns: `TITLE | (score: X.XX) | PATH` per result.
+
+### MCP server
+
+```
+rosemary mcp
+```
+
+Runs Rosemary as an MCP server over stdio (JSON-RPC), exposing the graph + truth operations as tools (`create_entities`, `add_observations`, `add_truth`, `open_nodes`, `read_graph`, `search_nodes`, `delete_*`, …) on the same database as the CLI. Skills and document ingestion stay CLI-only.
 
 ### Workspace init
 
@@ -225,7 +253,8 @@ rosemary create-entities "<project>:session" "session"
 ## Naming Conventions
 
 - Session entities: `<project-name>:session` (e.g. `rosemary:session`)
-- Task lists: `<project-name>:tasks`
+- Epics / tasks: `<project>:<epic>` and `<project>:<epic>:task-<n>` (e.g. `rosemary:skills-truths:task-1`), linked `part_of` the epic
+- Skills: `skill:<source-slug>:<name>` (e.g. `skill:jasonswett-llm-skills:tdd`)
 - Cross-project preferences: `UserPreferences`, `CodingStyle`, `ToolPreferences`
 - Relations use verb phrases: `uses`, `depends-on`, `validates`, `extends`, `blocks`
 
@@ -294,7 +323,9 @@ rosemary create-entities "<project>:session" "session"
 ```
 .rosemary/
   data/
-    rosemary.db        # libSQL: mcp_entities, mcp_observations, mcp_relations, topics, topics_fts, chunks
+    rosemary.db        # libSQL: mcp_entities, mcp_observations, mcp_truths, mcp_relations, mcp_skills, topics, topics_fts, chunks
+  caches/              # Persistent shallow clones of git skill sources (skills install/update)
+    <slug>/
   topics/              # Markdown snapshots synced by `compact`
     <slug>.md
     sessions/          # Session files pruned by compact --older-than

@@ -11,7 +11,7 @@ pub enum SelectionMode {
     Interactive,
 }
 
-pub fn parse_frontmatter(content: &str) -> Option<(String, String)> {
+pub fn parse_frontmatter(content: &str) -> Option<(Option<String>, Option<String>)> {
     let mut lines = content.lines();
     let first = lines.next()?.trim();
     if first != "---" {
@@ -39,8 +39,8 @@ pub fn parse_frontmatter(content: &str) -> Option<(String, String)> {
         }
     }
 
-    if found_end && let (Some(n), Some(d)) = (name, description) {
-        return Some((n, d));
+    if found_end {
+        return Some((name, description));
     }
     None
 }
@@ -158,13 +158,38 @@ pub async fn install_skills_from_dir<
         .filter_map(|e| e.ok())
         .filter(|e| e.path().is_file() && e.path().extension().is_some_and(|ext| ext == "md"))
     {
-        let content = std::fs::read_to_string(entry.path())?;
-        if let Some((name, desc)) = parse_frontmatter(&content) {
+        let mut content = std::fs::read_to_string(entry.path())?;
+        content = content.replace("\r\n", "\n");
+        if let Some((parsed_name, parsed_desc)) = parse_frontmatter(&content) {
+            let name = match parsed_name {
+                Some(n) => n,
+                None => {
+                    let file_stem = entry
+                        .path()
+                        .file_stem()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or("");
+                    if file_stem.eq_ignore_ascii_case("SKILL")
+                        || file_stem.eq_ignore_ascii_case("index")
+                    {
+                        entry
+                            .path()
+                            .parent()
+                            .and_then(|p| p.file_name())
+                            .and_then(|n| n.to_str())
+                            .unwrap_or(file_stem)
+                            .to_string()
+                    } else {
+                        file_stem.to_string()
+                    }
+                }
+            };
+            let desc = parsed_desc.unwrap_or_default();
             parsed_skills.push((name.clone(), desc));
             skill_contents.insert(name, content);
         } else {
             // Check if it looks like it has frontmatter but is malformed
-            if content.starts_with("---\n") || content.starts_with("---\r\n") {
+            if content.starts_with("---\n") {
                 warn!("Malformed frontmatter in skill file {:?}", entry.path());
             }
         }
@@ -275,7 +300,10 @@ mod tests {
         let parsed = parse_frontmatter(content);
         assert_eq!(
             parsed,
-            Some(("my-skill".to_string(), "does something".to_string()))
+            Some((
+                Some("my-skill".to_string()),
+                Some("does something".to_string())
+            ))
         );
     }
 
@@ -290,7 +318,7 @@ mod tests {
     fn test_parse_frontmatter_malformed() {
         let content = "---\nname: partial-skill\n---\nbody content";
         let parsed = parse_frontmatter(content);
-        assert_eq!(parsed, None);
+        assert_eq!(parsed, Some((Some("partial-skill".to_string()), None)));
     }
 
     #[test]
@@ -565,5 +593,132 @@ mod tests {
         assert_eq!(results[0].topic_id, expected_topic_id);
         assert_eq!(results[0].title, "doc-skill");
         assert!(results[0].snippet.contains("quantum cryptography"));
+    }
+
+    #[tokio::test]
+    async fn test_install_skills_with_fallbacks() {
+        use tempfile::tempdir;
+        let git_dir = tempdir().unwrap();
+        let repo_path = git_dir.path();
+
+        // 1. Initialize git repo
+        std::process::Command::new("git")
+            .arg("init")
+            .current_dir(repo_path)
+            .status()
+            .unwrap();
+
+        // Set git config for local commit
+        std::process::Command::new("git")
+            .arg("config")
+            .arg("user.name")
+            .arg("Test User")
+            .current_dir(repo_path)
+            .status()
+            .unwrap();
+        std::process::Command::new("git")
+            .arg("config")
+            .arg("user.email")
+            .arg("test@example.com")
+            .current_dir(repo_path)
+            .status()
+            .unwrap();
+
+        // 2. Create skill files with missing name and description respectively
+        let refactor_file = repo_path.join("refactor.md");
+        std::fs::write(
+            &refactor_file,
+            "---\ndescription: Iterative refactoring loop\n---\nrefactor body\n",
+        )
+        .unwrap();
+
+        let sdr_dir = repo_path.join("software-design-review");
+        std::fs::create_dir(&sdr_dir).unwrap();
+        let sdr_file = sdr_dir.join("SKILL.md");
+        std::fs::write(
+            &sdr_file,
+            "---\nname: software-design-review\n---\nsdr body\n",
+        )
+        .unwrap();
+
+        // 3. Commit files
+        std::process::Command::new("git")
+            .arg("add")
+            .arg("refactor.md")
+            .arg("software-design-review/SKILL.md")
+            .current_dir(repo_path)
+            .status()
+            .unwrap();
+        std::process::Command::new("git")
+            .arg("commit")
+            .arg("-m")
+            .arg("add skills")
+            .current_dir(repo_path)
+            .status()
+            .unwrap();
+
+        // Get HEAD commit hash
+        let output = std::process::Command::new("git")
+            .arg("rev-parse")
+            .arg("HEAD")
+            .current_dir(repo_path)
+            .output()
+            .unwrap();
+        let head_commit = String::from_utf8(output.stdout).unwrap().trim().to_string();
+
+        // 4. Setup temp database
+        let db_dir = tempdir().unwrap();
+        unsafe {
+            std::env::set_var(
+                crate::db::ENV_DATABASE_URL,
+                db_dir.path().join("test.db").to_str().unwrap(),
+            );
+        }
+        let (_db, conn) = crate::db::init_db().await.unwrap();
+
+        // 5. Clone and install
+        let clone_temp_dir = tempdir().unwrap();
+        let clone_path = clone_temp_dir.path();
+        std::process::Command::new("git")
+            .arg("clone")
+            .arg(repo_path.to_str().unwrap())
+            .arg(clone_path.to_str().unwrap())
+            .status()
+            .unwrap();
+
+        install_skills_from_dir(
+            &conn,
+            clone_path,
+            repo_path.to_str().unwrap(),
+            &head_commit,
+            SelectionMode::All,
+            false,
+            #[cfg(feature = "documents")]
+            None::<(
+                &crate::vector::VectorStore,
+                &crate::embed::fastembed_provider::FastEmbedProvider,
+            )>,
+        )
+        .await
+        .unwrap();
+
+        // 6. Verify skills installed correctly with fallbacks
+        let skills = crate::db::list_skills(&conn).await.unwrap();
+        assert_eq!(skills.len(), 2);
+
+        let slug = derive_source_slug(repo_path.to_str().unwrap());
+
+        let refactor_entity = crate::normalize::normalize_key(&format!("skill:{}:refactor", slug));
+        let sdr_entity =
+            crate::normalize::normalize_key(&format!("skill:{}:software-design-review", slug));
+
+        let refactor_row = skills
+            .iter()
+            .find(|s| s.entity_name == refactor_entity)
+            .unwrap();
+        assert_eq!(refactor_row.description, "Iterative refactoring loop");
+
+        let sdr_row = skills.iter().find(|s| s.entity_name == sdr_entity).unwrap();
+        assert_eq!(sdr_row.description, "");
     }
 }

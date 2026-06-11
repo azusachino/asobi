@@ -1,51 +1,48 @@
 # Rosemary
 
-Rosemary is a persistent, project-local knowledge graph CLI designed for AI agents. It allows agents to maintain memory, track session state, and persist knowledge directly within your project directory, ensuring context is preserved across sessions.
+Rosemary is a persistent, project-local knowledge graph CLI for AI agents. Agents use it to keep memory, track session state, and share context across conversations — stored in a local libSQL/SQLite file, no server required.
 
-## Project Philosophy
+## Features
 
-- **Persistent**: Decisions and task state survive across conversations.
-- **Local-first**: Data is stored inside your project, not an external server.
-- **Agent-ready**: Optimized for CLI workflows, allowing agents to ingest, search, and compact knowledge.
-- **Zero-latency**: Built on SQLite/FTS5 for sub-millisecond graph operations.
+- **Knowledge graph** — entities, append-only (capped) observations, and directed relations.
+- **Truths** — durable `key→value` facts per entity for current state (`status`, `version`).
+- **Fast search** — `search-nodes` over FTS5 (porter stemming + BM25) with a substring fallback.
+- **Lazy reads** — `read-graph`/`search-nodes` return truths + counts; `open-nodes` returns the full body. Cheap to load, cheap on tokens.
+- **Skills** — install reusable agent instructions from a git repo or local path.
+- **MCP server** — `rosemary mcp` serves the graph over stdio to MCP-aware clients.
+- **Document tier** (optional, `--features documents`) — `ingest` + semantic `query` over Markdown.
 
 ## Installation
 
-### From Source (Cargo)
-Requires Rust 1.85+ (Edition 2024):
+From source (Rust 1.85+, Edition 2024):
 
 ```bash
 cargo install --git https://github.com/azusachino/rosemary
 ```
 
+Build locally with `make build` (graph/MCP CLI) or `make build-documents` (adds `ingest`/`query`/`compact`).
+
 ## Quick Start
 
-1. Initialize your project:
-   ```bash
-   rosemary init --local
-   ```
+```bash
+rosemary init                  # one-time setup (XDG); use --local for a project-scoped graph
 
-2. Store context as you work (supports hierarchical naming like `ame:task-1`):
-   ```bash
-   rosemary add-observations "ame:mobile-support:task-1" "Decided to use WAL mode for concurrency"
-   ```
+# Store and recall context (names are hierarchical, e.g. ame:mobile-support:task-1)
+rosemary add-observations "my-project" "Decided to use WAL mode for concurrency"
+rosemary add-truth "my-project" "status" "in-progress"
+rosemary search-nodes "WAL"
+rosemary open-nodes "my-project"
+```
 
-3. Search for context later:
-   ```bash
-   rosemary search-nodes "WAL"
-   ```
+## Common Commands
 
-## Key Commands
-
-- `rosemary --version`: Check the CLI version.
-- `rosemary stats`: View graph statistics (entity, relation, and observation counts).
-- `rosemary export -o graph.json`: Dump the graph to a JSON file.
-- `rosemary import graph.json`: Restore graph data from a JSON file.
-- `rosemary reset`: Completely wipe the graph (prompts for confirmation, bypass with `--force`).
+- `rosemary read-graph` / `search-nodes <q>` / `open-nodes <name>...` — read the graph.
+- `rosemary add-truth <name> <key> <value>` / `delete-truth <name> <key>` — manage truths.
+- `rosemary skills install <src> --all` / `skills` / `skills show <name>` — manage skills.
+- `rosemary mcp` — run as an MCP stdio server.
+- `rosemary stats` / `export -o graph.json` / `import graph.json` / `reset` — inspect & manage.
 
 ## Development
 
-- **Task Runner**: `make` (Nix-wrapped)
-- **Checks**: Run `make check` to verify formatting, linting, and tests.
-
-See [`docs/usage.md`](docs/usage.md) for the full CLI reference.
+- **Task runner**: `make` (Nix-wrapped). Run `make check` for fmt + lint + tests.
+- See [`docs/usage.md`](docs/usage.md) for the full CLI reference and [`docs/architecture.md`](docs/architecture.md) for design.

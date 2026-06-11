@@ -130,6 +130,7 @@ rosemary delete-truth "project-x" "language"
 ```bash
 rosemary skills install https://github.com/azusachino/rosemary-skills --all
 rosemary skills
+rosemary skills show my-skill
 rosemary skills update
 rosemary skills remove rosemary-skills
 ```
