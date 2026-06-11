@@ -395,7 +395,7 @@ async fn main() -> Result<()> {
             println!("  Observations: {}", observations);
         }
         Commands::Export { output } => {
-            let graph = rosemary::db::mcp_read_graph(&conn).await?;
+            let graph = rosemary::db::mcp_read_graph_eager(&conn).await?;
             let json = serde_json::to_string_pretty(&graph)?;
             if let Some(path) = output {
                 std::fs::write(&path, json)?;

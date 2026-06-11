@@ -19,7 +19,7 @@ pub async fn sync_graph_to_markdown(
         std::fs::create_dir_all(&topics_dir)?;
     }
 
-    let graph = db::mcp_read_graph(conn).await?;
+    let graph = db::mcp_read_graph_eager(conn).await?;
     let mut count = 0;
 
     for entity in graph.entities {

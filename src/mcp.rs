@@ -62,7 +62,10 @@ pub struct ObservationDeletion {
 pub struct EntityOutput {
     pub name: String,
     pub entity_type: String,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub observations: Vec<String>,
+    pub truths: Vec<(String, String)>,
+    pub observation_count: usize,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
