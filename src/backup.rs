@@ -21,26 +21,26 @@ use tracing::{info, warn};
 use crate::constant::{
     ENV_DATABASE_URL, SQL_INTEGRITY_CHECK, SQL_TABLE_EXISTS, SQL_VACUUM_INTO_TEMPLATE,
 };
-use crate::paths::MikuPaths;
+use crate::paths::AsobiPaths;
 
-/// Tables a valid Miku snapshot must contain.
+/// Tables a valid Asobi snapshot must contain.
 const REQUIRED_TABLES: [&str; 2] = ["mcp_entities", "topics"];
 /// Prefix for snapshots produced by the `backup` command (pruned by retention).
-const BACKUP_PREFIX: &str = "miku";
+const BACKUP_PREFIX: &str = "asobi";
 /// Prefix for the safety snapshot taken before a restore (kept, not pruned).
 const PRE_RESTORE_PREFIX: &str = "pre-restore";
 
-/// The live database file the CLI operates on: `MIKU_DATABASE_URL` if set,
+/// The live database file the CLI operates on: `ASOBI_DATABASE_URL` if set,
 /// otherwise the resolved workspace `db_path()`. Backup and restore both go
 /// through this so they always target the same file as [`crate::db::init_db`].
 pub fn effective_db_path() -> PathBuf {
     std::env::var(ENV_DATABASE_URL)
         .map(PathBuf::from)
-        .unwrap_or_else(|_| MikuPaths::resolve().db_path())
+        .unwrap_or_else(|_| AsobiPaths::resolve().db_path())
 }
 
 /// Directory holding managed snapshots, co-located with the live DB so backups
-/// stay next to the data they snapshot even under `MIKU_DATABASE_URL`.
+/// stay next to the data they snapshot even under `ASOBI_DATABASE_URL`.
 fn backups_dir() -> PathBuf {
     effective_db_path()
         .parent()
@@ -107,7 +107,7 @@ pub async fn restore(db: Database, conn: Connection, source: &Path, force: bool)
     }
     validate_snapshot(source)
         .await
-        .with_context(|| format!("{} is not a valid Miku database", source.display()))?;
+        .with_context(|| format!("{} is not a valid Asobi database", source.display()))?;
 
     if !force && !confirm_restore(&db_path, source)? {
         info!("Restore aborted.");
@@ -138,7 +138,7 @@ pub async fn restore(db: Database, conn: Connection, source: &Path, force: bool)
     Ok(())
 }
 
-/// Open `source` and confirm it carries the expected Miku schema and passes
+/// Open `source` and confirm it carries the expected Asobi schema and passes
 /// an integrity check. Rejects a wrong-file or corrupt-file mistake before any
 /// destructive step.
 async fn validate_snapshot(source: &Path) -> Result<()> {
@@ -275,7 +275,7 @@ impl OperationLock {
             Ok(_) => Ok(Self(lock_path)),
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => bail!(
                 "another backup/restore is in progress (lock: {}). \
-                 If no miku process is running, delete that file and retry.",
+                 If no asobi process is running, delete that file and retry.",
                 lock_path.display()
             ),
             Err(e) => Err(e).with_context(|| format!("creating lock file {}", lock_path.display())),
@@ -353,7 +353,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn restore_rejects_non_miku_file() {
+    async fn restore_rejects_non_asobi_file() {
         let dir = tempdir().unwrap();
         let db_file = dir.path().join("r.db");
         let bogus = dir.path().join("bogus.db");
@@ -362,7 +362,7 @@ mod tests {
 
         let (db, conn) = crate::db::init_db().await.unwrap();
         let err = restore(db, conn, &bogus, true).await.unwrap_err();
-        assert!(err.to_string().contains("not a valid Miku database"));
+        assert!(err.to_string().contains("not a valid Asobi database"));
     }
 
     #[tokio::test]
@@ -397,7 +397,7 @@ mod tests {
         // Pre-populate the managed dir with old snapshots, then prune to 2.
         let bdir = backups_dir();
         std::fs::create_dir_all(&bdir).unwrap();
-        for name in ["miku-20200101-000000000.db", "miku-20200102-000000000.db"] {
+        for name in ["asobi-20200101-000000000.db", "asobi-20200102-000000000.db"] {
             std::fs::write(bdir.join(name), b"old").unwrap();
         }
 
@@ -409,7 +409,7 @@ mod tests {
             .unwrap()
             .filter_map(|e| e.ok())
             .map(|e| e.file_name().into_string().unwrap())
-            .filter(|n| n.starts_with("miku-"))
+            .filter(|n| n.starts_with("asobi-"))
             .collect();
         remaining.sort();
         assert_eq!(remaining.len(), 2, "retention should keep exactly 2");
@@ -417,7 +417,7 @@ mod tests {
         assert!(
             remaining
                 .iter()
-                .any(|n| n.as_str() > "miku-20200102-000000000.db")
+                .any(|n| n.as_str() > "asobi-20200102-000000000.db")
         );
     }
 

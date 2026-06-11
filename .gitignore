@@ -1,14 +1,11 @@
 # ── Rust ─────────────────────────────────────────────────────────────────────
 target/
 
-# ── Miku runtime data ─────────────────────────────────────────────────────
-# Project-local graph + vector store (created by miku.toml / auto-detection)
-.miku/
-# Stale root-level DB (real one lives in .miku/data/)
-miku.db
-# Legacy pre-rename workspace (rosemary → miku); ignore stale local data
-.rosemary/
-rosemary.db
+# ── Asobi runtime data ─────────────────────────────────────────────────────
+# Project-local graph + vector store (created by asobi.toml / auto-detection)
+.asobi/
+# Stale root-level DB (real one lives in .asobi/data/)
+asobi.db
 
 # ── Fastembed model cache ─────────────────────────────────────────────────────
 .fastembed_cache/

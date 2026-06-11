@@ -1,4 +1,4 @@
-use miku::skills::{derive_source_slug, parse_frontmatter};
+use asobi::skills::{derive_source_slug, parse_frontmatter};
 use std::time::Instant;
 
 fn main() {

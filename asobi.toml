@@ -1,0 +1,3 @@
+data_dir = ".asobi/data"
+config_dir = ".asobi/config"
+topics_dir = ".asobi/topics"

@@ -204,7 +204,7 @@ fn handle_initialize(id: serde_json::Value) -> JsonRpcResponse {
             "protocolVersion": "2024-11-05",
             "capabilities": { "tools": {} },
             "serverInfo": {
-                "name": "miku",
+                "name": "asobi",
                 "version": env!("CARGO_PKG_VERSION")
             }
         })),
@@ -439,7 +439,7 @@ pub async fn handle_tools_call(
                 obs.entity_name = normalized.clone();
                 obs_names.push(normalized);
             }
-            let paths = crate::paths::MikuPaths::resolve();
+            let paths = crate::paths::AsobiPaths::resolve();
             let limit = std::env::var(crate::constant::ENV_OBSERVATION_LIMIT)
                 .ok()
                 .and_then(|v| v.parse::<usize>().ok())

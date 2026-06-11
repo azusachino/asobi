@@ -5,23 +5,56 @@ on:
     tags:
       - "v*"
 
+permissions:
+  contents: write
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
-  release:
+  publish-crate:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: jdx/mise-action@v2
-      - name: Install Rust components
-        run: rustup component add rustfmt clippy
+      - uses: DeterminateSystems/nix-installer-action@main
       - name: Verify package
-        run: cargo publish --locked --dry-run
+        run: nix develop -c cargo publish --locked --dry-run
       - name: Publish to crates.io
-        run: cargo publish --locked --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
-      - name: Build Release
-        run: cargo build --release --locked
-      - name: Upload Binary
+        run: nix develop -c cargo publish --locked --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+  release-binaries:
+    needs: publish-crate
+    strategy:
+      fail-fast: false
+      # Native runners per target. Cross-compiling the `documents` artifact
+      # (links onnxruntime via `ort`) is unreliable, so we build natively.
+      # cargo-zigbuild would be the lever if musl / arm-linux targets are added.
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - os: macos-14
+            target: aarch64-apple-darwin
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: DeterminateSystems/nix-installer-action@main
+
+      - name: Build lean binary
+        run: nix develop -c cargo build --release --locked --target ${{ matrix.target }}
+      - name: Package lean binary
+        run: tar -czf "asobi-${{ matrix.target }}.tar.gz" -C "target/${{ matrix.target }}/release" asobi
+
+      - name: Build full binary (documents)
+        run: nix develop -c cargo build --release --locked --features documents --target ${{ matrix.target }}
+      - name: Package full binary
+        run: tar -czf "asobi-full-${{ matrix.target }}.tar.gz" -C "target/${{ matrix.target }}/release" asobi
+
+      - name: Upload to release
         uses: softprops/action-gh-release@v2
         with:
-          files: target/release/miku
+          files: |
+            asobi-${{ matrix.target }}.tar.gz
+            asobi-full-${{ matrix.target }}.tar.gz
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

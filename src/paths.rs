@@ -3,14 +3,14 @@ use std::env;
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Deserialize, Default)]
-pub struct MikuConfig {
+pub struct AsobiConfig {
     pub data_dir: Option<PathBuf>,
     pub config_dir: Option<PathBuf>,
     pub topics_dir: Option<PathBuf>,
     pub observation_limit: Option<usize>,
 }
 
-pub struct MikuPaths {
+pub struct AsobiPaths {
     pub data_dir: PathBuf,
     pub config_dir: PathBuf,
     pub topics_dir: PathBuf,
@@ -18,13 +18,13 @@ pub struct MikuPaths {
     pub observation_limit: Option<usize>,
 }
 
-pub const ENV_MIKU_HOME: &str = "MIKU_HOME";
+pub const ENV_ASOBI_HOME: &str = "ASOBI_HOME";
 
-/// XDG base directories for the user-level Miku workspace. A single root
-/// (`$XDG_DATA_HOME/miku`, honoring the env var on every platform — macOS
+/// XDG base directories for the user-level Asobi workspace. A single root
+/// (`$XDG_DATA_HOME/asobi`, honoring the env var on every platform — macOS
 /// included, where the `directories` crate would prefer `~/Library/...`) holds
 /// the same `{data,config,topics,caches}` subtree as a project-local
-/// `.miku/`, so the two layouts mirror each other.
+/// `.asobi/`, so the two layouts mirror each other.
 pub struct XdgDirs {
     pub data_dir: PathBuf,
     pub config_dir: PathBuf,
@@ -46,11 +46,11 @@ fn xdg_data_home() -> Option<PathBuf> {
         .map(|h| PathBuf::from(h).join(".local/share"))
 }
 
-/// XDG paths for the user-level Miku workspace, rooted at a single
-/// `$XDG_DATA_HOME/miku/` directory. `None` when `$XDG_DATA_HOME` and
+/// XDG paths for the user-level Asobi workspace, rooted at a single
+/// `$XDG_DATA_HOME/asobi/` directory. `None` when `$XDG_DATA_HOME` and
 /// `$HOME` are both unset.
 pub fn xdg_dirs() -> Option<XdgDirs> {
-    let root = xdg_data_home()?.join("miku");
+    let root = xdg_data_home()?.join("asobi");
     Some(XdgDirs {
         data_dir: root.join("data"),
         config_dir: root.join("config"),
@@ -59,20 +59,20 @@ pub fn xdg_dirs() -> Option<XdgDirs> {
     })
 }
 
-impl MikuPaths {
+impl AsobiPaths {
     pub fn resolve() -> Self {
         let cwd = env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
         Self::resolve_from(&cwd)
     }
 
     /// Resolution order:
-    /// 1. `MIKU_HOME` env var (forces a unified root, bypasses discovery).
-    /// 2. Nearest `miku.toml` walking up from `start` — relative paths in
+    /// 1. `ASOBI_HOME` env var (forces a unified root, bypasses discovery).
+    /// 2. Nearest `asobi.toml` walking up from `start` — relative paths in
     ///    the config are anchored to the config file's directory, not cwd.
-    /// 3. Nearest `.miku/` directory walking up from `start`.
+    /// 3. Nearest `.asobi/` directory walking up from `start`.
     /// 4. XDG fallback.
     pub fn resolve_from(start: &Path) -> Self {
-        if let Ok(home) = env::var(ENV_MIKU_HOME) {
+        if let Ok(home) = env::var(ENV_ASOBI_HOME) {
             let root = PathBuf::from(home);
             return Self {
                 cache_dir: root.join("caches"),
@@ -83,15 +83,15 @@ impl MikuPaths {
             };
         }
 
-        if let Some(config_path) = find_upwards(start, "miku.toml", false)
+        if let Some(config_path) = find_upwards(start, "asobi.toml", false)
             && let Ok(content) = std::fs::read_to_string(&config_path)
-            && let Ok(conf) = toml::from_str::<MikuConfig>(&content)
+            && let Ok(conf) = toml::from_str::<AsobiConfig>(&content)
         {
             let anchor = config_path.parent().unwrap_or(Path::new("."));
             return Self::from_config(conf, anchor);
         }
 
-        if let Some(local_root) = find_upwards(start, ".miku", true) {
+        if let Some(local_root) = find_upwards(start, ".asobi", true) {
             return Self {
                 data_dir: local_root.join("data"),
                 config_dir: local_root.join("config"),
@@ -110,16 +110,16 @@ impl MikuPaths {
                 observation_limit: None,
             },
             None => Self {
-                data_dir: PathBuf::from(".miku/data"),
-                config_dir: PathBuf::from(".miku/config"),
-                topics_dir: PathBuf::from(".miku/topics"),
-                cache_dir: PathBuf::from(".miku/caches"),
+                data_dir: PathBuf::from(".asobi/data"),
+                config_dir: PathBuf::from(".asobi/config"),
+                topics_dir: PathBuf::from(".asobi/topics"),
+                cache_dir: PathBuf::from(".asobi/caches"),
                 observation_limit: None,
             },
         }
     }
 
-    fn from_config(conf: MikuConfig, anchor: &Path) -> Self {
+    fn from_config(conf: AsobiConfig, anchor: &Path) -> Self {
         let resolve = |p: Option<PathBuf>, default: &str| -> PathBuf {
             let raw = p.unwrap_or_else(|| PathBuf::from(default));
             if raw.is_absolute() {
@@ -128,14 +128,14 @@ impl MikuPaths {
                 anchor.join(raw)
             }
         };
-        let data_dir = resolve(conf.data_dir, ".miku/data");
+        let data_dir = resolve(conf.data_dir, ".asobi/data");
         let cache_dir = data_dir
             .parent()
             .map(|p| p.join("caches"))
-            .unwrap_or_else(|| PathBuf::from(".miku/caches"));
+            .unwrap_or_else(|| PathBuf::from(".asobi/caches"));
         Self {
-            config_dir: resolve(conf.config_dir, ".miku/config"),
-            topics_dir: resolve(conf.topics_dir, ".miku/topics"),
+            config_dir: resolve(conf.config_dir, ".asobi/config"),
+            topics_dir: resolve(conf.topics_dir, ".asobi/topics"),
             data_dir,
             cache_dir,
             observation_limit: conf.observation_limit,
@@ -143,7 +143,7 @@ impl MikuPaths {
     }
 
     pub fn db_path(&self) -> PathBuf {
-        self.data_dir.join("miku.db")
+        self.data_dir.join("asobi.db")
     }
 
     pub fn caches_dir(&self) -> PathBuf {
@@ -175,7 +175,7 @@ mod tests {
     #[test]
     fn toml_relative_paths_anchor_to_config_dir_not_cwd() {
         let dir = tempdir().unwrap();
-        let cfg = dir.path().join("miku.toml");
+        let cfg = dir.path().join("asobi.toml");
         std::fs::write(
             &cfg,
             r#"
@@ -184,14 +184,14 @@ mod tests {
         )
         .unwrap();
 
-        let paths = MikuPaths::resolve_from(dir.path());
+        let paths = AsobiPaths::resolve_from(dir.path());
         assert_eq!(paths.data_dir, dir.path().join("custom-data"));
     }
 
     #[test]
     fn absolute_paths_in_toml_preserved() {
         let dir = tempdir().unwrap();
-        let cfg = dir.path().join("miku.toml");
+        let cfg = dir.path().join("asobi.toml");
         let abs_path = if cfg!(windows) {
             "C:\\data"
         } else {
@@ -208,37 +208,37 @@ mod tests {
         )
         .unwrap();
 
-        let paths = MikuPaths::resolve_from(dir.path());
+        let paths = AsobiPaths::resolve_from(dir.path());
         assert_eq!(paths.data_dir, PathBuf::from(abs_path));
     }
 
     #[test]
-    fn dot_miku_dir_discovered_walking_up() {
+    fn dot_asobi_dir_discovered_walking_up() {
         let dir = tempdir().unwrap();
-        let local_root = dir.path().join(".miku");
+        let local_root = dir.path().join(".asobi");
         std::fs::create_dir_all(local_root.join("data")).unwrap();
 
         let sub = dir.path().join("a/b/c");
         std::fs::create_dir_all(&sub).unwrap();
 
-        let paths = MikuPaths::resolve_from(&sub);
+        let paths = AsobiPaths::resolve_from(&sub);
         assert_eq!(paths.data_dir, local_root.join("data"));
     }
 
     #[test]
-    fn miku_home_overrides_discovery() {
+    fn asobi_home_overrides_discovery() {
         let dir = tempdir().unwrap();
         let home = dir.path().join("fake-home");
         std::fs::create_dir_all(&home).unwrap();
 
-        let prev = env::var(ENV_MIKU_HOME).ok();
-        unsafe { env::set_var(ENV_MIKU_HOME, &home) };
+        let prev = env::var(ENV_ASOBI_HOME).ok();
+        unsafe { env::set_var(ENV_ASOBI_HOME, &home) };
 
-        let paths = MikuPaths::resolve();
+        let paths = AsobiPaths::resolve();
 
         match prev {
-            Some(v) => unsafe { env::set_var(ENV_MIKU_HOME, v) },
-            None => unsafe { env::remove_var(ENV_MIKU_HOME) },
+            Some(v) => unsafe { env::set_var(ENV_ASOBI_HOME, v) },
+            None => unsafe { env::remove_var(ENV_ASOBI_HOME) },
         }
 
         assert_eq!(paths.data_dir, home);
@@ -249,20 +249,20 @@ mod tests {
         let dir = tempdir().unwrap();
         let data = dir.path().join("xdg-data");
 
-        let saved: Vec<(&str, Option<String>)> = [ENV_MIKU_HOME, "XDG_DATA_HOME"]
+        let saved: Vec<(&str, Option<String>)> = [ENV_ASOBI_HOME, "XDG_DATA_HOME"]
             .iter()
             .map(|k| (*k, env::var(*k).ok()))
             .collect();
 
         unsafe {
-            env::remove_var(ENV_MIKU_HOME);
+            env::remove_var(ENV_ASOBI_HOME);
             env::set_var("XDG_DATA_HOME", &data);
         }
 
-        // Resolve from a dir with no miku.toml / .miku upward.
+        // Resolve from a dir with no asobi.toml / .asobi upward.
         let probe = dir.path().join("probe");
         std::fs::create_dir_all(&probe).unwrap();
-        let paths = MikuPaths::resolve_from(&probe);
+        let paths = AsobiPaths::resolve_from(&probe);
 
         for (k, v) in saved {
             match v {
@@ -271,8 +271,8 @@ mod tests {
             }
         }
 
-        // Single root mirrors the project-local `.miku/{...}` layout.
-        let root = data.join("miku");
+        // Single root mirrors the project-local `.asobi/{...}` layout.
+        let root = data.join("asobi");
         assert_eq!(paths.data_dir, root.join("data"));
         assert_eq!(paths.config_dir, root.join("config"));
         assert_eq!(paths.topics_dir, root.join("topics"));

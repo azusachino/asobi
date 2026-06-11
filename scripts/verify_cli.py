@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Graph-only CLI integration checks for Miku.
+"""Graph-only CLI integration checks for Asobi.
 
 This script intentionally exercises the built binary through subprocesses
 instead of importing Rust internals. It is run by `make test-scripts` via `uv`.
@@ -15,7 +15,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-BIN = ROOT / "target" / "debug" / "miku"
+BIN = ROOT / "target" / "debug" / "asobi"
 
 
 def run(args: list[str], env: dict[str, str]) -> subprocess.CompletedProcess[str]:
@@ -29,7 +29,7 @@ def run(args: list[str], env: dict[str, str]) -> subprocess.CompletedProcess[str
     )
     if result.returncode != 0:
         raise AssertionError(
-            f"command failed: miku {' '.join(args)}\n"
+            f"command failed: asobi {' '.join(args)}\n"
             f"stdout:\n{result.stdout}\n"
             f"stderr:\n{result.stderr}"
         )
@@ -49,7 +49,7 @@ def run_expect_failure(
     )
     if result.returncode == 0:
         raise AssertionError(
-            f"command unexpectedly succeeded: miku {' '.join(args)}\n"
+            f"command unexpectedly succeeded: asobi {' '.join(args)}\n"
             f"stdout:\n{result.stdout}\n"
             f"stderr:\n{result.stderr}"
         )
@@ -81,9 +81,9 @@ def truths(payload: dict, name: str) -> dict[str, str]:
 def main() -> None:
     subprocess.run(["cargo", "build"], cwd=ROOT, check=True)
 
-    with tempfile.TemporaryDirectory(prefix="miku-cli-") as tmp:
+    with tempfile.TemporaryDirectory(prefix="asobi-cli-") as tmp:
         env = os.environ.copy()
-        env["MIKU_DATABASE_URL"] = str(Path(tmp) / "miku.db")
+        env["ASOBI_DATABASE_URL"] = str(Path(tmp) / "asobi.db")
 
         run(["create-entities", "project-a", "project"], env)
         run(["create-entities", "project-a:session", "session"], env)
@@ -216,11 +216,11 @@ def main() -> None:
         restored_graph = graph(["read-graph"], env)
         assert "project-a" in entity_names(restored_graph)
 
-    with tempfile.TemporaryDirectory(prefix="miku-corrupt-") as tmp:
+    with tempfile.TemporaryDirectory(prefix="asobi-corrupt-") as tmp:
         db_path = Path(tmp) / "corrupt.db"
         db_path.write_bytes(b"not a sqlite database")
         env = os.environ.copy()
-        env["MIKU_DATABASE_URL"] = str(db_path)
+        env["ASOBI_DATABASE_URL"] = str(db_path)
         failed = run_expect_failure(["read-graph"], env)
         assert "database" in failed.stderr.lower()
 
@@ -233,15 +233,15 @@ def skills_checks() -> None:
     """End-to-end coverage for the `skills` command group, including the
     git edge cases (missing git binary, unreachable remote, bad local path).
 
-    `MIKU_HOME` is set alongside `MIKU_DATABASE_URL` so the skills
+    `ASOBI_HOME` is set alongside `ASOBI_DATABASE_URL` so the skills
     cache (`paths.caches_dir()`) stays inside the temp dir — it resolves from
     HOME/XDG, not from the database URL — and never touches global state.
     """
-    with tempfile.TemporaryDirectory(prefix="miku-skills-") as tmp:
+    with tempfile.TemporaryDirectory(prefix="asobi-skills-") as tmp:
         root = Path(tmp)
         env = os.environ.copy()
-        env["MIKU_HOME"] = str(root / "home")
-        env["MIKU_DATABASE_URL"] = str(root / "miku.db")
+        env["ASOBI_HOME"] = str(root / "home")
+        env["ASOBI_DATABASE_URL"] = str(root / "asobi.db")
 
         # Local skill source dir: one full skill + one name-fallback skill.
         src = root / "src-skills"

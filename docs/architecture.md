@@ -1,8 +1,8 @@
-# Miku: Architecture & Design
+# Asobi: Architecture & Design
 
 ## Why this exists
 
-LLM agents lose context between sessions. The `@modelcontextprotocol/server-memory` server solves this but runs as a Node.js process with in-memory state — restart it and the graph is gone. Miku stores the graph in a local SQLite file: durable, zero-dependency, instant access.
+LLM agents lose context between sessions. The `@modelcontextprotocol/server-memory` server solves this but runs as a Node.js process with in-memory state — restart it and the graph is gone. Asobi stores the graph in a local SQLite file: durable, zero-dependency, instant access.
 
 ---
 
@@ -10,7 +10,7 @@ LLM agents lose context between sessions. The `@modelcontextprotocol/server-memo
 
 ```
 ┌────────────────────────────────────────────────────────┐
-│                    miku.db (libSQL)                 │
+│                    asobi.db (libSQL)                 │
 │                                                         │
 │  ┌─────────────────────────────────────────────────┐   │
 │  │  Graph tier (hot)                               │   │
@@ -28,7 +28,7 @@ LLM agents lose context between sessions. The `@modelcontextprotocol/server-memo
            │  compact --sync-only
            ▼
 ┌──────────────────────┐
-│  .miku/topics/   │
+│  .asobi/topics/   │
 │  *.md (cold storage) │
 └──────────────────────┘
 ```
@@ -87,11 +87,11 @@ FTS5 scores results by BM25 (Best Match 25) — a classic IR ranking function th
 
 ## Path resolution
 
-Miku looks for storage location in priority order:
+Asobi looks for storage location in priority order:
 
-1. `miku.toml` in the current directory (project-local, checked in)
-2. `.miku/` directory in the current directory (project-local, gitignored)
-3. XDG: a single `$XDG_DATA_HOME/miku/` root (default `~/.local/share/miku/`), holding the same `{data,config,topics,caches}` subtree as the project-local layout. `XDG_DATA_HOME` is honored on every platform, macOS included.
+1. `asobi.toml` in the current directory (project-local, checked in)
+2. `.asobi/` directory in the current directory (project-local, gitignored)
+3. XDG: a single `$XDG_DATA_HOME/asobi/` root (default `~/.local/share/asobi/`), holding the same `{data,config,topics,caches}` subtree as the project-local layout. `XDG_DATA_HOME` is honored on every platform, macOS included.
 
 This means different projects keep separate graphs automatically — no namespace collisions between agents working in different repos.
 
@@ -124,17 +124,17 @@ The lazy-init split is enforced in `main.rs` via `needs_vector()`. Graph command
 
 ## MCP stdio server
 
-`miku mcp` runs a JSON-RPC 2.0 server over stdin/stdout that implements the Memory MCP protocol:
+`asobi mcp` runs a JSON-RPC 2.0 server over stdin/stdout that implements the Memory MCP protocol:
 
 1. Client sends `initialize` → server responds with protocol version `2024-11-05` and tool capabilities
 2. Client sends `notifications/initialized` (no response — it's a notification)
 3. Client sends `tools/list` → server responds with all 11 tool schemas
 4. Client sends `tools/call` with `name` + `arguments` → server dispatches to the graph tier and responds with `content[{type, text}]`
 
-This makes `miku mcp` a drop-in replacement for `@modelcontextprotocol/server-memory` in Claude Code:
+This makes `asobi mcp` a drop-in replacement for `@modelcontextprotocol/server-memory` in Claude Code:
 
 ```bash
-claude mcp add miku -- miku mcp
+claude mcp add asobi -- asobi mcp
 ```
 
 The MCP path reuses the same libSQL operations as the CLI commands — no separate code path.

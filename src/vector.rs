@@ -136,7 +136,7 @@ mod tests {
             topic_id: "topic-1".into(),
             chunk_idx: i,
             text: format!("chunk text {}", i),
-            source: ".miku/topics/test.md".into(),
+            source: ".asobi/topics/test.md".into(),
             vector: vec![i as f32 / 10.0; dim],
         }
     }

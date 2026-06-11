@@ -3,9 +3,9 @@
 # Default task: Show help
 help:
 	@echo "Available tasks:"
-	@echo "  build         - Compile the Miku CLI and library"
+	@echo "  build         - Compile the Asobi CLI and library"
 	@echo "  build-documents - Compile with libSQL/fastembed document commands"
-	@echo "  run           - Run the Miku CLI via cargo"
+	@echo "  run           - Run the Asobi CLI via cargo"
 	@echo "  test          - Run all Rust tests"
 	@echo "  test-documents - Run tests with libSQL/fastembed document feature"
 	@echo "  test-scripts  - Run uv-managed CLI integration checks"
@@ -15,7 +15,7 @@ help:
 	@echo "  check-documents - Run document feature build and tests"
 	@echo "  bench         - Run graph-tier benchmark harness"
 	@echo "  clean         - Remove build artifacts"
-	@echo "  init          - Initialize development environment (mise, uv, etc.)"
+	@echo "  init          - Print dev environment setup (nix develop)"
 
 build:
 	cargo build
@@ -56,7 +56,6 @@ clean:
 	rm -rf target/
 
 init:
-	mise install
-	uv venv --python 3.14
-	uv add ruff --dev
-	mkdir -p scripts
+	@echo "Nix serves this repo. Enter the dev shell with:"
+	@echo "  nix develop"
+	@echo "(provides rust, uv, ruff, bun, and make)"

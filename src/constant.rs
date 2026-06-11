@@ -1,6 +1,6 @@
 // Environment Variables
-pub const ENV_DATABASE_URL: &str = "MIKU_DATABASE_URL";
-pub const ENV_OBSERVATION_LIMIT: &str = "MIKU_OBSERVATION_LIMIT";
+pub const ENV_DATABASE_URL: &str = "ASOBI_DATABASE_URL";
+pub const ENV_OBSERVATION_LIMIT: &str = "ASOBI_OBSERVATION_LIMIT";
 
 // Pragmas
 pub const PRAGMA_FOREIGN_KEYS_ON: &str = "PRAGMA foreign_keys = ON";

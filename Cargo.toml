@@ -1,32 +1,30 @@
 [package]
 name = "asobi"
-version = "0.0.1"
+version = "0.1.0"
 edition = "2024"
 authors = ["haru <azusachino@proton.me>"]
 description = "A persistent, project-local knowledge graph CLI for AI agents."
 license = "MIT"
-repository = "https://github.com/azusachino/miku"
+repository = "https://github.com/azusachino/asobi"
 keywords = ["knowledge-graph", "cli", "ai-agents", "persistent-memory", "rust"]
 categories = ["development-tools"]
 # Never ship runtime data / model caches in the published crate. These dirs are
 # gitignored, so a fresh CI checkout omits them anyway — this is belt-and-braces
 # for local `cargo publish` where a stale workspace would otherwise be swept in.
 exclude = [
-  ".miku/",
-  ".rosemary/",
+  ".asobi/",
   ".fastembed_cache/",
   "memory_export.json",
   "tools_list.json",
 ]
 
-# Crate publishes as `asobi`; the library + installed binary stay `miku`.
-[lib]
-name = "miku"
-path = "src/lib.rs"
-
-[[bin]]
-name = "miku"
-path = "src/main.rs"
+# cargo-binstall: fetch prebuilt binaries from the GitHub release instead of
+# compiling. Archives are published as `asobi-<target>.tar.gz` with the `asobi`
+# binary at the archive root; the tag is `v<version>`.
+[package.metadata.binstall]
+pkg-url = "{ repo }/releases/download/v{ version }/{ name }-{ target }.{ archive-format }"
+pkg-fmt = "tgz"
+bin-dir = "{ bin }{ binary-ext }"
 
 [features]
 default = []

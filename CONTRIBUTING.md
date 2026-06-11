@@ -1,6 +1,6 @@
-# Contributing to Miku
+# Contributing to Asobi
 
-Thank you for your interest in improving Miku!
+Thank you for your interest in improving Asobi!
 
 ## Standards
 

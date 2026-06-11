@@ -12,7 +12,7 @@ Three related changes, smallest → largest:
    state, keyed upsert) and *observations* (unbounded append-only log). `read-graph` /
    `search-nodes` become lazy (truths + an observation count); `open-nodes` stays eager
    (truths + full observation log). This is a storage-layer change, motivated below.
-3. **Skills subsystem** — `miku skills install|update|remove` plus `miku skills`
+3. **Skills subsystem** — `asobi skills install|update|remove` plus `asobi skills`
    (list). Skills are markdown files installed from a git repo into the DB; agents fetch
    them dynamically via `open-nodes skill:<source>:<name>`.
 
@@ -55,12 +55,12 @@ upsert. Truths replace the whole pattern:
 
 ```bash
 P="harus-nix"
-miku add-truth "$P:session" objective    "cleanup pass — …"
-miku add-truth "$P:session" status       "DONE"
-miku add-truth "$P:session" completed    "dropped mise-tasks…; committed 7c28260"
-miku add-truth "$P:session" remaining    "none — working tree clean…"
-miku add-truth "$P:session" next         "none pending"
-miku add-truth "$P:session" last-updated "2026-06-11"
+asobi add-truth "$P:session" objective    "cleanup pass — …"
+asobi add-truth "$P:session" status       "DONE"
+asobi add-truth "$P:session" completed    "dropped mise-tasks…; committed 7c28260"
+asobi add-truth "$P:session" remaining    "none — working tree clean…"
+asobi add-truth "$P:session" next         "none pending"
+asobi add-truth "$P:session" last-updated "2026-06-11"
 ```
 
 No delete, no recreate, no accumulation; next session overwrites in place. The session
@@ -76,7 +76,7 @@ already accepts an array. Only the CLI surface is single-valued.
   `num_args = 1..`).
 - `src/main.rs:307`: pass `contents` straight into the existing `ObservationInput`.
 
-No DB or MCP change. `miku add-observations foo "a" "b" "c"` adds three rows in one
+No DB or MCP change. `asobi add-observations foo "a" "b" "c"` adds three rows in one
 transaction.
 
 ## Part 2 — Truths tier + lazy reads
@@ -109,8 +109,8 @@ wanted later, add an FTS table mirroring `mcp_obs_fts`.)
 
 ### CLI
 
-- `miku add-truth <entity> <key> <value>` — upsert one truth.
-- `miku delete-truth <entity> <key>` — remove one truth.
+- `asobi add-truth <entity> <key> <value>` — upsert one truth.
+- `asobi delete-truth <entity> <key>` — remove one truth.
 - Truths are shown wherever an entity is rendered (see output shape below).
 
 `<key>` is a short identifier (`status`, `description`, `objective`, `next`). `<value>` is
@@ -154,8 +154,8 @@ storage and pollute context on `open-nodes`. Enforce a **hard per-entity cap**:
 - On insert, after adding, delete the oldest rows for that entity beyond the limit
   (`ORDER BY rowid ASC`, keep newest N). The newest N always survive, so the latest
   activity is intact; ancient history falls off the back.
-- Limit is configurable — default **50**. Resolution order: env (`MIKU_OBSERVATION_LIMIT`)
-  → `miku.toml` (`observation_limit`) → default.
+- Limit is configurable — default **50**. Resolution order: env (`ASOBI_OBSERVATION_LIMIT`)
+  → `asobi.toml` (`observation_limit`) → default.
 - A value of `0` means unbounded (opt out).
 - Because truths hold current state, the evicted tail is disposable. When the `documents`
   feature is on, `compact` may archive an entity's observations to markdown before
@@ -170,7 +170,7 @@ exceeded.
   new `truths` / `observationCount` fields). Acceptable at `0.5.0`.
 - Existing entities have zero truths until written — they render with an empty `truths`
   array and a correct `observationCount`. No data migration required.
-- Downstream: the miku **skill** (`SKILL.md` workflows) and the **MCP tool schemas**
+- Downstream: the asobi **skill** (`SKILL.md` workflows) and the **MCP tool schemas**
   (`src/mcp.rs`) must be updated to (a) write canonical state as truths and (b) describe
   the new output shape and `add_truth` tool. This is in-scope follow-up documentation, not
   a code dependency, and is tracked as a task in the implementation plan.
@@ -210,7 +210,7 @@ Per installed skill:
 
 ### Commands
 
-`miku skills <subcommand>`:
+`asobi skills <subcommand>`:
 
 - **`skills`** (no subcommand) — list installed skills, grouped by source:
   `skill:<slug>:<name> · <description> · <version>`. Lazy (truths only, no bodies).
@@ -235,10 +235,10 @@ Per installed skill:
 No new fetch command — agents use existing `open-nodes`:
 
 ```
-miku open-nodes "skill:jasonswett-llm-skills:writing-tests"
+asobi open-nodes "skill:jasonswett-llm-skills:writing-tests"
 ```
 
-returns the entity's truths + the body (eager). Discovery is `miku skills` or
+returns the entity's truths + the body (eager). Discovery is `asobi skills` or
 `search-nodes`.
 
 ### Build / dependencies
@@ -249,7 +249,7 @@ returns the entity's truths + the body (eager). Discovery is `miku skills` or
   present; avoids the `git2`/libgit2 build weight. No HTTP client (we clone, not raw-fetch).
 - Move `walkdir` from the `documents` feature to a base dependency for the repo walk.
 - **When `documents` is enabled** (additive, feature-gated): also chunk + embed skill
-  bodies into the existing vector store so `miku query` finds skills semantically.
+  bodies into the existing vector store so `asobi query` finds skills semantically.
 
 ### New module
 
@@ -290,4 +290,4 @@ None blocking. Decided during design:
   `--all` vs `--select` vs TTY-required error, tempdir cleanup, commit SHA recorded.
 - Skills update: body refreshed, version bumped, no orphan rows.
 - Skills remove: by name and by source slug.
-- `documents` feature: skill bodies are queryable via `miku query`.
+- `documents` feature: skill bodies are queryable via `asobi query`.

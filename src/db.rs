@@ -7,7 +7,7 @@ pub const DEFAULT_SEARCH_LIMIT: usize = 100;
 pub use crate::constant::ENV_DATABASE_URL;
 
 pub async fn init_db() -> Result<(Database, Connection)> {
-    let paths = crate::paths::MikuPaths::resolve();
+    let paths = crate::paths::AsobiPaths::resolve();
     if !paths.data_dir.exists() {
         std::fs::create_dir_all(&paths.data_dir)?;
     }
@@ -771,7 +771,7 @@ mod tests {
         let (_db, conn) = init_db().await.unwrap();
 
         conn.execute(
-            "INSERT INTO topics (id, title, file_path) VALUES ('rust-pin', 'Rust Pinning', '.miku/topics/rust-pinning.md')",
+            "INSERT INTO topics (id, title, file_path) VALUES ('rust-pin', 'Rust Pinning', '.asobi/topics/rust-pinning.md')",
             (),
         ).await.unwrap();
         conn.execute(

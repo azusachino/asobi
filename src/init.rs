@@ -5,11 +5,11 @@ use std::path::{Path, PathBuf};
 /// Where to set up the workspace.
 #[derive(Debug, Clone, Copy)]
 pub enum InitTarget {
-    /// XDG: a single `$XDG_DATA_HOME/miku/` root (default
-    /// `~/.local/share/miku/`). Default for globally installed users — no
+    /// XDG: a single `$XDG_DATA_HOME/asobi/` root (default
+    /// `~/.local/share/asobi/`). Default for globally installed users — no
     /// project-local files written.
     Xdg,
-    /// Project-local: `<cwd>/.miku/{data,topics,config}/` + `miku.toml`.
+    /// Project-local: `<cwd>/.asobi/{data,topics,config}/` + `asobi.toml`.
     Local,
 }
 
@@ -21,14 +21,14 @@ pub struct InitReport {
     pub config_existed: Option<PathBuf>,
 }
 
-/// Initialise a Miku workspace.
+/// Initialise a Asobi workspace.
 ///
 /// `InitTarget::Xdg` creates the user-level `{data,config,topics}` directories
-/// under a single `$XDG_DATA_HOME/miku/` root (default
-/// `~/.local/share/miku/`, honoring `XDG_DATA_HOME` on every platform),
+/// under a single `$XDG_DATA_HOME/asobi/` root (default
+/// `~/.local/share/asobi/`, honoring `XDG_DATA_HOME` on every platform),
 /// all owned by the invoking user.
 ///
-/// `InitTarget::Local` writes a `miku.toml` and `.miku/` tree into
+/// `InitTarget::Local` writes a `asobi.toml` and `.asobi/` tree into
 /// `cwd`. Re-runs are idempotent in both modes.
 pub fn init_workspace(target: InitTarget, cwd: &Path) -> Result<InitReport> {
     match target {
@@ -53,11 +53,11 @@ fn init_xdg() -> Result<InitReport> {
 }
 
 fn init_local(cwd: &Path) -> Result<InitReport> {
-    let base = cwd.join(".miku");
+    let base = cwd.join(".asobi");
     let dirs = [base.join("data"), base.join("topics"), base.join("config")];
     let (created, skipped) = ensure_dirs(&dirs)?;
 
-    let config_path = cwd.join("miku.toml");
+    let config_path = cwd.join("asobi.toml");
     let (wrote, existed) = if config_path.exists() {
         (None, Some(config_path))
     } else {
@@ -90,12 +90,12 @@ fn ensure_dirs(dirs: &[PathBuf]) -> Result<(Vec<PathBuf>, Vec<PathBuf>)> {
 }
 
 const DEFAULT_LOCAL_CONFIG: &str = "\
-# Miku project-local configuration.
+# Asobi project-local configuration.
 # Paths are resolved relative to this file.
 
-data_dir   = \".miku/data\"
-config_dir = \".miku/config\"
-topics_dir = \".miku/topics\"
+data_dir   = \".asobi/data\"
+config_dir = \".asobi/config\"
+topics_dir = \".asobi/topics\"
 ";
 
 #[cfg(test)]
@@ -111,10 +111,10 @@ mod tests {
         assert!(report.wrote_config.is_some());
         assert_eq!(report.created_dirs.len(), 3);
         assert!(report.skipped_dirs.is_empty());
-        assert!(dir.path().join("miku.toml").exists());
-        assert!(dir.path().join(".miku/data").is_dir());
-        assert!(dir.path().join(".miku/topics").is_dir());
-        assert!(dir.path().join(".miku/config").is_dir());
+        assert!(dir.path().join("asobi.toml").exists());
+        assert!(dir.path().join(".asobi/data").is_dir());
+        assert!(dir.path().join(".asobi/topics").is_dir());
+        assert!(dir.path().join(".asobi/config").is_dir());
     }
 
     #[test]
@@ -147,7 +147,7 @@ mod tests {
         }
 
         assert!(matches!(report.target, InitTarget::Xdg));
-        let root = data.join("miku");
+        let root = data.join("asobi");
         assert!(root.join("data").is_dir());
         assert!(root.join("topics").is_dir());
         assert!(root.join("config").is_dir());
@@ -156,7 +156,7 @@ mod tests {
     #[test]
     fn local_preserves_existing_config() {
         let dir = tempdir().unwrap();
-        let cfg = dir.path().join("miku.toml");
+        let cfg = dir.path().join("asobi.toml");
         fs::write(&cfg, "# user-customised\n").unwrap();
 
         init_workspace(InitTarget::Local, dir.path()).unwrap();

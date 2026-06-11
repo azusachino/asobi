@@ -1,13 +1,13 @@
 //! Regression guard for the `make bench` global-graph wipe (fixed in 15b051c).
 //!
 //! `benches/graph.rs` once set the wrong env var (`DATABASE_URL` instead of
-//! `MIKU_DATABASE_URL`), so `init_db` ignored it and the bench seeded and
+//! `ASOBI_DATABASE_URL`), so `init_db` ignored it and the bench seeded and
 //! `mcp_reset`'d the user's real global graph. This asserts the property that
-//! makes the bench safe: pointing `MIKU_DATABASE_URL` at a scratch file
+//! makes the bench safe: pointing `ASOBI_DATABASE_URL` at a scratch file
 //! fully isolates writes and resets from any other database file.
 
-use miku::db;
-use miku::mcp::EntityInput;
+use asobi::db;
+use asobi::mcp::EntityInput;
 use tempfile::tempdir;
 
 fn set_db(path: &std::path::Path) {

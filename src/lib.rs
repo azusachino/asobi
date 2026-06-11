@@ -1,4 +1,4 @@
-//! Miku — Knowledge Graph & Document Memory
+//! Asobi — Knowledge Graph & Document Memory
 
 // Graph + optional Document/Vector (libSQL) tiers
 pub mod backup;

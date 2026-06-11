@@ -1,4 +1,4 @@
-use miku::{db, mcp};
+use asobi::{db, mcp};
 use std::env;
 use std::hint::black_box;
 use std::time::{Duration, Instant};
@@ -16,7 +16,8 @@ fn main() {
         .build()
         .expect("build tokio runtime");
 
-    let sizes_env = env::var("MIKU_BENCH_SIZES").unwrap_or_else(|_| "1000,10000,50000".to_string());
+    let sizes_env =
+        env::var("ASOBI_BENCH_SIZES").unwrap_or_else(|_| "1000,10000,50000".to_string());
     let sizes: Vec<usize> = sizes_env
         .split(',')
         .filter_map(|s| s.trim().parse().ok())
@@ -34,7 +35,7 @@ fn main() {
             let dir = tempdir().expect("tempdir");
             let db_path = dir.path().join("bench.db");
             unsafe {
-                // Must be MIKU_DATABASE_URL (the constant), not "DATABASE_URL".
+                // Must be ASOBI_DATABASE_URL (the constant), not "DATABASE_URL".
                 // The wrong name is silently ignored by init_db(), causing the bench
                 // to seed and mcp_reset() the user's REAL global graph. See db::ENV_DATABASE_URL.
                 std::env::set_var(db::ENV_DATABASE_URL, db_path.to_str().expect("utf-8 path"));
