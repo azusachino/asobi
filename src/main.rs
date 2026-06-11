@@ -512,17 +512,23 @@ async fn main() -> Result<()> {
                 }) => {
                     let temp_dir = tempfile::tempdir()?;
                     let temp_path = temp_dir.path();
-                    let is_git = source.contains("://")
-                        || source.contains("git@")
-                        || (!std::path::Path::new(&source).is_dir() && source.ends_with(".git"));
+                    let mut git_url = source.clone();
+                    let is_git = if source.contains("://") || source.contains("git@") {
+                        true
+                    } else if source.contains("github.com/") || source.contains("gitlab.com/") {
+                        git_url = format!("https://{}", source);
+                        true
+                    } else {
+                        !std::path::Path::new(&source).is_dir() && source.ends_with(".git")
+                    };
 
                     let version = if is_git {
-                        info!("Cloning {}...", source);
+                        info!("Cloning {}...", git_url);
                         let status = std::process::Command::new("git")
                             .arg("clone")
                             .arg("--depth")
                             .arg("1")
-                            .arg(&source)
+                            .arg(&git_url)
                             .arg(temp_path)
                             .status()?;
                         if !status.success() {
@@ -569,7 +575,7 @@ async fn main() -> Result<()> {
                     rosemary::skills::install_skills_from_dir(
                         &conn,
                         target_path,
-                        &source,
+                        &git_url,
                         &version,
                         mode,
                         is_tty,
@@ -615,20 +621,26 @@ async fn main() -> Result<()> {
                         info!("Updating skills from {}...", src);
                         let temp_dir = tempfile::tempdir()?;
                         let temp_path = temp_dir.path();
-                        let is_git = src.contains("://")
-                            || src.contains("git@")
-                            || (!std::path::Path::new(&src).is_dir() && src.ends_with(".git"));
+                        let mut git_url = src.clone();
+                        let is_git = if src.contains("://") || src.contains("git@") {
+                            true
+                        } else if src.contains("github.com/") || src.contains("gitlab.com/") {
+                            git_url = format!("https://{}", src);
+                            true
+                        } else {
+                            !std::path::Path::new(&src).is_dir() && src.ends_with(".git")
+                        };
 
                         let version = if is_git {
                             let status = std::process::Command::new("git")
                                 .arg("clone")
                                 .arg("--depth")
                                 .arg("1")
-                                .arg(&src)
+                                .arg(&git_url)
                                 .arg(temp_path)
                                 .status()?;
                             if !status.success() {
-                                warn!("Failed to clone repository from {}", src);
+                                warn!("Failed to clone repository from {}", git_url);
                                 continue;
                             }
                             let output = std::process::Command::new("git")
@@ -654,7 +666,7 @@ async fn main() -> Result<()> {
                         rosemary::skills::install_skills_from_dir(
                             &conn,
                             target_path,
-                            &src,
+                            &git_url,
                             &version,
                             rosemary::skills::SelectionMode::All,
                             false,

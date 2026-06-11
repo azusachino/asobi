@@ -642,7 +642,7 @@ pub async fn truth_delete(conn: &Connection, entity: &str, key: &str) -> Result<
 pub async fn select_truths(
     conn: &Connection,
     names: &[impl AsRef<str>],
-) -> Result<HashMap<String, Vec<(String, String)>>> {
+) -> Result<HashMap<String, std::collections::BTreeMap<String, String>>> {
     let mut results = HashMap::new();
     if names.is_empty() {
         return Ok(results);
@@ -674,8 +674,8 @@ pub async fn select_truths(
             let value: String = row.get(2)?;
             results
                 .entry(entity_name)
-                .or_insert_with(Vec::new)
-                .push((key, value));
+                .or_insert_with(std::collections::BTreeMap::new)
+                .insert(key, value);
         }
     }
 
@@ -1008,10 +1008,7 @@ mod tests {
         let truths = select_truths(&conn, &["test-entity"]).await.unwrap();
         let entity_truths = truths.get("test-entity").expect("should have truths");
         assert_eq!(entity_truths.len(), 1);
-        assert_eq!(
-            entity_truths[0],
-            ("version".to_string(), "1.0.1".to_string())
-        );
+        assert_eq!(entity_truths.get("version").unwrap(), "1.0.1");
     }
 
     #[tokio::test]
@@ -1037,11 +1034,8 @@ mod tests {
         let truths = select_truths(&conn, &["test-entity"]).await.unwrap();
         let entity_truths = truths.get("test-entity").expect("should have truths");
         assert_eq!(entity_truths.len(), 2);
-
-        let mut sorted = entity_truths.clone();
-        sorted.sort();
-        assert_eq!(sorted[0], ("author".to_string(), "Alice".to_string()));
-        assert_eq!(sorted[1], ("version".to_string(), "1.0.0".to_string()));
+        assert_eq!(entity_truths.get("author").unwrap(), "Alice");
+        assert_eq!(entity_truths.get("version").unwrap(), "1.0.0");
     }
 
     #[tokio::test]
@@ -1069,7 +1063,7 @@ mod tests {
         let truths = select_truths(&conn, &["test-entity"]).await.unwrap();
         let entity_truths = truths.get("test-entity").expect("should have truths");
         assert_eq!(entity_truths.len(), 1);
-        assert_eq!(entity_truths[0], ("k2".to_string(), "v2".to_string()));
+        assert_eq!(entity_truths.get("k2").unwrap(), "v2");
     }
 
     #[tokio::test]
@@ -1191,20 +1185,16 @@ mod tests {
         let entity_read = &graph_read.entities[0];
         assert!(entity_read.observations.is_empty());
         assert_eq!(entity_read.observation_count, 2);
-        assert_eq!(
-            entity_read.truths,
-            vec![("k1".to_string(), "v1".to_string())]
-        );
+        assert_eq!(entity_read.truths.len(), 1);
+        assert_eq!(entity_read.truths.get("k1").unwrap(), "v1");
 
         // 2. Test search-nodes (should be lazy)
         let graph_search = mcp_search_nodes(&conn, "test").await.unwrap();
         let entity_search = &graph_search.entities[0];
         assert!(entity_search.observations.is_empty());
         assert_eq!(entity_search.observation_count, 2);
-        assert_eq!(
-            entity_search.truths,
-            vec![("k1".to_string(), "v1".to_string())]
-        );
+        assert_eq!(entity_search.truths.len(), 1);
+        assert_eq!(entity_search.truths.get("k1").unwrap(), "v1");
 
         // 3. Test open-nodes (should be eager)
         let graph_open = mcp_open_nodes(&conn, vec!["test-entity".to_string()])
@@ -1213,10 +1203,8 @@ mod tests {
         let entity_open = &graph_open.entities[0];
         assert_eq!(entity_open.observations.len(), 2);
         assert_eq!(entity_open.observation_count, 2);
-        assert_eq!(
-            entity_open.truths,
-            vec![("k1".to_string(), "v1".to_string())]
-        );
+        assert_eq!(entity_open.truths.len(), 1);
+        assert_eq!(entity_open.truths.get("k1").unwrap(), "v1");
     }
 
     #[tokio::test]

@@ -124,11 +124,9 @@ async fn test_add_truth_returns_graph_state() {
     let graph: rosemary::mcp::Graph = serde_json::from_str(result_content).unwrap();
 
     assert_eq!(graph.entities.len(), 1);
-    assert_eq!(graph.entities[0].truths.len(), 1);
-    assert_eq!(
-        graph.entities[0].truths[0],
-        ("role".to_string(), "developer".to_string())
-    );
+    let truths = &graph.entities[0].truths;
+    assert_eq!(truths.len(), 1);
+    assert_eq!(truths.get("role").unwrap(), "developer");
 }
 
 #[tokio::test]

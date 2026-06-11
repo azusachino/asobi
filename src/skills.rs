@@ -189,31 +189,49 @@ pub async fn install_skills_from_dir<
 
         let entity_name = crate::normalize::normalize_key(&format!("skill:{}:{}", slug, name));
 
+        let tx = conn.transaction().await?;
+
         // 1. Create the entity
-        crate::db::mcp_create_entities(
-            conn,
-            vec![crate::mcp::EntityInput {
-                name: entity_name.clone(),
-                entity_type: "skill".to_string(),
-                observations: vec![],
-            }],
+        tx.execute(
+            crate::constant::SQL_INSERT_ENTITY,
+            libsql::params![entity_name.clone(), "skill".to_string()],
         )
         .await?;
 
         // 2. Set truths
-        crate::db::truth_upsert(conn, &entity_name, "description", description).await?;
-        crate::db::truth_upsert(conn, &entity_name, "source", source).await?;
-        crate::db::truth_upsert(conn, &entity_name, "version", version).await?;
-        crate::db::truth_upsert(
-            conn,
-            &entity_name,
-            "installed",
-            &chrono::Utc::now().format("%Y-%m-%d").to_string(),
+        tx.execute(
+            crate::constant::SQL_UPSERT_TRUTH,
+            libsql::params![entity_name.clone(), "description".to_string(), description],
+        )
+        .await?;
+        tx.execute(
+            crate::constant::SQL_UPSERT_TRUTH,
+            libsql::params![entity_name.clone(), "source".to_string(), source],
+        )
+        .await?;
+        tx.execute(
+            crate::constant::SQL_UPSERT_TRUTH,
+            libsql::params![entity_name.clone(), "version".to_string(), version],
+        )
+        .await?;
+        tx.execute(
+            crate::constant::SQL_UPSERT_TRUTH,
+            libsql::params![
+                entity_name.clone(),
+                "installed".to_string(),
+                chrono::Utc::now().format("%Y-%m-%d").to_string()
+            ],
         )
         .await?;
 
         // 3. Upsert into mcp_skills
-        crate::db::skill_upsert(conn, &entity_name, &body, source, version).await?;
+        tx.execute(
+            crate::constant::SQL_UPSERT_SKILL,
+            libsql::params![entity_name.clone(), body.clone(), source, version],
+        )
+        .await?;
+
+        tx.commit().await?;
 
         // 4. Chunk and embed into document store if available
         #[cfg(feature = "documents")]

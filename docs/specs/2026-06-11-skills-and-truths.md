@@ -154,8 +154,8 @@ storage and pollute context on `open-nodes`. Enforce a **hard per-entity cap**:
 - On insert, after adding, delete the oldest rows for that entity beyond the limit
   (`ORDER BY rowid ASC`, keep newest N). The newest N always survive, so the latest
   activity is intact; ancient history falls off the back.
-- Limit is configurable — default **50**. Resolution order: `rosemary.toml`
-  (`observation_limit`) → env (`ROSEMARY_OBSERVATION_LIMIT`) → default.
+- Limit is configurable — default **50**. Resolution order: env (`ROSEMARY_OBSERVATION_LIMIT`)
+  → `rosemary.toml` (`observation_limit`) → default.
 - A value of `0` means unbounded (opt out).
 - Because truths hold current state, the evicted tail is disposable. When the `documents`
   feature is on, `compact` may archive an entity's observations to markdown before

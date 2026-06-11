@@ -225,9 +225,9 @@ Rosemary operates under a **lazy-read contract** to minimize token overhead.
     {
       "name": "string",
       "entityType": "string",
-      "truths": [
-        ["key", "value"]
-      ],
+      "truths": {
+        "key": "value"
+      },
       "observationCount": 12
     }
   ],
@@ -250,9 +250,9 @@ Rosemary operates under a **lazy-read contract** to minimize token overhead.
       "name": "string",
       "entityType": "string",
       "observations": ["string", ...],
-      "truths": [
-        ["key", "value"]
-      ],
+      "truths": {
+        "key": "value"
+      },
       "observationCount": 12,
       "body": "string"
     }

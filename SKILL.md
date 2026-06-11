@@ -243,9 +243,9 @@ rosemary create-entities "<project>:session" "session"
     {
       "name": "string",
       "entityType": "string",
-      "truths": [
-        ["key", "value"]
-      ],
+      "truths": {
+        "key": "value"
+      },
       "observationCount": 12
     }
   ],
@@ -268,9 +268,9 @@ rosemary create-entities "<project>:session" "session"
       "name": "string",
       "entityType": "string",
       "observations": ["string", ...],
-      "truths": [
-        ["key", "value"]
-      ],
+      "truths": {
+        "key": "value"
+      },
       "observationCount": 12,
       "body": "string"
     }
