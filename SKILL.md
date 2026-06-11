@@ -108,7 +108,7 @@ List all installed skills, grouped by source.
 rosemary skills install <SOURCE> [--all | --select <NAME>...]
 ```
 
-Install skills from a local path or git repository. Git sources are shallow-cloned to a reused cache under `.rosemary/caches/<slug>`. Frontmatter gives the metadata (name falls back to the file/dir name); the body is stored, and also embedded into the vector tier when built with `documents`.
+Install skills from a local path or git repository. Pick with `--all`, `--select <NAME>...`, or neither — which prompts an interactive numbered picker (TTY required; otherwise it errors asking for a flag). Git sources are shallow-cloned to a reused cache under `.rosemary/caches/<slug>`. Frontmatter gives the metadata (name falls back to the file/dir name); the body is stored, and also embedded into the vector tier when built with `documents`.
 
 ```
 rosemary skills update [SOURCE]

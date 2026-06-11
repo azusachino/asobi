@@ -271,6 +271,19 @@ def skills_checks() -> None:
         run(["skills", "remove", str(src)], env)
         assert "No skills installed." in run(["skills"], env).stdout
 
+        # --select installs only the named skill, not the rest.
+        run(["skills", "install", str(src), "--select", "alpha"], env)
+        selected = run(["skills"], env).stdout
+        assert "alpha" in selected
+        assert "nested" not in selected
+        run(["skills", "remove", str(src)], env)
+
+        # --select with an unknown name fails.
+        bad_select = run_expect_failure(
+            ["skills", "install", str(src), "--select", "ghost"], env
+        )
+        assert "not found" in bad_select.stderr.lower()
+
         # Edge case: local path that does not exist.
         missing = run_expect_failure(
             ["skills", "install", str(root / "does-not-exist"), "--all"], env
