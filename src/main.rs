@@ -8,7 +8,7 @@ use rosemary::paths::RosemaryPaths;
 use std::path::Path;
 #[cfg(feature = "documents")]
 use std::sync::Arc;
-use tracing::info;
+use tracing::{info, warn};
 use tracing_subscriber::EnvFilter;
 
 #[derive(Parser)]
@@ -128,6 +128,36 @@ enum Commands {
         /// Skip the confirmation prompt
         #[arg(long)]
         force: bool,
+    },
+    /// Manage, install, and update AI agent skills
+    Skills {
+        #[command(subcommand)]
+        subcommand: Option<SkillsCommands>,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum SkillsCommands {
+    /// Install skills from a git repository or local path
+    Install {
+        /// Git URL or local directory path
+        source: String,
+        /// Install all skills found
+        #[arg(long)]
+        all: bool,
+        /// Install specific skills by name
+        #[arg(long, num_args = 1..)]
+        select: Option<Vec<String>>,
+    },
+    /// Update installed skills from their sources
+    Update {
+        /// Specific source URL or slug to update (updates all if omitted)
+        source: Option<String>,
+    },
+    /// Remove an installed skill or all skills from a source
+    Remove {
+        /// Name of the skill (e.g. skill:slug:name) or source slug/URL
+        target: String,
     },
 }
 
@@ -450,6 +480,199 @@ async fn main() -> Result<()> {
         }
         Commands::Restore { file, force } => {
             rosemary::backup::restore(db, conn, std::path::Path::new(&file), force).await?;
+        }
+        Commands::Skills { subcommand } => {
+            use std::io::IsTerminal;
+            match subcommand {
+                None => {
+                    let skills = rosemary::db::list_skills(&conn).await?;
+                    if skills.is_empty() {
+                        println!("No skills installed.");
+                    } else {
+                        let mut grouped: std::collections::BTreeMap<
+                            String,
+                            Vec<rosemary::db::SkillRow>,
+                        > = std::collections::BTreeMap::new();
+                        for s in skills {
+                            grouped.entry(s.source.clone()).or_default().push(s);
+                        }
+                        println!("Installed Skills:");
+                        for (source, list) in grouped {
+                            println!("Source: {}", source);
+                            for s in list {
+                                println!("  {} · {} · {}", s.entity_name, s.description, s.version);
+                            }
+                        }
+                    }
+                }
+                Some(SkillsCommands::Install {
+                    source,
+                    all,
+                    select,
+                }) => {
+                    let temp_dir = tempfile::tempdir()?;
+                    let temp_path = temp_dir.path();
+                    let is_git = source.contains("://")
+                        || source.contains("git@")
+                        || (!std::path::Path::new(&source).is_dir() && source.ends_with(".git"));
+
+                    let version = if is_git {
+                        info!("Cloning {}...", source);
+                        let status = std::process::Command::new("git")
+                            .arg("clone")
+                            .arg("--depth")
+                            .arg("1")
+                            .arg(&source)
+                            .arg(temp_path)
+                            .status()?;
+                        if !status.success() {
+                            anyhow::bail!("Failed to clone repository from {}", source);
+                        }
+                        let output = std::process::Command::new("git")
+                            .arg("rev-parse")
+                            .arg("HEAD")
+                            .current_dir(temp_path)
+                            .output()?;
+                        if output.status.success() {
+                            String::from_utf8_lossy(&output.stdout).trim().to_string()
+                        } else {
+                            "unknown".to_string()
+                        }
+                    } else {
+                        let local_path = std::path::Path::new(&source);
+                        if !local_path.exists() {
+                            anyhow::bail!("Local path {} does not exist", source);
+                        }
+                        "local".to_string()
+                    };
+
+                    let mode = if all {
+                        rosemary::skills::SelectionMode::All
+                    } else if let Some(sel) = select {
+                        rosemary::skills::SelectionMode::Select(sel)
+                    } else {
+                        rosemary::skills::SelectionMode::Interactive
+                    };
+
+                    let is_tty = std::io::stdin().is_terminal();
+                    let target_path = if is_git {
+                        temp_path
+                    } else {
+                        std::path::Path::new(&source)
+                    };
+
+                    rosemary::skills::install_skills_from_dir(
+                        &conn,
+                        target_path,
+                        &source,
+                        &version,
+                        mode,
+                        is_tty,
+                    )
+                    .await?;
+                    info!("Skills installed successfully.");
+                }
+                Some(SkillsCommands::Update { source }) => {
+                    let skills = rosemary::db::list_skills(&conn).await?;
+                    let mut unique_sources = std::collections::HashSet::new();
+                    for s in skills {
+                        if let Some(ref filter_src) = source {
+                            let slug = rosemary::skills::derive_source_slug(&s.source);
+                            if &s.source == filter_src || &slug == filter_src {
+                                unique_sources.insert(s.source.clone());
+                            }
+                        } else {
+                            unique_sources.insert(s.source.clone());
+                        }
+                    }
+
+                    if unique_sources.is_empty() {
+                        if let Some(src_val) = source {
+                            anyhow::bail!(
+                                "No installed skills found matching source/slug {:?}",
+                                src_val
+                            );
+                        } else {
+                            info!("No skills currently installed.");
+                            return Ok(());
+                        }
+                    }
+
+                    for src in unique_sources {
+                        info!("Updating skills from {}...", src);
+                        let temp_dir = tempfile::tempdir()?;
+                        let temp_path = temp_dir.path();
+                        let is_git = src.contains("://")
+                            || src.contains("git@")
+                            || (!std::path::Path::new(&src).is_dir() && src.ends_with(".git"));
+
+                        let version = if is_git {
+                            let status = std::process::Command::new("git")
+                                .arg("clone")
+                                .arg("--depth")
+                                .arg("1")
+                                .arg(&src)
+                                .arg(temp_path)
+                                .status()?;
+                            if !status.success() {
+                                warn!("Failed to clone repository from {}", src);
+                                continue;
+                            }
+                            let output = std::process::Command::new("git")
+                                .arg("rev-parse")
+                                .arg("HEAD")
+                                .current_dir(temp_path)
+                                .output()?;
+                            if output.status.success() {
+                                String::from_utf8_lossy(&output.stdout).trim().to_string()
+                            } else {
+                                "unknown".to_string()
+                            }
+                        } else {
+                            "local".to_string()
+                        };
+
+                        let target_path = if is_git {
+                            temp_path
+                        } else {
+                            std::path::Path::new(&src)
+                        };
+
+                        rosemary::skills::install_skills_from_dir(
+                            &conn,
+                            target_path,
+                            &src,
+                            &version,
+                            rosemary::skills::SelectionMode::All,
+                            false,
+                        )
+                        .await?;
+                        info!("Successfully updated skills from {}.", src);
+                    }
+                }
+                Some(SkillsCommands::Remove { target }) => {
+                    let skills = rosemary::db::list_skills(&conn).await?;
+                    let mut entities_to_delete = Vec::new();
+                    for s in skills {
+                        let slug = rosemary::skills::derive_source_slug(&s.source);
+                        if s.entity_name == target || s.source == target || slug == target {
+                            entities_to_delete.push(s.entity_name.clone());
+                        }
+                    }
+
+                    if entities_to_delete.is_empty() {
+                        if target.starts_with("skill:") {
+                            entities_to_delete.push(target.clone());
+                        } else {
+                            anyhow::bail!("No installed skills found matching target {:?}", target);
+                        }
+                    }
+
+                    info!("Deleting {} skill entities...", entities_to_delete.len());
+                    rosemary::db::mcp_delete_entities(&conn, entities_to_delete).await?;
+                    info!("Skills removed successfully.");
+                }
+            }
         }
         _ => unreachable!(),
     }

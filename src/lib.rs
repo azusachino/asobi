@@ -22,5 +22,6 @@ pub mod vector;
 pub mod mcp;
 pub mod normalize;
 pub mod paths;
+pub mod skills;
 pub use anyhow::{Result, anyhow, bail};
 pub use tokio::task::JoinHandle;

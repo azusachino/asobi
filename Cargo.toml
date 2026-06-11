@@ -13,7 +13,6 @@ categories = ["development-tools"]
 default = []
 documents = [
     "dep:fastembed",
-    "dep:walkdir",
 ]
 
 [dependencies]
@@ -27,7 +26,7 @@ uuid = { version = "1", features = ["v4"] }
 
 # CLI
 clap = { version = "4.5", features = ["derive"] }
-walkdir = { version = "2", optional = true }
+walkdir = "2"
 directories = "6"
 toml = "0.8"
 
@@ -44,11 +43,11 @@ fastembed = { version = "5", optional = true }
 
 # Database & Vector Store
 libsql = "0.6"
+tempfile = "3"
 
 
 [dev-dependencies]
 filetime = "0.2"
-tempfile = "3"
 
 [[bench]]
 name = "graph"
