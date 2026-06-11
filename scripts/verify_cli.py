@@ -71,6 +71,13 @@ def observations(payload: dict, name: str) -> list[str]:
     return []
 
 
+def truths(payload: dict, name: str) -> dict[str, str]:
+    for entity in payload["entities"]:
+        if entity["name"] == name:
+            return entity["truths"]
+    return {}
+
+
 def main() -> None:
     subprocess.run(["cargo", "build"], cwd=ROOT, check=True)
 
@@ -170,6 +177,20 @@ def main() -> None:
         session = graph(["open-nodes", "project-a:session"], env)
         assert observations(session, "project-a:session") == ["status: DONE"]
 
+        # Truths: structured key-value attributes, upsert + delete
+        run(["add-truth", "project-a", "language", "rust"], env)
+        run(["add-truth", "project-a", "edition", "2021"], env)
+        run(["add-truth", "project-a", "edition", "2024"], env)  # upsert replaces
+        with_truths = graph(["open-nodes", "project-a"], env)
+        assert truths(with_truths, "project-a") == {
+            "language": "rust",
+            "edition": "2024",
+        }
+
+        run(["delete-truth", "project-a", "language"], env)
+        after_truth_delete = graph(["open-nodes", "project-a"], env)
+        assert truths(after_truth_delete, "project-a") == {"edition": "2024"}
+
         run(["delete-entities", "UserPreferences"], env)
         after_delete = graph(["open-nodes", "project-a", "UserPreferences"], env)
         assert entity_names(after_delete) == {"project-a"}
@@ -203,7 +224,89 @@ def main() -> None:
         failed = run_expect_failure(["read-graph"], env)
         assert "database" in failed.stderr.lower()
 
+    skills_checks()
+
     print("CLI graph integration checks passed")
+
+
+def skills_checks() -> None:
+    """End-to-end coverage for the `skills` command group, including the
+    git edge cases (missing git binary, unreachable remote, bad local path).
+
+    `ROSEMARY_HOME` is set alongside `ROSEMARY_DATABASE_URL` so the skills
+    cache (`paths.caches_dir()`) stays inside the temp dir — it resolves from
+    HOME/XDG, not from the database URL — and never touches global state.
+    """
+    with tempfile.TemporaryDirectory(prefix="rosemary-skills-") as tmp:
+        root = Path(tmp)
+        env = os.environ.copy()
+        env["ROSEMARY_HOME"] = str(root / "home")
+        env["ROSEMARY_DATABASE_URL"] = str(root / "rosemary.db")
+
+        # Local skill source dir: one full skill + one name-fallback skill.
+        src = root / "src-skills"
+        (src / "nested").mkdir(parents=True)
+        (src / "alpha.md").write_text(
+            "---\nname: alpha\ndescription: Alpha skill\n---\nAlpha body here\n"
+        )
+        # Only a description: name falls back to the parent dir ("nested").
+        (src / "nested" / "SKILL.md").write_text(
+            "---\ndescription: Nested skill\n---\nNested body\n"
+        )
+
+        # Install (local dir => version "local", no git needed).
+        run(["skills", "install", str(src), "--all"], env)
+
+        listed = run(["skills"], env).stdout
+        assert "Installed Skills:" in listed
+        assert "alpha" in listed
+        assert "nested" in listed
+        assert "Alpha skill" in listed
+
+        # show resolves a short name and prints the raw body unescaped.
+        shown = run(["skills", "show", "alpha"], env).stdout
+        assert "Alpha body here" in shown
+
+        # Remove by source string clears every skill from that source.
+        run(["skills", "remove", str(src)], env)
+        assert "No skills installed." in run(["skills"], env).stdout
+
+        # --select installs only the named skill, not the rest.
+        run(["skills", "install", str(src), "--select", "alpha"], env)
+        selected = run(["skills"], env).stdout
+        assert "alpha" in selected
+        assert "nested" not in selected
+        run(["skills", "remove", str(src)], env)
+
+        # --select with an unknown name fails.
+        bad_select = run_expect_failure(
+            ["skills", "install", str(src), "--select", "ghost"], env
+        )
+        assert "not found" in bad_select.stderr.lower()
+
+        # Edge case: local path that does not exist.
+        missing = run_expect_failure(
+            ["skills", "install", str(root / "does-not-exist"), "--all"], env
+        )
+        assert "does not exist" in missing.stderr.lower()
+
+        # Edge case: remote (git URL) unreachable — git present, clone fails.
+        # file:// avoids any network so the check stays offline and fast.
+        unreachable = run_expect_failure(
+            ["skills", "install", f"file://{root}/no-such-repo.git", "--all"], env
+        )
+        assert "clone" in unreachable.stderr.lower()
+
+        # Edge case: git binary not installed — strip git from PATH and point
+        # at a git URL so resolution reaches the remote path.
+        no_git_env = dict(env)
+        no_git_env["PATH"] = str(root / "empty-bin")
+        (root / "empty-bin").mkdir()
+        no_git = run_expect_failure(
+            ["skills", "install", "https://example.com/owner/repo.git", "--all"],
+            no_git_env,
+        )
+        assert "git" in no_git.stderr.lower()
 
 
 if __name__ == "__main__":

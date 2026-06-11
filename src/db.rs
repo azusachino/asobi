@@ -43,6 +43,12 @@ pub async fn init_db() -> Result<(Database, Connection)> {
     conn.execute(crate::constant::SCHEMA_CREATE_MCP_RELATIONS, ())
         .await?;
 
+    conn.execute(crate::constant::SCHEMA_CREATE_MCP_TRUTHS, ())
+        .await?;
+
+    conn.execute(crate::constant::SCHEMA_CREATE_MCP_SKILLS, ())
+        .await?;
+
     // Document Tier (Vectors)
     conn.execute(crate::constant::SCHEMA_CREATE_CHUNKS, ())
         .await?;
@@ -116,6 +122,12 @@ pub async fn upsert_topic(
     Ok(())
 }
 
+pub async fn delete_topic(conn: &Connection, id: &str) -> Result<()> {
+    conn.execute("DELETE FROM topics WHERE id = ?1", libsql::params![id])
+        .await?;
+    Ok(())
+}
+
 pub async fn mcp_create_entities(
     conn: &Connection,
     entities: Vec<crate::mcp::EntityInput>,
@@ -143,6 +155,7 @@ pub async fn mcp_create_entities(
 pub async fn mcp_add_observations(
     conn: &Connection,
     observations: Vec<crate::mcp::ObservationInput>,
+    limit: usize,
 ) -> Result<()> {
     let tx = conn.transaction().await?;
     for mut obs_batch in observations {
@@ -155,6 +168,13 @@ pub async fn mcp_add_observations(
                     obs_batch.entity_name.clone(),
                     content
                 ],
+            )
+            .await?;
+        }
+        if limit > 0 {
+            tx.execute(
+                crate::constant::SQL_EVICT_OBSERVATIONS,
+                libsql::params![obs_batch.entity_name.clone(), limit as i64],
             )
             .await?;
         }
@@ -187,6 +207,16 @@ pub async fn mcp_delete_entities(conn: &Connection, names: Vec<String>) -> Resul
         let norm_name = crate::normalize::normalize_key(&name);
         tx.execute(
             crate::constant::SQL_DELETE_ENTITY,
+            libsql::params![norm_name.clone()],
+        )
+        .await?;
+        tx.execute(
+            "DELETE FROM topics WHERE id = ?1",
+            libsql::params![norm_name.clone()],
+        )
+        .await?;
+        tx.execute(
+            "DELETE FROM chunks WHERE topic_id = ?1",
             libsql::params![norm_name],
         )
         .await?;
@@ -233,31 +263,42 @@ pub async fn mcp_delete_relations(
 }
 
 pub async fn mcp_read_graph(conn: &Connection) -> Result<crate::mcp::Graph> {
-    let mut entities = Vec::new();
+    let mut entity_names = Vec::new();
     let mut rows = conn
         .query(crate::constant::SQL_SELECT_ALL_ENTITIES, ())
         .await?;
     while let Some(row) = rows.next().await? {
-        let name: String = row.get(0)?;
-        let entity_type: String = row.get(1)?;
+        entity_names.push(row.get::<String>(0)?);
+    }
+    let entities = load_entities_lazy(conn, &entity_names).await?;
 
-        let mut obs_rows = conn
-            .query(
-                crate::constant::SQL_SELECT_OBSERVATIONS_FOR_ENTITY,
-                libsql::params![name.clone()],
-            )
-            .await?;
-        let mut observations = Vec::new();
-        while let Some(obs_row) = obs_rows.next().await? {
-            observations.push(obs_row.get(0)?);
-        }
-
-        entities.push(crate::mcp::EntityOutput {
-            name,
-            entity_type,
-            observations,
+    let mut relations = Vec::new();
+    let mut rel_rows = conn
+        .query(crate::constant::SQL_SELECT_ALL_RELATIONS, ())
+        .await?;
+    while let Some(row) = rel_rows.next().await? {
+        relations.push(crate::mcp::RelationInput {
+            from: row.get(0)?,
+            to: row.get(1)?,
+            relation_type: row.get(2)?,
         });
     }
+
+    Ok(crate::mcp::Graph {
+        entities,
+        relations,
+    })
+}
+
+pub async fn mcp_read_graph_eager(conn: &Connection) -> Result<crate::mcp::Graph> {
+    let mut entity_names = Vec::new();
+    let mut rows = conn
+        .query(crate::constant::SQL_SELECT_ALL_ENTITIES, ())
+        .await?;
+    while let Some(row) = rows.next().await? {
+        entity_names.push(row.get::<String>(0)?);
+    }
+    let entities = load_entities_eager(conn, &entity_names).await?;
 
     let mut relations = Vec::new();
     let mut rel_rows = conn
@@ -348,7 +389,7 @@ pub async fn mcp_search_nodes_with_limit(
         }
     }
 
-    let entities = load_entities(conn, &all_entity_names).await?;
+    let entities = load_entities_lazy(conn, &all_entity_names).await?;
 
     Ok(crate::mcp::Graph {
         entities,
@@ -361,7 +402,7 @@ pub async fn mcp_open_nodes(conn: &Connection, names: Vec<String>) -> Result<cra
         .into_iter()
         .map(|n| crate::normalize::normalize_key(&n))
         .collect();
-    let entities = load_entities(conn, &normalized_names).await?;
+    let entities = load_entities_eager(conn, &normalized_names).await?;
     let relations = load_relations(conn, &normalized_names).await?;
 
     Ok(crate::mcp::Graph {
@@ -408,7 +449,65 @@ async fn load_relations(
     Ok(relations)
 }
 
-async fn load_entities(
+async fn load_entities_lazy(
+    conn: &Connection,
+    names: &[String],
+) -> Result<Vec<crate::mcp::EntityOutput>> {
+    if names.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let mut entity_types = HashMap::new();
+    let mut obs_counts: HashMap<String, usize> = HashMap::new();
+    let truths = select_truths(conn, names).await?;
+
+    for chunk in names.chunks(500) {
+        let placeholders = chunk.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+
+        // Load entities
+        let entity_sql =
+            crate::constant::SQL_SELECT_ENTITIES_IN_TEMPLATE.replace("{}", &placeholders);
+        let params = chunk
+            .iter()
+            .cloned()
+            .map(libsql::Value::from)
+            .collect::<Vec<_>>();
+
+        let mut rows = conn.query(&entity_sql, params.clone()).await?;
+        while let Some(row) = rows.next().await? {
+            entity_types.insert(row.get::<String>(0)?, row.get::<String>(1)?);
+        }
+
+        // Load observation counts
+        let obs_count_sql = format!(
+            "SELECT entity_name, COUNT(*) FROM mcp_observations WHERE entity_name IN ({}) GROUP BY entity_name",
+            placeholders
+        );
+        let mut rows = conn.query(&obs_count_sql, params).await?;
+        while let Some(row) = rows.next().await? {
+            obs_counts.insert(row.get::<String>(0)?, row.get::<i64>(1)? as usize);
+        }
+    }
+
+    let mut entities = Vec::new();
+    for name in names {
+        if let Some(entity_type) = entity_types.get(name) {
+            let entity_truths = truths.get(name).cloned().unwrap_or_default();
+            let count = obs_counts.get(name).cloned().unwrap_or(0);
+            entities.push(crate::mcp::EntityOutput {
+                name: name.clone(),
+                entity_type: entity_type.clone(),
+                observations: Vec::new(),
+                truths: entity_truths,
+                observation_count: count,
+                body: None,
+            });
+        }
+    }
+    Ok(entities)
+}
+
+async fn load_entities_eager(
     conn: &Connection,
     names: &[String],
 ) -> Result<Vec<crate::mcp::EntityOutput>> {
@@ -418,6 +517,8 @@ async fn load_entities(
 
     let mut entity_types = HashMap::new();
     let mut observations: HashMap<String, Vec<String>> = HashMap::new();
+    let mut skill_bodies: HashMap<String, String> = HashMap::new();
+    let truths = select_truths(conn, names).await?;
 
     for chunk in names.chunks(500) {
         let placeholders = chunk.iter().map(|_| "?").collect::<Vec<_>>().join(",");
@@ -440,22 +541,37 @@ async fn load_entities(
         let obs_sql =
             crate::constant::SQL_SELECT_OBSERVATIONS_IN_TEMPLATE.replace("{}", &placeholders);
 
-        let mut rows = conn.query(&obs_sql, params).await?;
+        let mut rows = conn.query(&obs_sql, params.clone()).await?;
         while let Some(row) = rows.next().await? {
             observations
                 .entry(row.get::<String>(0)?)
                 .or_default()
                 .push(row.get::<String>(1)?);
         }
+
+        // Load skill bodies
+        let skill_sql =
+            crate::constant::SQL_SELECT_SKILL_BODIES_IN_TEMPLATE.replace("{}", &placeholders);
+        let mut rows = conn.query(&skill_sql, params).await?;
+        while let Some(row) = rows.next().await? {
+            skill_bodies.insert(row.get::<String>(0)?, row.get::<String>(1)?);
+        }
     }
 
     let mut entities = Vec::new();
     for name in names {
         if let Some(entity_type) = entity_types.get(name) {
+            let entity_truths = truths.get(name).cloned().unwrap_or_default();
+            let entity_obs = observations.remove(name).unwrap_or_default();
+            let count = entity_obs.len();
+            let body = skill_bodies.get(name).cloned();
             entities.push(crate::mcp::EntityOutput {
                 name: name.clone(),
                 entity_type: entity_type.clone(),
-                observations: observations.remove(name).unwrap_or_default(),
+                observations: entity_obs,
+                truths: entity_truths,
+                observation_count: count,
+                body,
             });
         }
     }
@@ -501,6 +617,125 @@ pub async fn mcp_reset(conn: &Connection) -> Result<()> {
     conn.execute(crate::constant::SQL_DELETE_ALL_ENTITIES, ())
         .await?;
     Ok(())
+}
+
+pub async fn truth_upsert(conn: &Connection, entity: &str, key: &str, value: &str) -> Result<()> {
+    let norm_entity = crate::normalize::normalize_key(entity);
+    conn.execute(
+        crate::constant::SQL_UPSERT_TRUTH,
+        libsql::params![norm_entity, key, value],
+    )
+    .await?;
+    Ok(())
+}
+
+pub async fn truth_delete(conn: &Connection, entity: &str, key: &str) -> Result<()> {
+    let norm_entity = crate::normalize::normalize_key(entity);
+    conn.execute(
+        crate::constant::SQL_DELETE_TRUTH,
+        libsql::params![norm_entity, key],
+    )
+    .await?;
+    Ok(())
+}
+
+pub async fn select_truths(
+    conn: &Connection,
+    names: &[impl AsRef<str>],
+) -> Result<HashMap<String, std::collections::BTreeMap<String, String>>> {
+    let mut results = HashMap::new();
+    if names.is_empty() {
+        return Ok(results);
+    }
+
+    let normalized_names: Vec<String> = names
+        .iter()
+        .map(|n| crate::normalize::normalize_key(n.as_ref()))
+        .filter(|n| !n.is_empty())
+        .collect();
+
+    if normalized_names.is_empty() {
+        return Ok(results);
+    }
+
+    for chunk in normalized_names.chunks(500) {
+        let placeholders = chunk.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+        let sql = crate::constant::SQL_SELECT_TRUTHS_FOR_ENTITIES.replace("{}", &placeholders);
+        let params = chunk
+            .iter()
+            .cloned()
+            .map(libsql::Value::from)
+            .collect::<Vec<_>>();
+
+        let mut rows = conn.query(&sql, params).await?;
+        while let Some(row) = rows.next().await? {
+            let entity_name: String = row.get(0)?;
+            let key: String = row.get(1)?;
+            let value: String = row.get(2)?;
+            results
+                .entry(entity_name)
+                .or_insert_with(std::collections::BTreeMap::new)
+                .insert(key, value);
+        }
+    }
+
+    Ok(results)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SkillRow {
+    pub entity_name: String,
+    pub description: String,
+    pub version: String,
+    pub source: String,
+    pub installed_at: String,
+}
+
+pub async fn skill_upsert(
+    conn: &Connection,
+    entity: &str,
+    body: &str,
+    source: &str,
+    version: &str,
+) -> Result<()> {
+    let norm_entity = crate::normalize::normalize_key(entity);
+    conn.execute(
+        crate::constant::SQL_UPSERT_SKILL,
+        libsql::params![norm_entity, body, source, version],
+    )
+    .await?;
+    Ok(())
+}
+
+pub async fn skill_body(conn: &Connection, entity: &str) -> Result<Option<String>> {
+    let norm_entity = crate::normalize::normalize_key(entity);
+    let mut rows = conn
+        .query(
+            crate::constant::SQL_SELECT_SKILL_BODY,
+            libsql::params![norm_entity],
+        )
+        .await?;
+    if let Some(row) = rows.next().await? {
+        let body: String = row.get(0)?;
+        Ok(Some(body))
+    } else {
+        Ok(None)
+    }
+}
+
+pub async fn list_skills(conn: &Connection) -> Result<Vec<SkillRow>> {
+    let mut rows = conn.query(crate::constant::SQL_LIST_SKILLS, ()).await?;
+    let mut results = Vec::new();
+    while let Some(row) = rows.next().await? {
+        results.push(SkillRow {
+            entity_name: row.get(0)?,
+            description: row.get(1)?,
+            version: row.get(2)?,
+            source: row.get(3)?,
+            installed_at: row.get(4)?,
+        });
+    }
+    Ok(results)
 }
 
 #[cfg(test)]
@@ -748,5 +983,311 @@ mod tests {
         // Check empty stats again
         let stats = mcp_stats(&conn).await.unwrap();
         assert_eq!(stats, (0, 0, 0));
+    }
+
+    #[tokio::test]
+    async fn test_truth_upsert_twice_same_key() {
+        let dir = tempdir().unwrap();
+        unsafe {
+            std::env::set_var(
+                ENV_DATABASE_URL,
+                dir.path().join("test.db").to_str().unwrap(),
+            );
+        }
+        let (_db, conn) = init_db().await.unwrap();
+
+        seed_entity(&conn, "test-entity", "concept", &[]).await;
+
+        truth_upsert(&conn, "test-entity", "version", "1.0.0")
+            .await
+            .unwrap();
+        truth_upsert(&conn, "test-entity", "version", "1.0.1")
+            .await
+            .unwrap();
+
+        let truths = select_truths(&conn, &["test-entity"]).await.unwrap();
+        let entity_truths = truths.get("test-entity").expect("should have truths");
+        assert_eq!(entity_truths.len(), 1);
+        assert_eq!(entity_truths.get("version").unwrap(), "1.0.1");
+    }
+
+    #[tokio::test]
+    async fn test_truth_upsert_two_keys() {
+        let dir = tempdir().unwrap();
+        unsafe {
+            std::env::set_var(
+                ENV_DATABASE_URL,
+                dir.path().join("test.db").to_str().unwrap(),
+            );
+        }
+        let (_db, conn) = init_db().await.unwrap();
+
+        seed_entity(&conn, "test-entity", "concept", &[]).await;
+
+        truth_upsert(&conn, "test-entity", "version", "1.0.0")
+            .await
+            .unwrap();
+        truth_upsert(&conn, "test-entity", "author", "Alice")
+            .await
+            .unwrap();
+
+        let truths = select_truths(&conn, &["test-entity"]).await.unwrap();
+        let entity_truths = truths.get("test-entity").expect("should have truths");
+        assert_eq!(entity_truths.len(), 2);
+        assert_eq!(entity_truths.get("author").unwrap(), "Alice");
+        assert_eq!(entity_truths.get("version").unwrap(), "1.0.0");
+    }
+
+    #[tokio::test]
+    async fn test_truth_delete() {
+        let dir = tempdir().unwrap();
+        unsafe {
+            std::env::set_var(
+                ENV_DATABASE_URL,
+                dir.path().join("test.db").to_str().unwrap(),
+            );
+        }
+        let (_db, conn) = init_db().await.unwrap();
+
+        seed_entity(&conn, "test-entity", "concept", &[]).await;
+
+        truth_upsert(&conn, "test-entity", "k1", "v1")
+            .await
+            .unwrap();
+        truth_upsert(&conn, "test-entity", "k2", "v2")
+            .await
+            .unwrap();
+
+        truth_delete(&conn, "test-entity", "k1").await.unwrap();
+
+        let truths = select_truths(&conn, &["test-entity"]).await.unwrap();
+        let entity_truths = truths.get("test-entity").expect("should have truths");
+        assert_eq!(entity_truths.len(), 1);
+        assert_eq!(entity_truths.get("k2").unwrap(), "v2");
+    }
+
+    #[tokio::test]
+    async fn test_delete_entities_cascades_truths() {
+        let dir = tempdir().unwrap();
+        unsafe {
+            std::env::set_var(
+                ENV_DATABASE_URL,
+                dir.path().join("test.db").to_str().unwrap(),
+            );
+        }
+        let (_db, conn) = init_db().await.unwrap();
+
+        seed_entity(&conn, "test-entity", "concept", &[]).await;
+        truth_upsert(&conn, "test-entity", "k1", "v1")
+            .await
+            .unwrap();
+
+        mcp_delete_entities(&conn, vec!["test-entity".to_string()])
+            .await
+            .unwrap();
+
+        // Check if the truth was deleted.
+        let mut rows = conn
+            .query("SELECT COUNT(*) FROM mcp_truths", ())
+            .await
+            .unwrap();
+        let count: i64 = rows.next().await.unwrap().unwrap().get(0).unwrap();
+        assert_eq!(count, 0);
+    }
+
+    #[tokio::test]
+    async fn test_observation_limit_evicts_oldest() {
+        let dir = tempdir().unwrap();
+        unsafe {
+            std::env::set_var(
+                ENV_DATABASE_URL,
+                dir.path().join("test.db").to_str().unwrap(),
+            );
+        }
+        let (_db, conn) = init_db().await.unwrap();
+
+        seed_entity(&conn, "test-entity", "concept", &[]).await;
+
+        let inputs = vec![crate::mcp::ObservationInput {
+            entity_name: "test-entity".to_string(),
+            contents: vec![
+                "obs1".to_string(),
+                "obs2".to_string(),
+                "obs3".to_string(),
+                "obs4".to_string(),
+                "obs5".to_string(),
+            ],
+        }];
+        mcp_add_observations(&conn, inputs, 3).await.unwrap();
+
+        let graph = mcp_open_nodes(&conn, vec!["test-entity".to_string()])
+            .await
+            .unwrap();
+        let entity = &graph.entities[0];
+        let mut obs = entity.observations.clone();
+        obs.sort();
+        assert_eq!(
+            obs,
+            vec!["obs3".to_string(), "obs4".to_string(), "obs5".to_string(),]
+        );
+    }
+
+    #[tokio::test]
+    async fn test_observation_limit_zero_is_unbounded() {
+        let dir = tempdir().unwrap();
+        unsafe {
+            std::env::set_var(
+                ENV_DATABASE_URL,
+                dir.path().join("test.db").to_str().unwrap(),
+            );
+        }
+        let (_db, conn) = init_db().await.unwrap();
+
+        seed_entity(&conn, "test-entity", "concept", &[]).await;
+
+        let inputs = vec![crate::mcp::ObservationInput {
+            entity_name: "test-entity".to_string(),
+            contents: vec![
+                "obs1".to_string(),
+                "obs2".to_string(),
+                "obs3".to_string(),
+                "obs4".to_string(),
+                "obs5".to_string(),
+            ],
+        }];
+        mcp_add_observations(&conn, inputs, 0).await.unwrap();
+
+        let graph = mcp_open_nodes(&conn, vec!["test-entity".to_string()])
+            .await
+            .unwrap();
+        let entity = &graph.entities[0];
+        assert_eq!(entity.observations.len(), 5);
+    }
+
+    #[tokio::test]
+    async fn test_lazy_read_graph_and_search_nodes() {
+        let dir = tempdir().unwrap();
+        unsafe {
+            std::env::set_var(
+                ENV_DATABASE_URL,
+                dir.path().join("test.db").to_str().unwrap(),
+            );
+        }
+        let (_db, conn) = init_db().await.unwrap();
+
+        seed_entity(&conn, "test-entity", "concept", &["obs1", "obs2"]).await;
+        truth_upsert(&conn, "test-entity", "k1", "v1")
+            .await
+            .unwrap();
+
+        // 1. Test read-graph (should be lazy)
+        let graph_read = mcp_read_graph(&conn).await.unwrap();
+        let entity_read = &graph_read.entities[0];
+        assert!(entity_read.observations.is_empty());
+        assert_eq!(entity_read.observation_count, 2);
+        assert_eq!(entity_read.truths.len(), 1);
+        assert_eq!(entity_read.truths.get("k1").unwrap(), "v1");
+
+        // 2. Test search-nodes (should be lazy)
+        let graph_search = mcp_search_nodes(&conn, "test").await.unwrap();
+        let entity_search = &graph_search.entities[0];
+        assert!(entity_search.observations.is_empty());
+        assert_eq!(entity_search.observation_count, 2);
+        assert_eq!(entity_search.truths.len(), 1);
+        assert_eq!(entity_search.truths.get("k1").unwrap(), "v1");
+
+        // 3. Test open-nodes (should be eager)
+        let graph_open = mcp_open_nodes(&conn, vec!["test-entity".to_string()])
+            .await
+            .unwrap();
+        let entity_open = &graph_open.entities[0];
+        assert_eq!(entity_open.observations.len(), 2);
+        assert_eq!(entity_open.observation_count, 2);
+        assert_eq!(entity_open.truths.len(), 1);
+        assert_eq!(entity_open.truths.get("k1").unwrap(), "v1");
+    }
+
+    #[tokio::test]
+    async fn test_skill_storage_and_mcp_open_nodes() {
+        let dir = tempdir().unwrap();
+        unsafe {
+            std::env::set_var(
+                ENV_DATABASE_URL,
+                dir.path().join("test.db").to_str().unwrap(),
+            );
+        }
+        let (_db, conn) = init_db().await.unwrap();
+
+        seed_entity(&conn, "skill:test-skill", "skill", &[]).await;
+        truth_upsert(&conn, "skill:test-skill", "description", "my test skill")
+            .await
+            .unwrap();
+
+        // 1. Upsert skill
+        skill_upsert(
+            &conn,
+            "skill:test-skill",
+            "body content 1",
+            "source-1",
+            "1.0.0",
+        )
+        .await
+        .unwrap();
+
+        // 2. open-nodes should return the body
+        let graph = mcp_open_nodes(&conn, vec!["skill:test-skill".to_string()])
+            .await
+            .unwrap();
+        let entity = &graph.entities[0];
+        assert_eq!(entity.body.as_deref(), Some("body content 1"));
+
+        // 3. read-graph and search-nodes should NOT return the body
+        let graph_read = mcp_read_graph(&conn).await.unwrap();
+        assert!(graph_read.entities[0].body.is_none());
+
+        let graph_search = mcp_search_nodes(&conn, "skill").await.unwrap();
+        assert!(graph_search.entities[0].body.is_none());
+
+        // 4. Second upsert should replace the body
+        skill_upsert(
+            &conn,
+            "skill:test-skill",
+            "body content 2",
+            "source-1",
+            "1.0.1",
+        )
+        .await
+        .unwrap();
+        let graph_2 = mcp_open_nodes(&conn, vec!["skill:test-skill".to_string()])
+            .await
+            .unwrap();
+        assert_eq!(graph_2.entities[0].body.as_deref(), Some("body content 2"));
+
+        // 5. list_skills should list name + description + version + source + installed_at
+        let skills = list_skills(&conn).await.unwrap();
+        assert_eq!(skills.len(), 1);
+        assert_eq!(skills[0].entity_name, "skill:test-skill");
+        assert_eq!(skills[0].description, "my test skill");
+        assert_eq!(skills[0].version, "1.0.1");
+        assert_eq!(skills[0].source, "source-1");
+
+        // 6. delete-entities cascades skills
+        mcp_delete_entities(&conn, vec!["skill:test-skill".to_string()])
+            .await
+            .unwrap();
+        let body_after = skill_body(&conn, "skill:test-skill").await.unwrap();
+        assert!(body_after.is_none());
+
+        let count_skills: i64 = conn
+            .query("SELECT COUNT(*) FROM mcp_skills", ())
+            .await
+            .unwrap()
+            .next()
+            .await
+            .unwrap()
+            .unwrap()
+            .get(0)
+            .unwrap();
+        assert_eq!(count_skills, 0);
     }
 }

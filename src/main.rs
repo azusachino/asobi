@@ -2,13 +2,10 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 #[cfg(feature = "documents")]
 use rosemary::embed::EmbeddingProvider;
-#[cfg(feature = "documents")]
 use rosemary::paths::RosemaryPaths;
 #[cfg(feature = "documents")]
-use std::path::Path;
-#[cfg(feature = "documents")]
 use std::sync::Arc;
-use tracing::info;
+use tracing::{info, warn};
 use tracing_subscriber::EnvFilter;
 
 #[derive(Parser)]
@@ -43,7 +40,19 @@ enum Commands {
         relation_type: String,
     },
     /// Add observations to existing entities
-    AddObservations { name: String, content: String },
+    AddObservations {
+        name: String,
+        #[arg(num_args = 1..)]
+        contents: Vec<String>,
+    },
+    /// Add or update a truth for an entity
+    AddTruth {
+        name: String,
+        key: String,
+        value: String,
+    },
+    /// Delete a specific truth for an entity
+    DeleteTruth { name: String, key: String },
     /// Delete entities and their relations
     DeleteEntities { names: Vec<String> },
     /// Delete specific observations
@@ -117,6 +126,41 @@ enum Commands {
         #[arg(long)]
         force: bool,
     },
+    /// Manage, install, and update AI agent skills
+    Skills {
+        #[command(subcommand)]
+        subcommand: Option<SkillsCommands>,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum SkillsCommands {
+    /// Install skills from a git repository or local path
+    Install {
+        /// Git URL or local directory path
+        source: String,
+        /// Install all skills found
+        #[arg(long)]
+        all: bool,
+        /// Install specific skills by name
+        #[arg(long, num_args = 1..)]
+        select: Option<Vec<String>>,
+    },
+    /// Update installed skills from their sources
+    Update {
+        /// Specific source URL or slug to update (updates all if omitted)
+        source: Option<String>,
+    },
+    /// Remove an installed skill or all skills from a source
+    Remove {
+        /// Name of the skill (e.g. skill:slug:name) or source slug/URL
+        target: String,
+    },
+    /// Show the raw body of an installed skill (useful for humans to read without JSON escaping)
+    Show {
+        /// Name of the skill (fully qualified e.g. skill:slug:name, or short name)
+        name: String,
+    },
 }
 
 #[cfg(feature = "documents")]
@@ -178,6 +222,100 @@ fn init_tracing() {
         .init();
 }
 
+/// Verify the `git` binary is reachable before any remote operation, so a
+/// missing git yields a clear message instead of a raw `os error 2` from `?`.
+fn ensure_git_available() -> Result<()> {
+    match std::process::Command::new("git").arg("--version").output() {
+        Ok(output) if output.status.success() => Ok(()),
+        Ok(_) => anyhow::bail!("`git --version` failed; ensure git is installed and on PATH"),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => anyhow::bail!(
+            "`git` not found on PATH — install git to install or update skills from a remote repository"
+        ),
+        Err(e) => anyhow::bail!("failed to invoke git: {e}"),
+    }
+}
+
+fn get_or_update_cached_repo(
+    git_url: &str,
+    caches_dir: &std::path::Path,
+) -> Result<(std::path::PathBuf, String)> {
+    ensure_git_available()?;
+    let slug = rosemary::skills::derive_source_slug(git_url);
+    let repo_cache_dir = caches_dir.join(&slug);
+
+    std::fs::create_dir_all(caches_dir)?;
+
+    if repo_cache_dir.exists() {
+        info!("Updating cached repository in {:?}...", repo_cache_dir);
+        let fetch_status = std::process::Command::new("git")
+            .arg("fetch")
+            .arg("--depth")
+            .arg("1")
+            .current_dir(&repo_cache_dir)
+            .status();
+
+        let mut success = false;
+        if let Ok(status) = fetch_status
+            && status.success()
+        {
+            let reset_status = std::process::Command::new("git")
+                .arg("reset")
+                .arg("--hard")
+                .arg("origin/HEAD")
+                .current_dir(&repo_cache_dir)
+                .status();
+            if let Ok(status) = reset_status
+                && status.success()
+            {
+                success = true;
+            }
+        }
+
+        if !success {
+            info!(
+                "Failed to update existing cache, re-cloning to {:?}...",
+                repo_cache_dir
+            );
+            let _ = std::fs::remove_dir_all(&repo_cache_dir);
+            let clone_status = std::process::Command::new("git")
+                .arg("clone")
+                .arg("--depth")
+                .arg("1")
+                .arg(git_url)
+                .arg(&repo_cache_dir)
+                .status()?;
+            if !clone_status.success() {
+                anyhow::bail!("Failed to clone repository from {}", git_url);
+            }
+        }
+    } else {
+        info!("Cloning {} to {:?}...", git_url, repo_cache_dir);
+        let clone_status = std::process::Command::new("git")
+            .arg("clone")
+            .arg("--depth")
+            .arg("1")
+            .arg(git_url)
+            .arg(&repo_cache_dir)
+            .status()?;
+        if !clone_status.success() {
+            anyhow::bail!("Failed to clone repository from {}", git_url);
+        }
+    }
+
+    let output = std::process::Command::new("git")
+        .arg("rev-parse")
+        .arg("HEAD")
+        .current_dir(&repo_cache_dir)
+        .output()?;
+    let version = if output.status.success() {
+        String::from_utf8_lossy(&output.stdout).trim().to_string()
+    } else {
+        "unknown".to_string()
+    };
+
+    Ok((repo_cache_dir, version))
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     init_tracing();
@@ -197,7 +335,6 @@ async fn main() -> Result<()> {
         return Ok(());
     }
 
-    #[cfg(feature = "documents")]
     let paths = RosemaryPaths::resolve();
     let (db, conn) = rosemary::db::init_db().await?;
 
@@ -210,7 +347,7 @@ async fn main() -> Result<()> {
             let (store, embedder) = init_vector(conn, &paths).await?;
             match cli.command {
                 Commands::Ingest { path } => {
-                    let p = Path::new(&path);
+                    let p = std::path::Path::new(&path);
                     if p.is_dir() {
                         info!("Ingesting directory: {:?}...", p);
                         let count = rosemary::ingest::ingest_dir(
@@ -304,16 +441,30 @@ async fn main() -> Result<()> {
             .await?;
             info!("Relation created.");
         }
-        Commands::AddObservations { name, content } => {
+        Commands::AddObservations { name, contents } => {
+            let paths = rosemary::paths::RosemaryPaths::resolve();
+            let limit = std::env::var(rosemary::constant::ENV_OBSERVATION_LIMIT)
+                .ok()
+                .and_then(|v| v.parse::<usize>().ok())
+                .unwrap_or(paths.observation_limit.unwrap_or(50));
             rosemary::db::mcp_add_observations(
                 &conn,
                 vec![rosemary::mcp::ObservationInput {
                     entity_name: name,
-                    contents: vec![content],
+                    contents,
                 }],
+                limit,
             )
             .await?;
             info!("Observation added.");
+        }
+        Commands::AddTruth { name, key, value } => {
+            rosemary::db::truth_upsert(&conn, &name, &key, &value).await?;
+            info!("Truth added.");
+        }
+        Commands::DeleteTruth { name, key } => {
+            rosemary::db::truth_delete(&conn, &name, &key).await?;
+            info!("Truth deleted.");
         }
         Commands::DeleteEntities { names } => {
             rosemary::db::mcp_delete_entities(&conn, names).await?;
@@ -369,7 +520,7 @@ async fn main() -> Result<()> {
             println!("  Observations: {}", observations);
         }
         Commands::Export { output } => {
-            let graph = rosemary::db::mcp_read_graph(&conn).await?;
+            let graph = rosemary::db::mcp_read_graph_eager(&conn).await?;
             let json = serde_json::to_string_pretty(&graph)?;
             if let Some(path) = output {
                 std::fs::write(&path, json)?;
@@ -424,6 +575,218 @@ async fn main() -> Result<()> {
         }
         Commands::Restore { file, force } => {
             rosemary::backup::restore(db, conn, std::path::Path::new(&file), force).await?;
+        }
+        Commands::Skills { subcommand } => {
+            use std::io::IsTerminal;
+            match subcommand {
+                None => {
+                    let skills = rosemary::db::list_skills(&conn).await?;
+                    if skills.is_empty() {
+                        println!("No skills installed.");
+                    } else {
+                        let mut grouped: std::collections::BTreeMap<
+                            String,
+                            Vec<rosemary::db::SkillRow>,
+                        > = std::collections::BTreeMap::new();
+                        for s in skills {
+                            grouped.entry(s.source.clone()).or_default().push(s);
+                        }
+                        println!("Installed Skills:");
+                        for (source, list) in grouped {
+                            println!("Source: {}", source);
+                            for s in list {
+                                println!("  {} · {} · {}", s.entity_name, s.description, s.version);
+                            }
+                        }
+                    }
+                }
+                Some(SkillsCommands::Install {
+                    source,
+                    all,
+                    select,
+                }) => {
+                    let mut git_url = source.clone();
+                    let is_git = if source.contains("://") || source.contains("git@") {
+                        true
+                    } else if source.contains("github.com/") || source.contains("gitlab.com/") {
+                        git_url = format!("https://{}", source);
+                        true
+                    } else {
+                        !std::path::Path::new(&source).is_dir() && source.ends_with(".git")
+                    };
+
+                    let (target_path, version) = if is_git {
+                        let (cache_path, ver) =
+                            get_or_update_cached_repo(&git_url, &paths.caches_dir())?;
+                        (cache_path, ver)
+                    } else {
+                        let local_path = std::path::Path::new(&source);
+                        if !local_path.exists() {
+                            anyhow::bail!("Local path {} does not exist", source);
+                        }
+                        (local_path.to_path_buf(), "local".to_string())
+                    };
+
+                    let mode = if all {
+                        rosemary::skills::SelectionMode::All
+                    } else if let Some(sel) = select {
+                        rosemary::skills::SelectionMode::Select(sel)
+                    } else {
+                        rosemary::skills::SelectionMode::Interactive
+                    };
+
+                    let is_tty = std::io::stdin().is_terminal();
+
+                    #[cfg(feature = "documents")]
+                    let (store, embedder) = init_vector(conn.clone(), &paths).await?;
+                    #[cfg(feature = "documents")]
+                    let vector_ctx = Some((&store, embedder.as_ref()));
+
+                    rosemary::skills::install_skills_from_dir(
+                        &conn,
+                        &target_path,
+                        &git_url,
+                        &version,
+                        mode,
+                        is_tty,
+                        #[cfg(feature = "documents")]
+                        vector_ctx,
+                    )
+                    .await?;
+
+                    info!("Skills installed successfully.");
+                }
+                Some(SkillsCommands::Update { source }) => {
+                    #[cfg(feature = "documents")]
+                    let (store, embedder) = init_vector(conn.clone(), &paths).await?;
+                    #[cfg(feature = "documents")]
+                    let vector_ctx = Some((&store, embedder.as_ref()));
+
+                    let skills = rosemary::db::list_skills(&conn).await?;
+                    let mut unique_sources = std::collections::HashSet::new();
+                    for s in skills {
+                        if let Some(ref filter_src) = source {
+                            let slug = rosemary::skills::derive_source_slug(&s.source);
+                            if &s.source == filter_src || &slug == filter_src {
+                                unique_sources.insert(s.source.clone());
+                            }
+                        } else {
+                            unique_sources.insert(s.source.clone());
+                        }
+                    }
+
+                    if unique_sources.is_empty() {
+                        if let Some(src_val) = source {
+                            anyhow::bail!(
+                                "No installed skills found matching source/slug {:?}",
+                                src_val
+                            );
+                        } else {
+                            info!("No skills currently installed.");
+                            return Ok(());
+                        }
+                    }
+
+                    for src in unique_sources {
+                        info!("Updating skills from {}...", src);
+                        let mut git_url = src.clone();
+                        let is_git = if src.contains("://") || src.contains("git@") {
+                            true
+                        } else if src.contains("github.com/") || src.contains("gitlab.com/") {
+                            git_url = format!("https://{}", src);
+                            true
+                        } else {
+                            !std::path::Path::new(&src).is_dir() && src.ends_with(".git")
+                        };
+
+                        let (target_path, version) = if is_git {
+                            let (cache_path, ver) =
+                                get_or_update_cached_repo(&git_url, &paths.caches_dir())?;
+                            (cache_path, ver)
+                        } else {
+                            let local_path = std::path::Path::new(&src);
+                            if !local_path.exists() {
+                                warn!("Local path {} does not exist, skipping update", src);
+                                continue;
+                            }
+                            (local_path.to_path_buf(), "local".to_string())
+                        };
+
+                        rosemary::skills::install_skills_from_dir(
+                            &conn,
+                            &target_path,
+                            &git_url,
+                            &version,
+                            rosemary::skills::SelectionMode::All,
+                            false,
+                            #[cfg(feature = "documents")]
+                            vector_ctx,
+                        )
+                        .await?;
+                        info!("Successfully updated skills from {}.", src);
+                    }
+                }
+                Some(SkillsCommands::Remove { target }) => {
+                    let skills = rosemary::db::list_skills(&conn).await?;
+                    let mut entities_to_delete = Vec::new();
+                    for s in skills {
+                        let slug = rosemary::skills::derive_source_slug(&s.source);
+                        if s.entity_name == target || s.source == target || slug == target {
+                            entities_to_delete.push(s.entity_name.clone());
+                        }
+                    }
+
+                    if !entities_to_delete.is_empty() {
+                        info!("Deleting {} skill entities...", entities_to_delete.len());
+                        rosemary::db::mcp_delete_entities(&conn, entities_to_delete).await?;
+                        info!("Skills removed successfully.");
+                    } else if target.starts_with("skill:") {
+                        info!("Deleting skill entity {}...", target);
+                        rosemary::db::mcp_delete_entities(&conn, vec![target.clone()]).await?;
+                        info!("Skills removed successfully.");
+                    } else {
+                        anyhow::bail!("No installed skills found matching target {:?}", target);
+                    }
+                }
+                Some(SkillsCommands::Show { name }) => {
+                    let mut entity_name = name.clone();
+                    if !entity_name.starts_with("skill:") {
+                        let skills = rosemary::db::list_skills(&conn).await?;
+                        let matches: Vec<_> = skills
+                            .iter()
+                            .filter(|s| {
+                                s.entity_name == name
+                                    || s.entity_name.ends_with(&format!(":{}", name))
+                            })
+                            .collect();
+                        if matches.len() == 1 {
+                            entity_name = matches[0].entity_name.clone();
+                        } else if matches.len() > 1 {
+                            anyhow::bail!(
+                                "Ambiguous skill name '{}'. Matches: {}",
+                                name,
+                                matches
+                                    .iter()
+                                    .map(|s| &s.entity_name)
+                                    .cloned()
+                                    .collect::<Vec<_>>()
+                                    .join(", ")
+                            );
+                        } else {
+                            entity_name = format!("skill:{}", name);
+                        }
+                    }
+
+                    match rosemary::db::skill_body(&conn, &entity_name).await? {
+                        Some(body) => {
+                            print!("{}", body);
+                        }
+                        None => {
+                            anyhow::bail!("Skill '{}' not found", name);
+                        }
+                    }
+                }
+            }
         }
         _ => unreachable!(),
     }

@@ -1,5 +1,6 @@
 // Environment Variables
 pub const ENV_DATABASE_URL: &str = "ROSEMARY_DATABASE_URL";
+pub const ENV_OBSERVATION_LIMIT: &str = "ROSEMARY_OBSERVATION_LIMIT";
 
 // Pragmas
 pub const PRAGMA_FOREIGN_KEYS_ON: &str = "PRAGMA foreign_keys = ON";
@@ -51,6 +52,24 @@ pub const SCHEMA_CREATE_MCP_RELATIONS: &str = "CREATE TABLE IF NOT EXISTS mcp_re
             PRIMARY KEY (from_entity, to_entity, relation_type),
             FOREIGN KEY (from_entity) REFERENCES mcp_entities(name) ON DELETE CASCADE,
             FOREIGN KEY (to_entity)   REFERENCES mcp_entities(name) ON DELETE CASCADE
+        )";
+
+pub const SCHEMA_CREATE_MCP_TRUTHS: &str = "CREATE TABLE IF NOT EXISTS mcp_truths (
+            entity_name TEXT NOT NULL,
+            key         TEXT NOT NULL,
+            value       TEXT NOT NULL,
+            updated_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (entity_name, key),
+            FOREIGN KEY (entity_name) REFERENCES mcp_entities(name) ON DELETE CASCADE
+        )";
+
+pub const SCHEMA_CREATE_MCP_SKILLS: &str = "CREATE TABLE IF NOT EXISTS mcp_skills (
+            entity_name  TEXT PRIMARY KEY,
+            body         TEXT NOT NULL,
+            source       TEXT NOT NULL,
+            version      TEXT NOT NULL,
+            installed_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (entity_name) REFERENCES mcp_entities(name) ON DELETE CASCADE
         )";
 
 pub const SCHEMA_CREATE_CHUNKS: &str = "CREATE TABLE IF NOT EXISTS chunks (
@@ -120,6 +139,22 @@ pub const SQL_DELETE_OBSERVATION: &str =
     "DELETE FROM mcp_observations WHERE entity_name = ?1 AND content = ?2";
 pub const SQL_DELETE_RELATION: &str =
     "DELETE FROM mcp_relations WHERE from_entity = ?1 AND to_entity = ?2 AND relation_type = ?3";
+pub const SQL_EVICT_OBSERVATIONS: &str = "DELETE FROM mcp_observations WHERE entity_name = ?1 AND rowid NOT IN \
+     (SELECT rowid FROM mcp_observations WHERE entity_name = ?1 ORDER BY rowid DESC LIMIT ?2)";
+
+pub const SQL_UPSERT_TRUTH: &str = "INSERT INTO mcp_truths (entity_name, key, value) VALUES (?1, ?2, ?3) \
+     ON CONFLICT(entity_name, key) DO UPDATE SET value=excluded.value, updated_at=CURRENT_TIMESTAMP";
+pub const SQL_DELETE_TRUTH: &str = "DELETE FROM mcp_truths WHERE entity_name = ?1 AND key = ?2";
+
+pub const SQL_UPSERT_SKILL: &str = "INSERT INTO mcp_skills (entity_name, body, source, version) VALUES (?1, ?2, ?3, ?4) \
+     ON CONFLICT(entity_name) DO UPDATE SET body=excluded.body, source=excluded.source, version=excluded.version, installed_at=CURRENT_TIMESTAMP";
+pub const SQL_SELECT_SKILL_BODY: &str = "SELECT body FROM mcp_skills WHERE entity_name = ?1";
+pub const SQL_SELECT_SKILL_BODIES_IN_TEMPLATE: &str =
+    "SELECT entity_name, body FROM mcp_skills WHERE entity_name IN ({})";
+pub const SQL_LIST_SKILLS: &str = "SELECT s.entity_name, COALESCE(t.value, '') AS description, s.version, s.source, s.installed_at \
+     FROM mcp_skills s \
+     LEFT JOIN mcp_truths t ON t.entity_name = s.entity_name AND t.key = 'description' \
+     ORDER BY s.source, s.entity_name";
 
 pub const SQL_SELECT_ALL_ENTITIES: &str = "SELECT name, entity_type FROM mcp_entities";
 pub const SQL_SELECT_ALL_TOPIC_IDS: &str = "SELECT id FROM topics";
@@ -150,6 +185,10 @@ pub const SQL_SELECT_ENTITIES_IN_TEMPLATE: &str =
 pub const SQL_SELECT_OBSERVATIONS_IN_TEMPLATE: &str = "SELECT entity_name, content FROM mcp_observations \
              WHERE entity_name IN ({}) \
              ORDER BY created_at, id";
+
+pub const SQL_SELECT_TRUTHS_FOR_ENTITIES: &str = "SELECT entity_name, key, value FROM mcp_truths \
+             WHERE entity_name IN ({}) \
+             ORDER BY key";
 
 pub const SQL_COUNT_ENTITIES: &str = "SELECT COUNT(*) FROM mcp_entities";
 pub const SQL_COUNT_RELATIONS: &str = "SELECT COUNT(*) FROM mcp_relations";

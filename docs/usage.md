@@ -118,6 +118,24 @@ rosemary import backup.json                   # Import entities and relations fr
 rosemary reset                                # Interactively clear the entire graph (use --force to bypass)
 ```
 
+**Manage truths (structured key-value attributes):**
+
+```bash
+rosemary add-truth "project-x" "language" "rust"
+rosemary delete-truth "project-x" "language"
+```
+
+**Manage skills (reusable workflows and knowledge):**
+
+```bash
+rosemary skills install https://github.com/azusachino/rosemary-skills --all
+rosemary skills
+rosemary skills show my-skill
+rosemary skills update
+rosemary skills remove rosemary-skills
+```
+
+
 **Ingest Markdown into the document tier (optional):**
 
 These commands require a binary built with `--features documents`:
@@ -198,7 +216,9 @@ rosemary create-entities "<project>:session" "session"
 
 ### Output format
 
-Graph commands (`read-graph`, `search-nodes`, `open-nodes`) print JSON:
+Rosemary operates under a **lazy-read contract** to minimize token overhead.
+
+`read-graph` and `search-nodes` return a lazy JSON structure (excluding `observations` and skill `body`, only providing `truths` and `observationCount`):
 
 ```json
 {
@@ -206,7 +226,36 @@ Graph commands (`read-graph`, `search-nodes`, `open-nodes`) print JSON:
     {
       "name": "string",
       "entityType": "string",
-      "observations": ["string", "..."]
+      "truths": {
+        "key": "value"
+      },
+      "observationCount": 12
+    }
+  ],
+  "relations": [
+    {
+      "from": "string",
+      "to": "string",
+      "relationType": "string"
+    }
+  ]
+}
+```
+
+`open-nodes` eagerly returns all `observations` and the skill `body` (if it's a skill entity):
+
+```json
+{
+  "entities": [
+    {
+      "name": "string",
+      "entityType": "string",
+      "observations": ["string", ...],
+      "truths": {
+        "key": "value"
+      },
+      "observationCount": 12,
+      "body": "string"
     }
   ],
   "relations": [
@@ -263,9 +312,10 @@ If your agent framework supports MCP stdio servers:
 # Register once
 claude mcp add rosemary -- rosemary mcp
 
-# Protocol: MCP 2024-11-05, 9 tools
+# Protocol: MCP 2024-11-05, 11 tools
 # Tools: create_entities, create_relations, add_observations,
 #        delete_entities, delete_observations, delete_relations,
+#        add_truth, delete_truth,
 #        read_graph, search_nodes, open_nodes
 ```
 

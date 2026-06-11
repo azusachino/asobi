@@ -16,6 +16,20 @@ Rosemary maintains a persistent Knowledge Graph of project facts, user preferenc
 
 ---
 
+## Concepts
+
+One graph, a few node parts — knowing which to write is the skill:
+
+- **Entity** — a named node with a `type`.
+- **Observation** — append-only log line, capped (oldest evicted past the limit, default 50). The *trail*.
+- **Truth** — a `key→value` fact that upserts. The *current state* (`status`, `version`).
+- **Relation** — directed edge `(from, to, type)`.
+- **Skill** — an installed instruction: Markdown body + `description`/`source`/`version` truths.
+
+`read-graph`/`search-nodes` return truths + `observationCount` only (cheap); `open-nodes` also returns observations and the skill body.
+
+---
+
 ## Command Reference
 
 All commands print a one-line confirmation (`Entity 'X' created.`, `Observation added.`, etc.) on success. Graph-read commands print JSON to stdout.
@@ -29,10 +43,10 @@ rosemary create-entities <NAME> <ENTITY_TYPE>
 Creates a single entity. Silently no-ops if the name already exists (`INSERT OR IGNORE`).
 
 ```
-rosemary add-observations <NAME> <CONTENT>
+rosemary add-observations <NAME> <CONTENT> [<CONTENT> ...]
 ```
 
-Appends one observation string to an existing entity. The entity must already exist.
+Appends one or more observation strings to an existing entity. The entity must already exist. Observations are subject to a rolling history cap (defaults to 50 oldest evicted per entity, customizable via `ROSEMARY_OBSERVATION_LIMIT` or `rosemary.toml`'s `observation_limit`).
 
 ```
 rosemary create-relations <FROM> <TO> <RELATION_TYPE>
@@ -67,6 +81,52 @@ rosemary open-nodes <NAME> [<NAME> ...]
 ```
 
 Returns a subgraph for the named entities plus relations between them. Takes one or more names as positional args.
+
+### Truths
+
+```
+rosemary add-truth <NAME> <KEY> <VALUE>
+```
+
+Add or update a truth key-value pair for the named entity.
+
+```
+rosemary delete-truth <NAME> <KEY>
+```
+
+Delete a specific truth key from the named entity.
+
+### Skills Subsystem
+
+```
+rosemary skills
+```
+
+List all installed skills, grouped by source.
+
+```
+rosemary skills install <SOURCE> [--all | --select <NAME>...]
+```
+
+Install skills from a local path or git repository. Pick with `--all`, `--select <NAME>...`, or neither — which prompts an interactive numbered picker (TTY required; otherwise it errors asking for a flag). Git sources are shallow-cloned to a reused cache under `.rosemary/caches/<slug>`. Frontmatter gives the metadata (name falls back to the file/dir name); the body is stored, and also embedded into the vector tier when built with `documents`.
+
+```
+rosemary skills update [SOURCE]
+```
+
+Refreshes installed skills (or one source) from the cache via `git fetch` + `reset --hard`, re-cloning if that fails. Needs `git` on `PATH`; unreachable remotes fail with a clear error.
+
+```
+rosemary skills remove <NAME | SOURCE>
+```
+
+Remove a specific skill by its name or all skills from a source URL/slug.
+
+```
+rosemary skills show <NAME>
+```
+
+Show the raw body of an installed skill without JSON escaping. Useful for humans to read. <NAME> can be fully-qualified (e.g. `skill:slug:name`) or just the short name.
 
 ### Delete
 
@@ -104,6 +164,14 @@ rosemary query <QUERY>
 ```
 
 Hybrid semantic + FTS keyword search over ingested topics. Returns: `TITLE | (score: X.XX) | PATH` per result.
+
+### MCP server
+
+```
+rosemary mcp
+```
+
+Runs Rosemary as an MCP server over stdio (JSON-RPC), exposing the graph + truth operations as tools (`create_entities`, `add_observations`, `add_truth`, `open_nodes`, `read_graph`, `search_nodes`, `delete_*`, …) on the same database as the CLI. Skills and document ingestion stay CLI-only.
 
 ### Workspace init
 
@@ -185,7 +253,8 @@ rosemary create-entities "<project>:session" "session"
 ## Naming Conventions
 
 - Session entities: `<project-name>:session` (e.g. `rosemary:session`)
-- Task lists: `<project-name>:tasks`
+- Epics / tasks: `<project>:<epic>` and `<project>:<epic>:task-<n>` (e.g. `rosemary:skills-truths:task-1`), linked `part_of` the epic
+- Skills: `skill:<source-slug>:<name>` (e.g. `skill:jasonswett-llm-skills:tdd`)
 - Cross-project preferences: `UserPreferences`, `CodingStyle`, `ToolPreferences`
 - Relations use verb phrases: `uses`, `depends-on`, `validates`, `extends`, `blocks`
 
@@ -193,7 +262,9 @@ rosemary create-entities "<project>:session" "session"
 
 ## Output Format Reference
 
-**Graph commands** (`read-graph`, `search-nodes`, `open-nodes`) return:
+**Graph commands** return a JSON object containing `entities` and `relations`.
+
+`read-graph` and `search-nodes` use a **lazy-read contract** (they do not populate observation content or skill bodies, returning only `observationCount` and `truths`):
 
 ```json
 {
@@ -201,7 +272,36 @@ rosemary create-entities "<project>:session" "session"
     {
       "name": "string",
       "entityType": "string",
-      "observations": ["string", ...]
+      "truths": {
+        "key": "value"
+      },
+      "observationCount": 12
+    }
+  ],
+  "relations": [
+    {
+      "from": "string",
+      "to": "string",
+      "relationType": "string"
+    }
+  ]
+}
+```
+
+`open-nodes` eagerly returns all `observations` and the skill `body` (if it's a skill entity):
+
+```json
+{
+  "entities": [
+    {
+      "name": "string",
+      "entityType": "string",
+      "observations": ["string", ...],
+      "truths": {
+        "key": "value"
+      },
+      "observationCount": 12,
+      "body": "string"
     }
   ],
   "relations": [
@@ -223,7 +323,9 @@ rosemary create-entities "<project>:session" "session"
 ```
 .rosemary/
   data/
-    rosemary.db        # libSQL: mcp_entities, mcp_observations, mcp_relations, topics, topics_fts, chunks
+    rosemary.db        # libSQL: mcp_entities, mcp_observations, mcp_truths, mcp_relations, mcp_skills, topics, topics_fts, chunks
+  caches/              # Persistent shallow clones of git skill sources (skills install/update)
+    <slug>/
   topics/              # Markdown snapshots synced by `compact`
     <slug>.md
     sessions/          # Session files pruned by compact --older-than

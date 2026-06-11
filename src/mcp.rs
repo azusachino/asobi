@@ -62,7 +62,12 @@ pub struct ObservationDeletion {
 pub struct EntityOutput {
     pub name: String,
     pub entity_type: String,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub observations: Vec<String>,
+    pub truths: std::collections::BTreeMap<String, String>,
+    pub observation_count: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub body: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -114,6 +119,21 @@ struct SearchNodesParams {
 #[derive(Debug, Deserialize)]
 struct OpenNodesParams {
     names: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AddTruthParams {
+    entity_name: String,
+    key: String,
+    value: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DeleteTruthParams {
+    entity_name: String,
+    key: String,
 }
 
 // ── Server ───────────────────────────────────────────────────────────────────
@@ -244,7 +264,7 @@ fn handle_tools_list(id: serde_json::Value) -> JsonRpcResponse {
                 },
                 {
                     "name": "add_observations",
-                    "description": "Add new observations to existing entities",
+                    "description": "Add new observations to existing entities (subject to the observation limit cap, which defaults to 50)",
                     "inputSchema": {
                         "type": "object",
                         "properties": {
@@ -261,6 +281,31 @@ fn handle_tools_list(id: serde_json::Value) -> JsonRpcResponse {
                             }
                         },
                         "required": ["observations"]
+                    }
+                },
+                {
+                    "name": "add_truth",
+                    "description": "Add or update a truth key-value pair for an entity",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "entityName": {"type": "string"},
+                            "key": {"type": "string"},
+                            "value": {"type": "string"}
+                        },
+                        "required": ["entityName", "key", "value"]
+                    }
+                },
+                {
+                    "name": "delete_truth",
+                    "description": "Delete a specific truth key by name from an entity",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "entityName": {"type": "string"},
+                            "key": {"type": "string"}
+                        },
+                        "required": ["entityName", "key"]
                     }
                 },
                 {
@@ -394,8 +439,25 @@ pub async fn handle_tools_call(
                 obs.entity_name = normalized.clone();
                 obs_names.push(normalized);
             }
-            db::mcp_add_observations(conn, p.observations).await?;
+            let paths = crate::paths::RosemaryPaths::resolve();
+            let limit = std::env::var(crate::constant::ENV_OBSERVATION_LIMIT)
+                .ok()
+                .and_then(|v| v.parse::<usize>().ok())
+                .unwrap_or(paths.observation_limit.unwrap_or(50));
+            db::mcp_add_observations(conn, p.observations, limit).await?;
             serde_json::to_string(&db::mcp_open_nodes(conn, obs_names).await?)?
+        }
+        "add_truth" => {
+            let p: AddTruthParams = serde_json::from_value(args)?;
+            let entity_name = crate::normalize::normalize_key(&p.entity_name);
+            db::truth_upsert(conn, &entity_name, &p.key, &p.value).await?;
+            serde_json::to_string(&db::mcp_open_nodes(conn, vec![entity_name]).await?)?
+        }
+        "delete_truth" => {
+            let p: DeleteTruthParams = serde_json::from_value(args)?;
+            let entity_name = crate::normalize::normalize_key(&p.entity_name);
+            db::truth_delete(conn, &entity_name, &p.key).await?;
+            serde_json::to_string(&db::mcp_open_nodes(conn, vec![entity_name]).await?)?
         }
         "delete_entities" => {
             let p: DeleteEntitiesParams = serde_json::from_value(args)?;
