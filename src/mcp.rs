@@ -66,6 +66,8 @@ pub struct EntityOutput {
     pub observations: Vec<String>,
     pub truths: Vec<(String, String)>,
     pub observation_count: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub body: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

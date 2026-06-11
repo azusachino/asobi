@@ -46,6 +46,9 @@ pub async fn init_db() -> Result<(Database, Connection)> {
     conn.execute(crate::constant::SCHEMA_CREATE_MCP_TRUTHS, ())
         .await?;
 
+    conn.execute(crate::constant::SCHEMA_CREATE_MCP_SKILLS, ())
+        .await?;
+
     // Document Tier (Vectors)
     conn.execute(crate::constant::SCHEMA_CREATE_CHUNKS, ())
         .await?;
@@ -481,6 +484,7 @@ async fn load_entities_lazy(
                 observations: Vec::new(),
                 truths: entity_truths,
                 observation_count: count,
+                body: None,
             });
         }
     }
@@ -497,6 +501,7 @@ async fn load_entities_eager(
 
     let mut entity_types = HashMap::new();
     let mut observations: HashMap<String, Vec<String>> = HashMap::new();
+    let mut skill_bodies: HashMap<String, String> = HashMap::new();
     let truths = select_truths(conn, names).await?;
 
     for chunk in names.chunks(500) {
@@ -520,12 +525,20 @@ async fn load_entities_eager(
         let obs_sql =
             crate::constant::SQL_SELECT_OBSERVATIONS_IN_TEMPLATE.replace("{}", &placeholders);
 
-        let mut rows = conn.query(&obs_sql, params).await?;
+        let mut rows = conn.query(&obs_sql, params.clone()).await?;
         while let Some(row) = rows.next().await? {
             observations
                 .entry(row.get::<String>(0)?)
                 .or_default()
                 .push(row.get::<String>(1)?);
+        }
+
+        // Load skill bodies
+        let skill_sql =
+            crate::constant::SQL_SELECT_SKILL_BODIES_IN_TEMPLATE.replace("{}", &placeholders);
+        let mut rows = conn.query(&skill_sql, params).await?;
+        while let Some(row) = rows.next().await? {
+            skill_bodies.insert(row.get::<String>(0)?, row.get::<String>(1)?);
         }
     }
 
@@ -535,12 +548,14 @@ async fn load_entities_eager(
             let entity_truths = truths.get(name).cloned().unwrap_or_default();
             let entity_obs = observations.remove(name).unwrap_or_default();
             let count = entity_obs.len();
+            let body = skill_bodies.get(name).cloned();
             entities.push(crate::mcp::EntityOutput {
                 name: name.clone(),
                 entity_type: entity_type.clone(),
                 observations: entity_obs,
                 truths: entity_truths,
                 observation_count: count,
+                body,
             });
         }
     }
@@ -648,6 +663,62 @@ pub async fn select_truths(
         }
     }
 
+    Ok(results)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SkillRow {
+    pub entity_name: String,
+    pub description: String,
+    pub version: String,
+    pub source: String,
+    pub installed_at: String,
+}
+
+pub async fn skill_upsert(
+    conn: &Connection,
+    entity: &str,
+    body: &str,
+    source: &str,
+    version: &str,
+) -> Result<()> {
+    let norm_entity = crate::normalize::normalize_key(entity);
+    conn.execute(
+        crate::constant::SQL_UPSERT_SKILL,
+        libsql::params![norm_entity, body, source, version],
+    )
+    .await?;
+    Ok(())
+}
+
+pub async fn skill_body(conn: &Connection, entity: &str) -> Result<Option<String>> {
+    let norm_entity = crate::normalize::normalize_key(entity);
+    let mut rows = conn
+        .query(
+            crate::constant::SQL_SELECT_SKILL_BODY,
+            libsql::params![norm_entity],
+        )
+        .await?;
+    if let Some(row) = rows.next().await? {
+        let body: String = row.get(0)?;
+        Ok(Some(body))
+    } else {
+        Ok(None)
+    }
+}
+
+pub async fn list_skills(conn: &Connection) -> Result<Vec<SkillRow>> {
+    let mut rows = conn.query(crate::constant::SQL_LIST_SKILLS, ()).await?;
+    let mut results = Vec::new();
+    while let Some(row) = rows.next().await? {
+        results.push(SkillRow {
+            entity_name: row.get(0)?,
+            description: row.get(1)?,
+            version: row.get(2)?,
+            source: row.get(3)?,
+            installed_at: row.get(4)?,
+        });
+    }
     Ok(results)
 }
 
@@ -1130,5 +1201,89 @@ mod tests {
             entity_open.truths,
             vec![("k1".to_string(), "v1".to_string())]
         );
+    }
+
+    #[tokio::test]
+    async fn test_skill_storage_and_mcp_open_nodes() {
+        let dir = tempdir().unwrap();
+        unsafe {
+            std::env::set_var(
+                ENV_DATABASE_URL,
+                dir.path().join("test.db").to_str().unwrap(),
+            );
+        }
+        let (_db, conn) = init_db().await.unwrap();
+
+        seed_entity(&conn, "skill:test-skill", "skill", &[]).await;
+        truth_upsert(&conn, "skill:test-skill", "description", "my test skill")
+            .await
+            .unwrap();
+
+        // 1. Upsert skill
+        skill_upsert(
+            &conn,
+            "skill:test-skill",
+            "body content 1",
+            "source-1",
+            "1.0.0",
+        )
+        .await
+        .unwrap();
+
+        // 2. open-nodes should return the body
+        let graph = mcp_open_nodes(&conn, vec!["skill:test-skill".to_string()])
+            .await
+            .unwrap();
+        let entity = &graph.entities[0];
+        assert_eq!(entity.body.as_deref(), Some("body content 1"));
+
+        // 3. read-graph and search-nodes should NOT return the body
+        let graph_read = mcp_read_graph(&conn).await.unwrap();
+        assert!(graph_read.entities[0].body.is_none());
+
+        let graph_search = mcp_search_nodes(&conn, "skill").await.unwrap();
+        assert!(graph_search.entities[0].body.is_none());
+
+        // 4. Second upsert should replace the body
+        skill_upsert(
+            &conn,
+            "skill:test-skill",
+            "body content 2",
+            "source-1",
+            "1.0.1",
+        )
+        .await
+        .unwrap();
+        let graph_2 = mcp_open_nodes(&conn, vec!["skill:test-skill".to_string()])
+            .await
+            .unwrap();
+        assert_eq!(graph_2.entities[0].body.as_deref(), Some("body content 2"));
+
+        // 5. list_skills should list name + description + version + source + installed_at
+        let skills = list_skills(&conn).await.unwrap();
+        assert_eq!(skills.len(), 1);
+        assert_eq!(skills[0].entity_name, "skill:test-skill");
+        assert_eq!(skills[0].description, "my test skill");
+        assert_eq!(skills[0].version, "1.0.1");
+        assert_eq!(skills[0].source, "source-1");
+
+        // 6. delete-entities cascades skills
+        mcp_delete_entities(&conn, vec!["skill:test-skill".to_string()])
+            .await
+            .unwrap();
+        let body_after = skill_body(&conn, "skill:test-skill").await.unwrap();
+        assert!(body_after.is_none());
+
+        let count_skills: i64 = conn
+            .query("SELECT COUNT(*) FROM mcp_skills", ())
+            .await
+            .unwrap()
+            .next()
+            .await
+            .unwrap()
+            .unwrap()
+            .get(0)
+            .unwrap();
+        assert_eq!(count_skills, 0);
     }
 }
