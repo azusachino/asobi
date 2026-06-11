@@ -91,7 +91,7 @@ Rosemary looks for storage location in priority order:
 
 1. `rosemary.toml` in the current directory (project-local, checked in)
 2. `.rosemary/` directory in the current directory (project-local, gitignored)
-3. XDG paths (`~/.local/share/rosemary/`, `~/.config/rosemary/`)
+3. XDG: a single `$XDG_DATA_HOME/rosemary/` root (default `~/.local/share/rosemary/`), holding the same `{data,config,topics,caches}` subtree as the project-local layout. `XDG_DATA_HOME` is honored on every platform, macOS included.
 
 This means different projects keep separate graphs automatically — no namespace collisions between agents working in different repos.
 

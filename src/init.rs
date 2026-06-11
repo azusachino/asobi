@@ -5,8 +5,9 @@ use std::path::{Path, PathBuf};
 /// Where to set up the workspace.
 #[derive(Debug, Clone, Copy)]
 pub enum InitTarget {
-    /// XDG paths (`~/.local/share/rosemary/`, `~/.config/rosemary/`). Default
-    /// for globally installed users — no project-local files written.
+    /// XDG: a single `$XDG_DATA_HOME/rosemary/` root (default
+    /// `~/.local/share/rosemary/`). Default for globally installed users — no
+    /// project-local files written.
     Xdg,
     /// Project-local: `<cwd>/.rosemary/{data,topics,config}/` + `rosemary.toml`.
     Local,
@@ -22,9 +23,10 @@ pub struct InitReport {
 
 /// Initialise a Rosemary workspace.
 ///
-/// `InitTarget::Xdg` creates the user-level data/config/topics directories
-/// returned by the `directories` crate — on Linux this is under `~/.local/share`
-/// and `~/.config`, both owned by the invoking user (no elevation needed).
+/// `InitTarget::Xdg` creates the user-level `{data,config,topics}` directories
+/// under a single `$XDG_DATA_HOME/rosemary/` root (default
+/// `~/.local/share/rosemary/`, honoring `XDG_DATA_HOME` on every platform),
+/// all owned by the invoking user.
 ///
 /// `InitTarget::Local` writes a `rosemary.toml` and `.rosemary/` tree into
 /// `cwd`. Re-runs are idempotent in both modes.
@@ -36,14 +38,10 @@ pub fn init_workspace(target: InitTarget, cwd: &Path) -> Result<InitReport> {
 }
 
 fn init_xdg() -> Result<InitReport> {
-    let proj = directories::ProjectDirs::from("me", "azusachino", "rosemary").ok_or_else(|| {
-        anyhow::anyhow!("XDG paths unavailable on this platform; retry with `--local`")
+    let xdg = crate::paths::xdg_dirs().ok_or_else(|| {
+        anyhow::anyhow!("XDG paths unavailable ($HOME unset); retry with `--local`")
     })?;
-    let dirs = [
-        proj.data_dir().to_path_buf(),
-        proj.data_dir().join("topics"),
-        proj.config_dir().to_path_buf(),
-    ];
+    let dirs = [xdg.data_dir, xdg.topics_dir, xdg.config_dir];
     let (created, skipped) = ensure_dirs(&dirs)?;
     Ok(InitReport {
         target: InitTarget::Xdg,
@@ -129,6 +127,30 @@ mod tests {
         assert!(report.config_existed.is_some());
         assert!(report.created_dirs.is_empty());
         assert_eq!(report.skipped_dirs.len(), 3);
+    }
+
+    #[test]
+    fn xdg_creates_unified_root_under_xdg_data_home() {
+        let dir = tempdir().unwrap();
+        let data = dir.path().join("xdg-data");
+
+        let saved = std::env::var("XDG_DATA_HOME").ok();
+        unsafe {
+            std::env::set_var("XDG_DATA_HOME", &data);
+        }
+
+        let report = init_workspace(InitTarget::Xdg, dir.path()).unwrap();
+
+        match saved {
+            Some(val) => unsafe { std::env::set_var("XDG_DATA_HOME", val) },
+            None => unsafe { std::env::remove_var("XDG_DATA_HOME") },
+        }
+
+        assert!(matches!(report.target, InitTarget::Xdg));
+        let root = data.join("rosemary");
+        assert!(root.join("data").is_dir());
+        assert!(root.join("topics").is_dir());
+        assert!(root.join("config").is_dir());
     }
 
     #[test]

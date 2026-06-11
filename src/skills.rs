@@ -148,6 +148,7 @@ pub async fn install_skills_from_dir<
     version: &str,
     mode: SelectionMode,
     is_tty: bool,
+    prune: bool,
     #[cfg(feature = "documents")] vector_ctx: Option<(&crate::vector::VectorStore, &E)>,
 ) -> Result<()> {
     let mut parsed_skills = Vec::new();
@@ -201,6 +202,30 @@ pub async fn install_skills_from_dir<
 
     let selected_names = resolve_selection(&parsed_skills, mode, is_tty)?;
     let slug = derive_source_slug(source);
+
+    // Sync mode (update / install --all): drop skills previously installed from
+    // this source that are no longer present upstream (deleted or renamed),
+    // so the graph mirrors the source. `--select` stays purely additive.
+    if prune {
+        let fresh: std::collections::HashSet<String> = selected_names
+            .iter()
+            .map(|n| crate::normalize::normalize_key(&format!("skill:{}:{}", slug, n)))
+            .collect();
+        let orphans: Vec<String> = crate::db::list_skills(conn)
+            .await?
+            .into_iter()
+            .filter(|s| derive_source_slug(&s.source) == slug && !fresh.contains(&s.entity_name))
+            .map(|s| s.entity_name)
+            .collect();
+        if !orphans.is_empty() {
+            warn!(
+                "Pruning {} orphaned skill(s) from {}",
+                orphans.len(),
+                source
+            );
+            crate::db::mcp_delete_entities(conn, orphans).await?;
+        }
+    }
 
     for name in selected_names {
         let body = skill_contents
@@ -450,6 +475,7 @@ mod tests {
             &head_commit,
             SelectionMode::All,
             false,
+            true,
             #[cfg(feature = "documents")]
             None::<(
                 &crate::vector::VectorStore,
@@ -575,6 +601,7 @@ mod tests {
             &head_commit,
             SelectionMode::All,
             false,
+            true,
             Some((&store, &embedder)),
         )
         .await
@@ -593,6 +620,131 @@ mod tests {
         assert_eq!(results[0].topic_id, expected_topic_id);
         assert_eq!(results[0].title, "doc-skill");
         assert!(results[0].snippet.contains("quantum cryptography"));
+    }
+
+    #[tokio::test]
+    async fn test_sync_prunes_orphaned_skills() {
+        use tempfile::tempdir;
+        let src_dir = tempdir().unwrap();
+        let src = src_dir.path();
+
+        // Initial source with two skills.
+        std::fs::write(
+            src.join("alpha.md"),
+            "---\nname: alpha\ndescription: a\n---\nalpha body\n",
+        )
+        .unwrap();
+        std::fs::write(
+            src.join("beta.md"),
+            "---\nname: beta\ndescription: b\n---\nbeta body\n",
+        )
+        .unwrap();
+
+        let db_dir = tempdir().unwrap();
+        unsafe {
+            std::env::set_var(
+                crate::db::ENV_DATABASE_URL,
+                db_dir.path().join("test.db").to_str().unwrap(),
+            );
+        }
+        let (_db, conn) = crate::db::init_db().await.unwrap();
+
+        let source = src.to_str().unwrap();
+        let slug = derive_source_slug(source);
+
+        install_skills_from_dir(
+            &conn,
+            src,
+            source,
+            "v1",
+            SelectionMode::All,
+            false,
+            true,
+            #[cfg(feature = "documents")]
+            None::<(
+                &crate::vector::VectorStore,
+                &crate::embed::fastembed_provider::FastEmbedProvider,
+            )>,
+        )
+        .await
+        .unwrap();
+        assert_eq!(crate::db::list_skills(&conn).await.unwrap().len(), 2);
+
+        // Upstream removes `beta`; a sync (install --all) must prune it.
+        std::fs::remove_file(src.join("beta.md")).unwrap();
+
+        install_skills_from_dir(
+            &conn,
+            src,
+            source,
+            "v2",
+            SelectionMode::All,
+            false,
+            true,
+            #[cfg(feature = "documents")]
+            None::<(
+                &crate::vector::VectorStore,
+                &crate::embed::fastembed_provider::FastEmbedProvider,
+            )>,
+        )
+        .await
+        .unwrap();
+
+        let skills = crate::db::list_skills(&conn).await.unwrap();
+        assert_eq!(skills.len(), 1);
+        let alpha = crate::normalize::normalize_key(&format!("skill:{}:alpha", slug));
+        assert_eq!(skills[0].entity_name, alpha);
+        assert_eq!(skills[0].version, "v2");
+    }
+
+    #[tokio::test]
+    async fn test_select_does_not_prune() {
+        use tempfile::tempdir;
+        let src_dir = tempdir().unwrap();
+        let src = src_dir.path();
+
+        std::fs::write(
+            src.join("alpha.md"),
+            "---\nname: alpha\ndescription: a\n---\nalpha body\n",
+        )
+        .unwrap();
+        std::fs::write(
+            src.join("beta.md"),
+            "---\nname: beta\ndescription: b\n---\nbeta body\n",
+        )
+        .unwrap();
+
+        let db_dir = tempdir().unwrap();
+        unsafe {
+            std::env::set_var(
+                crate::db::ENV_DATABASE_URL,
+                db_dir.path().join("test.db").to_str().unwrap(),
+            );
+        }
+        let (_db, conn) = crate::db::init_db().await.unwrap();
+        let source = src.to_str().unwrap();
+
+        // Install only alpha, then only beta — both must survive (additive).
+        for name in ["alpha", "beta"] {
+            install_skills_from_dir(
+                &conn,
+                src,
+                source,
+                "v1",
+                SelectionMode::Select(vec![name.to_string()]),
+                false,
+                false,
+                #[cfg(feature = "documents")]
+                None::<(
+                    &crate::vector::VectorStore,
+                    &crate::embed::fastembed_provider::FastEmbedProvider,
+                )>,
+            )
+            .await
+            .unwrap();
+        }
+
+        assert_eq!(crate::db::list_skills(&conn).await.unwrap().len(), 2);
     }
 
     #[tokio::test]
@@ -693,6 +845,7 @@ mod tests {
             &head_commit,
             SelectionMode::All,
             false,
+            true,
             #[cfg(feature = "documents")]
             None::<(
                 &crate::vector::VectorStore,

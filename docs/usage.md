@@ -30,12 +30,12 @@ Run once on a new machine — defaults to user-level XDG paths:
 
 ```bash
 rosemary init
-# created  ~/.local/share/rosemary
+# created  ~/.local/share/rosemary/data
 # created  ~/.local/share/rosemary/topics
-# created  ~/.config/rosemary
+# created  ~/.local/share/rosemary/config
 ```
 
-No root or elevation needed: XDG dirs are inside `$HOME` and owned by the invoking user.
+The user-level workspace is a single `$XDG_DATA_HOME/rosemary/` root (default `~/.local/share/rosemary/`) holding the same `{data,config,topics,caches}` subtree as a project-local `.rosemary/`. `XDG_DATA_HOME` is honored on every platform — macOS included. No root or elevation needed: it lives inside `$HOME` and is owned by the invoking user.
 
 To keep a project's graph isolated and checked in alongside the code, use the local layout:
 

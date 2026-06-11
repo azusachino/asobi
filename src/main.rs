@@ -642,6 +642,10 @@ async fn main() -> Result<()> {
                     #[cfg(feature = "documents")]
                     let vector_ctx = Some((&store, embedder.as_ref()));
 
+                    // `--all` is a full sync of the source: prune skills that
+                    // vanished upstream. `--select` / interactive stay additive.
+                    let prune = matches!(mode, rosemary::skills::SelectionMode::All);
+
                     rosemary::skills::install_skills_from_dir(
                         &conn,
                         &target_path,
@@ -649,6 +653,7 @@ async fn main() -> Result<()> {
                         &version,
                         mode,
                         is_tty,
+                        prune,
                         #[cfg(feature = "documents")]
                         vector_ctx,
                     )
@@ -719,6 +724,7 @@ async fn main() -> Result<()> {
                             &version,
                             rosemary::skills::SelectionMode::All,
                             false,
+                            true,
                             #[cfg(feature = "documents")]
                             vector_ctx,
                         )

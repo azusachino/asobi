@@ -1,5 +1,17 @@
 # Changelog
 
+## v0.6.1 — XDG Layout & Skill Sync
+
+### Changed
+
+- **Unified XDG workspace**: The user-level layout now lives under a single `$XDG_DATA_HOME/rosemary/` root holding the same `{data,config,topics,caches}` subtree as a project-local `.rosemary/`, instead of splitting across `~/.local/share` and `~/.config`. `XDG_DATA_HOME` is honored on **every** platform — dropped the `directories` crate, which previously ignored XDG vars on macOS and stored data under `~/Library/Application Support` (and dumped skill clones into a shared `Application Support/caches`).
+
+### Fixed
+
+- **Skill sync prunes orphans**: `skills update` and `skills install --all` now sync — skills previously installed from a source but deleted or renamed upstream are pruned, so the graph mirrors the source. `--select` and the interactive picker remain purely additive.
+
+---
+
 ## v0.6.0 — Truths, Observation Cap, Lazy Reads, and Skills Subsystem
 
 ### New features
