@@ -14,10 +14,50 @@ pub struct RosemaryPaths {
     pub data_dir: PathBuf,
     pub config_dir: PathBuf,
     pub topics_dir: PathBuf,
+    pub cache_dir: PathBuf,
     pub observation_limit: Option<usize>,
 }
 
 pub const ENV_ROSEMARY_HOME: &str = "ROSEMARY_HOME";
+
+/// XDG base directories for the user-level Rosemary workspace. A single root
+/// (`$XDG_DATA_HOME/rosemary`, honoring the env var on every platform — macOS
+/// included, where the `directories` crate would prefer `~/Library/...`) holds
+/// the same `{data,config,topics,caches}` subtree as a project-local
+/// `.rosemary/`, so the two layouts mirror each other.
+pub struct XdgDirs {
+    pub data_dir: PathBuf,
+    pub config_dir: PathBuf,
+    pub topics_dir: PathBuf,
+    pub cache_dir: PathBuf,
+}
+
+/// Resolve `$XDG_DATA_HOME` (or its conventional `~/.local/share` fallback) on
+/// any platform. Returns `None` only when both the env var and `$HOME` are
+/// unset (e.g. a stripped CI environment).
+fn xdg_data_home() -> Option<PathBuf> {
+    if let Ok(val) = env::var("XDG_DATA_HOME")
+        && !val.trim().is_empty()
+    {
+        return Some(PathBuf::from(val.trim()));
+    }
+    env::var_os("HOME")
+        .filter(|h| !h.is_empty())
+        .map(|h| PathBuf::from(h).join(".local/share"))
+}
+
+/// XDG paths for the user-level Rosemary workspace, rooted at a single
+/// `$XDG_DATA_HOME/rosemary/` directory. `None` when `$XDG_DATA_HOME` and
+/// `$HOME` are both unset.
+pub fn xdg_dirs() -> Option<XdgDirs> {
+    let root = xdg_data_home()?.join("rosemary");
+    Some(XdgDirs {
+        data_dir: root.join("data"),
+        config_dir: root.join("config"),
+        topics_dir: root.join("topics"),
+        cache_dir: root.join("caches"),
+    })
+}
 
 impl RosemaryPaths {
     pub fn resolve() -> Self {
@@ -35,6 +75,7 @@ impl RosemaryPaths {
         if let Ok(home) = env::var(ENV_ROSEMARY_HOME) {
             let root = PathBuf::from(home);
             return Self {
+                cache_dir: root.join("caches"),
                 data_dir: root.clone(),
                 config_dir: root.clone(),
                 topics_dir: root,
@@ -55,29 +96,26 @@ impl RosemaryPaths {
                 data_dir: local_root.join("data"),
                 config_dir: local_root.join("config"),
                 topics_dir: local_root.join("topics"),
+                cache_dir: local_root.join("caches"),
                 observation_limit: None,
             };
         }
 
-        let proj_dirs = directories::ProjectDirs::from("me", "azusachino", "rosemary");
-        let data_dir = proj_dirs
-            .as_ref()
-            .map(|d| d.data_dir().to_path_buf())
-            .unwrap_or_else(|| PathBuf::from(".rosemary/data"));
-        let config_dir = proj_dirs
-            .as_ref()
-            .map(|d| d.config_dir().to_path_buf())
-            .unwrap_or_else(|| PathBuf::from(".rosemary/config"));
-        let topics_dir = proj_dirs
-            .as_ref()
-            .map(|d| d.data_dir().join("topics"))
-            .unwrap_or_else(|| PathBuf::from(".rosemary/topics"));
-
-        Self {
-            data_dir,
-            config_dir,
-            topics_dir,
-            observation_limit: None,
+        match xdg_dirs() {
+            Some(x) => Self {
+                data_dir: x.data_dir,
+                config_dir: x.config_dir,
+                topics_dir: x.topics_dir,
+                cache_dir: x.cache_dir,
+                observation_limit: None,
+            },
+            None => Self {
+                data_dir: PathBuf::from(".rosemary/data"),
+                config_dir: PathBuf::from(".rosemary/config"),
+                topics_dir: PathBuf::from(".rosemary/topics"),
+                cache_dir: PathBuf::from(".rosemary/caches"),
+                observation_limit: None,
+            },
         }
     }
 
@@ -90,10 +128,16 @@ impl RosemaryPaths {
                 anchor.join(raw)
             }
         };
+        let data_dir = resolve(conf.data_dir, ".rosemary/data");
+        let cache_dir = data_dir
+            .parent()
+            .map(|p| p.join("caches"))
+            .unwrap_or_else(|| PathBuf::from(".rosemary/caches"));
         Self {
-            data_dir: resolve(conf.data_dir, ".rosemary/data"),
             config_dir: resolve(conf.config_dir, ".rosemary/config"),
             topics_dir: resolve(conf.topics_dir, ".rosemary/topics"),
+            data_dir,
+            cache_dir,
             observation_limit: conf.observation_limit,
         }
     }
@@ -103,10 +147,7 @@ impl RosemaryPaths {
     }
 
     pub fn caches_dir(&self) -> PathBuf {
-        self.data_dir
-            .parent()
-            .map(|p| p.join("caches"))
-            .unwrap_or_else(|| PathBuf::from(".rosemary/caches"))
+        self.cache_dir.clone()
     }
 }
 
@@ -201,5 +242,40 @@ mod tests {
         }
 
         assert_eq!(paths.data_dir, home);
+    }
+
+    #[test]
+    fn xdg_data_home_drives_unified_root_on_all_platforms() {
+        let dir = tempdir().unwrap();
+        let data = dir.path().join("xdg-data");
+
+        let saved: Vec<(&str, Option<String>)> = [ENV_ROSEMARY_HOME, "XDG_DATA_HOME"]
+            .iter()
+            .map(|k| (*k, env::var(*k).ok()))
+            .collect();
+
+        unsafe {
+            env::remove_var(ENV_ROSEMARY_HOME);
+            env::set_var("XDG_DATA_HOME", &data);
+        }
+
+        // Resolve from a dir with no rosemary.toml / .rosemary upward.
+        let probe = dir.path().join("probe");
+        std::fs::create_dir_all(&probe).unwrap();
+        let paths = RosemaryPaths::resolve_from(&probe);
+
+        for (k, v) in saved {
+            match v {
+                Some(val) => unsafe { env::set_var(k, val) },
+                None => unsafe { env::remove_var(k) },
+            }
+        }
+
+        // Single root mirrors the project-local `.rosemary/{...}` layout.
+        let root = data.join("rosemary");
+        assert_eq!(paths.data_dir, root.join("data"));
+        assert_eq!(paths.config_dir, root.join("config"));
+        assert_eq!(paths.topics_dir, root.join("topics"));
+        assert_eq!(paths.caches_dir(), root.join("caches"));
     }
 }
