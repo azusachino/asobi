@@ -2,7 +2,7 @@
 
 Date: 2026-06-11
 Spec: [`2026-06-11-skills-and-truths.md`](./2026-06-11-skills-and-truths.md)
-Tracked in rosemary as epic `rosemary:skills-truths` (task entities `…:task-N`).
+Tracked in miku as epic `miku:skills-truths` (task entities `…:task-N`).
 
 ## How to work this plan (for worker agents)
 
@@ -14,9 +14,9 @@ Tracked in rosemary as epic `rosemary:skills-truths` (task entities `…:task-N`
 - **Per task**: run `make check` (fmt + clippy `-D warnings` + test + scripts) before
   handing back. Record results in the task entity (`impl:` + `status: REVIEW`).
 - **Test pattern**: inline `#[cfg(test)]` module in the touched source file, following the
-  existing `db.rs` tests — set `ROSEMARY_DATABASE_URL` to a tempfile, `init_db().await`,
+  existing `db.rs` tests — set `MIKU_DATABASE_URL` to a tempfile, `init_db().await`,
   exercise the function. Cross-cutting CLI behavior goes in `tests/`.
-- **Fetch your task**: `rosemary open-nodes "rosemary:skills-truths:task-N"` — the `title:`
+- **Fetch your task**: `miku open-nodes "miku:skills-truths:task-N"` — the `title:`
   observation carries files, plan, and the test to write.
 
 ## Dependency order
@@ -69,7 +69,7 @@ MCP change (the vec already exists).
   updated_at=CURRENT_TIMESTAMP`), delete-by-key, select-by-entity, select-in-template.
 - `db::truth_upsert(conn, entity, key, value)`, `db::truth_delete(conn, entity, key)`,
   `db::select_truths(conn, &[names]) -> HashMap<String, Vec<(String,String)>>`.
-- CLI: `rosemary add-truth <entity> <key> <value>`, `rosemary delete-truth <entity> <key>`.
+- CLI: `miku add-truth <entity> <key> <value>`, `miku delete-truth <entity> <key>`.
 - Truths are **not** FTS-indexed.
 
 **Done when**: upsert/delete/cascade tests pass; CLI works; `make check` green.
@@ -78,7 +78,7 @@ MCP change (the vec already exists).
 
 ## task-3 — Observation cap
 
-**Files**: `src/paths.rs` (`RosemaryConfig` at :6 — add `observation_limit: Option<usize>`),
+**Files**: `src/paths.rs` (`MikuConfig` at :6 — add `observation_limit: Option<usize>`),
 `src/constant.rs` (env const + evict SQL), `src/db.rs` (`mcp_add_observations` at :143).
 
 **Tests first** (inline in `db.rs`):
@@ -88,8 +88,8 @@ MCP change (the vec already exists).
 - Count after eviction reflects the cap.
 
 **Implement**:
-- Resolution order: `RosemaryConfig.observation_limit` → env `ROSEMARY_OBSERVATION_LIMIT`
-  → default `50`. Add `ROSEMARY_OBSERVATION_LIMIT` const; thread the resolved limit into
+- Resolution order: `MikuConfig.observation_limit` → env `MIKU_OBSERVATION_LIMIT`
+  → default `50`. Add `MIKU_OBSERVATION_LIMIT` const; thread the resolved limit into
   `mcp_add_observations`.
 - In the existing insert transaction (`mcp_add_observations` already uses a tx), after
   inserting, if limit > 0 delete oldest rows for that entity beyond the limit:
@@ -169,9 +169,9 @@ group), `Cargo.toml` (move `walkdir` to base deps).
   created with `git init` in a tempdir.
 
 **Implement**:
-- `rosemary skills` (no subcommand) → `list_skills`, grouped by source: `skill:<slug>:<name>
+- `miku skills` (no subcommand) → `list_skills`, grouped by source: `skill:<slug>:<name>
   · <description> · <version>`. Lazy.
-- `rosemary skills install <source> [--all|--select <name>...]`:
+- `miku skills install <source> [--all|--select <name>...]`:
   1. `git clone --depth 1 <source>` → tempdir (shell out; bail with context on failure).
   2. Walk `*.md` (walkdir), parse frontmatter.
   3. Resolve selection (TTY multiselect, else `--all`/`--select`, else error).
@@ -179,9 +179,9 @@ group), `Cargo.toml` (move `walkdir` to base deps).
   5. Per chosen skill, one transaction: upsert entity (`type:"skill"`) + truths
      (`description`, `source`, `version`, `installed`) + `mcp_skills` row.
   6. Remove tempdir (RAII guard so it cleans on error too).
-- `rosemary skills update [source]`: re-clone (all sources, or the named slug/url), refresh
+- `miku skills update [source]`: re-clone (all sources, or the named slug/url), refresh
   body + bump `version` truth and row.
-- `rosemary skills remove <name|source>`: delete entity by fully-qualified name, or all
+- `miku skills remove <name|source>`: delete entity by fully-qualified name, or all
   skills under a source slug (body cascades).
 
 **Done when**: parse/slug/naming/selection unit tests pass; install→`open-nodes` round-trips
@@ -193,7 +193,7 @@ a skill body; `make check` green (base build, no `documents`).
 
 **Files**: `src/skills.rs` (feature-gated), `src/ingest.rs`/`src/vector.rs` reuse.
 
-**Tests first**: with `--features documents`, after install, `rosemary query "<skill topic>"`
+**Tests first**: with `--features documents`, after install, `miku query "<skill topic>"`
 surfaces the skill.
 
 **Implement**: behind `#[cfg(feature = "documents")]`, chunk + embed skill bodies into the
@@ -226,7 +226,7 @@ serialized entity output matches the new `EntityOutput` shape.
 
 Update the CLI surface lists, document `add-truth`/`delete-truth`/`skills *`, the lazy-vs-
 eager read contract, and the observation cap config. **Out of repo** (note only): the
-rosemary `SKILL.md` plugin workflows should be updated to write session/task state as
+miku `SKILL.md` plugin workflows should be updated to write session/task state as
 truths and to fetch skills via `open-nodes` — flag for a follow-up in the plugin repo.
 
 **Done when**: docs reflect reality; `make check` green.
@@ -235,6 +235,6 @@ truths and to fetch skills via `open-nodes` — flag for a follow-up in the plug
 
 ## Epic close
 
-When all tasks are `DONE`, promote durable lessons into the `rosemary` project entity
+When all tasks are `DONE`, promote durable lessons into the `miku` project entity
 (e.g. "session/task state is truths, not observations"; "observations are capped append-log
-history"), mark `rosemary:skills-truths` `status: DONE`, and leave it queryable.
+history"), mark `miku:skills-truths` `status: DONE`, and leave it queryable.

@@ -8,29 +8,25 @@ fn test_cli_add_observations_multi_arg() {
     let db_path = dir.path().join("test.db");
     let db_path_str = db_path.to_str().unwrap();
 
-    // 2. Find the rosemary binary. We assume it is compiled at target/debug/rosemary
+    // 2. Find the miku binary. We assume it is compiled at target/debug/miku
     let mut bin_path = std::env::current_exe().unwrap();
-    // Navigate up from target/debug/deps/cli_add_observations_test-XXXX to target/debug/rosemary
+    // Navigate up from target/debug/deps/cli_add_observations_test-XXXX to target/debug/miku
     bin_path.pop(); // remove filename
     if bin_path.ends_with("deps") {
         bin_path.pop(); // remove deps
     }
-    bin_path.push("rosemary");
+    bin_path.push("miku");
 
-    assert!(
-        bin_path.exists(),
-        "Rosemary binary not found at {:?}",
-        bin_path
-    );
+    assert!(bin_path.exists(), "Miku binary not found at {:?}", bin_path);
 
     // 3. Create entity 'foo'
     let status = Command::new(&bin_path)
         .arg("create-entities")
         .arg("foo")
         .arg("concept")
-        .env("ROSEMARY_DATABASE_URL", db_path_str)
+        .env("MIKU_DATABASE_URL", db_path_str)
         .status()
-        .expect("failed to execute rosemary");
+        .expect("failed to execute miku");
     assert!(status.success(), "Failed to create entity 'foo'");
 
     // 4. Add multiple observations
@@ -40,9 +36,9 @@ fn test_cli_add_observations_multi_arg() {
         .arg("a")
         .arg("b")
         .arg("c")
-        .env("ROSEMARY_DATABASE_URL", db_path_str)
+        .env("MIKU_DATABASE_URL", db_path_str)
         .output()
-        .expect("failed to execute rosemary");
+        .expect("failed to execute miku");
 
     assert!(
         output.status.success(),
@@ -55,9 +51,9 @@ fn test_cli_add_observations_multi_arg() {
     let output = Command::new(&bin_path)
         .arg("open-nodes")
         .arg("foo")
-        .env("ROSEMARY_DATABASE_URL", db_path_str)
+        .env("MIKU_DATABASE_URL", db_path_str)
         .output()
-        .expect("failed to execute rosemary");
+        .expect("failed to execute miku");
 
     assert!(output.status.success());
     let stdout_str = String::from_utf8(output.stdout).unwrap();

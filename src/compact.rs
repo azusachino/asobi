@@ -13,7 +13,7 @@ pub async fn sync_graph_to_markdown(
     store: &VectorStore,
     embedder: &impl crate::embed::EmbeddingProvider,
 ) -> Result<usize> {
-    let paths = crate::paths::RosemaryPaths::resolve();
+    let paths = crate::paths::MikuPaths::resolve();
     let topics_dir = paths.topics_dir;
     if !topics_dir.exists() {
         std::fs::create_dir_all(&topics_dir)?;

@@ -1,4 +1,4 @@
-use rosemary::skills::{derive_source_slug, parse_frontmatter};
+use miku::skills::{derive_source_slug, parse_frontmatter};
 use std::time::Instant;
 
 fn main() {

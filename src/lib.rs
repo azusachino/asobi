@@ -1,4 +1,4 @@
-//! Rosemary — Knowledge Graph & Document Memory
+//! Miku — Knowledge Graph & Document Memory
 
 // Graph + optional Document/Vector (libSQL) tiers
 pub mod backup;

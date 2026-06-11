@@ -1,5 +1,5 @@
-use rosemary::db::{ENV_DATABASE_URL, init_db, mcp_create_entities, mcp_read_graph};
-use rosemary::mcp::EntityInput;
+use miku::db::{ENV_DATABASE_URL, init_db, mcp_create_entities, mcp_read_graph};
+use miku::mcp::EntityInput;
 use tempfile::tempdir;
 
 #[tokio::test]

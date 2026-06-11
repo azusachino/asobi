@@ -1,0 +1,3 @@
+data_dir = ".miku/data"
+config_dir = ".miku/config"
+topics_dir = ".miku/topics"

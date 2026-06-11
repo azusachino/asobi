@@ -1,4 +1,4 @@
-use rosemary::normalize::normalize_key;
+use miku::normalize::normalize_key;
 use std::time::Instant;
 
 fn main() {
