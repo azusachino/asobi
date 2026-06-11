@@ -1,6 +1,6 @@
 [package]
-name = "miku"
-version = "0.7.0"
+name = "asobi"
+version = "0.0.1"
 edition = "2024"
 authors = ["haru <azusachino@proton.me>"]
 description = "A persistent, project-local knowledge graph CLI for AI agents."
@@ -18,6 +18,15 @@ exclude = [
   "memory_export.json",
   "tools_list.json",
 ]
+
+# Crate publishes as `asobi`; the library + installed binary stay `miku`.
+[lib]
+name = "miku"
+path = "src/lib.rs"
+
+[[bin]]
+name = "miku"
+path = "src/main.rs"
 
 [features]
 default = []
