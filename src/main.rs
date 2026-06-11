@@ -317,12 +317,18 @@ async fn main() -> Result<()> {
             info!("Relation created.");
         }
         Commands::AddObservations { name, contents } => {
+            let paths = rosemary::paths::RosemaryPaths::resolve();
+            let limit = std::env::var(rosemary::constant::ENV_OBSERVATION_LIMIT)
+                .ok()
+                .and_then(|v| v.parse::<usize>().ok())
+                .unwrap_or(paths.observation_limit.unwrap_or(50));
             rosemary::db::mcp_add_observations(
                 &conn,
                 vec![rosemary::mcp::ObservationInput {
                     entity_name: name,
                     contents,
                 }],
+                limit,
             )
             .await?;
             info!("Observation added.");

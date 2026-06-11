@@ -7,12 +7,14 @@ pub struct RosemaryConfig {
     pub data_dir: Option<PathBuf>,
     pub config_dir: Option<PathBuf>,
     pub topics_dir: Option<PathBuf>,
+    pub observation_limit: Option<usize>,
 }
 
 pub struct RosemaryPaths {
     pub data_dir: PathBuf,
     pub config_dir: PathBuf,
     pub topics_dir: PathBuf,
+    pub observation_limit: Option<usize>,
 }
 
 pub const ENV_ROSEMARY_HOME: &str = "ROSEMARY_HOME";
@@ -36,6 +38,7 @@ impl RosemaryPaths {
                 data_dir: root.clone(),
                 config_dir: root.clone(),
                 topics_dir: root,
+                observation_limit: None,
             };
         }
 
@@ -52,6 +55,7 @@ impl RosemaryPaths {
                 data_dir: local_root.join("data"),
                 config_dir: local_root.join("config"),
                 topics_dir: local_root.join("topics"),
+                observation_limit: None,
             };
         }
 
@@ -73,6 +77,7 @@ impl RosemaryPaths {
             data_dir,
             config_dir,
             topics_dir,
+            observation_limit: None,
         }
     }
 
@@ -89,6 +94,7 @@ impl RosemaryPaths {
             data_dir: resolve(conf.data_dir, ".rosemary/data"),
             config_dir: resolve(conf.config_dir, ".rosemary/config"),
             topics_dir: resolve(conf.topics_dir, ".rosemary/topics"),
+            observation_limit: conf.observation_limit,
         }
     }
 

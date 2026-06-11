@@ -146,6 +146,7 @@ pub async fn mcp_create_entities(
 pub async fn mcp_add_observations(
     conn: &Connection,
     observations: Vec<crate::mcp::ObservationInput>,
+    limit: usize,
 ) -> Result<()> {
     let tx = conn.transaction().await?;
     for mut obs_batch in observations {
@@ -158,6 +159,13 @@ pub async fn mcp_add_observations(
                     obs_batch.entity_name.clone(),
                     content
                 ],
+            )
+            .await?;
+        }
+        if limit > 0 {
+            tx.execute(
+                crate::constant::SQL_EVICT_OBSERVATIONS,
+                libsql::params![obs_batch.entity_name.clone(), limit as i64],
             )
             .await?;
         }
@@ -930,5 +938,74 @@ mod tests {
             .unwrap();
         let count: i64 = rows.next().await.unwrap().unwrap().get(0).unwrap();
         assert_eq!(count, 0);
+    }
+
+    #[tokio::test]
+    async fn test_observation_limit_evicts_oldest() {
+        let dir = tempdir().unwrap();
+        unsafe {
+            std::env::set_var(
+                ENV_DATABASE_URL,
+                dir.path().join("test.db").to_str().unwrap(),
+            );
+        }
+        let (_db, conn) = init_db().await.unwrap();
+
+        seed_entity(&conn, "test-entity", "concept", &[]).await;
+
+        let inputs = vec![crate::mcp::ObservationInput {
+            entity_name: "test-entity".to_string(),
+            contents: vec![
+                "obs1".to_string(),
+                "obs2".to_string(),
+                "obs3".to_string(),
+                "obs4".to_string(),
+                "obs5".to_string(),
+            ],
+        }];
+        mcp_add_observations(&conn, inputs, 3).await.unwrap();
+
+        let graph = mcp_open_nodes(&conn, vec!["test-entity".to_string()])
+            .await
+            .unwrap();
+        let entity = &graph.entities[0];
+        let mut obs = entity.observations.clone();
+        obs.sort();
+        assert_eq!(
+            obs,
+            vec!["obs3".to_string(), "obs4".to_string(), "obs5".to_string(),]
+        );
+    }
+
+    #[tokio::test]
+    async fn test_observation_limit_zero_is_unbounded() {
+        let dir = tempdir().unwrap();
+        unsafe {
+            std::env::set_var(
+                ENV_DATABASE_URL,
+                dir.path().join("test.db").to_str().unwrap(),
+            );
+        }
+        let (_db, conn) = init_db().await.unwrap();
+
+        seed_entity(&conn, "test-entity", "concept", &[]).await;
+
+        let inputs = vec![crate::mcp::ObservationInput {
+            entity_name: "test-entity".to_string(),
+            contents: vec![
+                "obs1".to_string(),
+                "obs2".to_string(),
+                "obs3".to_string(),
+                "obs4".to_string(),
+                "obs5".to_string(),
+            ],
+        }];
+        mcp_add_observations(&conn, inputs, 0).await.unwrap();
+
+        let graph = mcp_open_nodes(&conn, vec!["test-entity".to_string()])
+            .await
+            .unwrap();
+        let entity = &graph.entities[0];
+        assert_eq!(entity.observations.len(), 5);
     }
 }

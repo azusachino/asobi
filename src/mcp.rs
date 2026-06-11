@@ -394,7 +394,12 @@ pub async fn handle_tools_call(
                 obs.entity_name = normalized.clone();
                 obs_names.push(normalized);
             }
-            db::mcp_add_observations(conn, p.observations).await?;
+            let paths = crate::paths::RosemaryPaths::resolve();
+            let limit = std::env::var(crate::constant::ENV_OBSERVATION_LIMIT)
+                .ok()
+                .and_then(|v| v.parse::<usize>().ok())
+                .unwrap_or(paths.observation_limit.unwrap_or(50));
+            db::mcp_add_observations(conn, p.observations, limit).await?;
             serde_json::to_string(&db::mcp_open_nodes(conn, obs_names).await?)?
         }
         "delete_entities" => {

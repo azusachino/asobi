@@ -1,5 +1,6 @@
 // Environment Variables
 pub const ENV_DATABASE_URL: &str = "ROSEMARY_DATABASE_URL";
+pub const ENV_OBSERVATION_LIMIT: &str = "ROSEMARY_OBSERVATION_LIMIT";
 
 // Pragmas
 pub const PRAGMA_FOREIGN_KEYS_ON: &str = "PRAGMA foreign_keys = ON";
@@ -129,6 +130,8 @@ pub const SQL_DELETE_OBSERVATION: &str =
     "DELETE FROM mcp_observations WHERE entity_name = ?1 AND content = ?2";
 pub const SQL_DELETE_RELATION: &str =
     "DELETE FROM mcp_relations WHERE from_entity = ?1 AND to_entity = ?2 AND relation_type = ?3";
+pub const SQL_EVICT_OBSERVATIONS: &str = "DELETE FROM mcp_observations WHERE entity_name = ?1 AND rowid NOT IN \
+     (SELECT rowid FROM mcp_observations WHERE entity_name = ?1 ORDER BY rowid DESC LIMIT ?2)";
 
 pub const SQL_UPSERT_TRUTH: &str = "INSERT INTO mcp_truths (entity_name, key, value) VALUES (?1, ?2, ?3) \
      ON CONFLICT(entity_name, key) DO UPDATE SET value=excluded.value, updated_at=CURRENT_TIMESTAMP";
