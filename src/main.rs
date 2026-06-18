@@ -91,7 +91,8 @@ enum Commands {
     Graph,
     /// Search for nodes
     Search {
-        query: String,
+        /// Search query terms
+        query: Option<String>,
         /// Maximum number of matched nodes to return
         #[arg(long, default_value_t = asobi::db::DEFAULT_SEARCH_LIMIT)]
         limit: usize,
@@ -577,8 +578,10 @@ async fn main() -> Result<()> {
                     anyhow::bail!("Invalid filter format: '{}'. Expected KEY=VALUE.", f);
                 }
             }
+            let query_str = query.unwrap_or_default();
             let graph =
-                asobi::db::search_nodes_with_limit(&conn, &query, limit, &parsed_filters).await?;
+                asobi::db::search_nodes_with_limit(&conn, &query_str, limit, &parsed_filters)
+                    .await?;
             println!("{}", serde_json::to_string_pretty(&graph)?);
         }
         Commands::Show { names } => {
