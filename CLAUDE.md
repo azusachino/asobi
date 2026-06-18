@@ -24,3 +24,12 @@ Graph: `create-entities`, `add-observations`, `create-relations`, `delete-*`, `r
 ## Conventions
 
 Standard Rust naming; `anyhow` at boundaries, `thiserror` in core. Tests single-threaded (shared `ASOBI_DATABASE_URL`), embedded in modules. Formatters: `rustfmt`, `prettier` (JSON/YAML), `ruff`. No clippy warnings, no skipped formatters.
+
+## Bash hygiene (HARD RULE)
+
+Run **one plain command per Bash call.** No ceremony.
+
+- **Never `cd`** — the working directory is already the repo root and persists between calls.
+- **Never** chain `>file 2>&1; echo $status; tail …` or similar `&&`/`;` pipelines just to inspect output. That pattern triggers a permission prompt every time. Run the command bare (e.g. `make check`); the harness surfaces the exit code, and the full output is tee'd to a log path you can open with the **Read tool**.
+- **Never use `echo`** for section headers/labels, and **never** `cat`/`head`/`tail`/`sed`/`awk` to read files — use the **Read** tool. Use `rg`/`fd` for search.
+- Use `rtk proxy <cmd>` only when you genuinely need raw, unfiltered tool output.
