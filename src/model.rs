@@ -1,7 +1,7 @@
 //! Domain types for the knowledge graph, shared across `db`, `main`, and
 //! `backup`. These are the canonical in-memory shapes for graph I/O; the JSON
 //! field names (camelCase) are the stable serialization contract for
-//! `read-graph` / `search-nodes` / `open-nodes` / `export`.
+//! `graph` / `search` / `show` / `export`.
 
 use serde::{Deserialize, Serialize};
 

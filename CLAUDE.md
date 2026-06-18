@@ -15,7 +15,7 @@ Rust (edition 2024) on `tokio`; `clap` CLI, `tracing` logs (stderr, `RUST_LOG`).
 
 ## CLI
 
-Graph: `create-entities`, `add-observations`, `create-relations`, `delete-*`, `read-graph`, `search-nodes`, `open-nodes`. Truths: `add-truth`, `delete-truth`. Plus `skills`, `ingest`, `query`, `compact`, `init`, `backup`, `restore`. Full reference: [`SKILL.md`](SKILL.md), [`docs/usage.md`](docs/usage.md).
+Graph: `new`, `obs`, `link`, `rm`, `rm-obs`, `unlink`, `graph`, `search`, `show`. Truths: `truth`, `rm-truth`. Plus `skills`, `ingest`, `query`, `compact`, `init`, `backup`, `restore`. Full reference: [`SKILL.md`](SKILL.md), [`docs/usage.md`](docs/usage.md).
 
 ## Make
 

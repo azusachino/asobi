@@ -1308,7 +1308,7 @@ mod tests {
         assert_eq!(entity_read.truths.len(), 1);
         assert_eq!(entity_read.truths.get("k1").unwrap(), "v1");
 
-        // 2. Test search-nodes (should be lazy)
+        // 2. Test search (should be lazy)
         let graph_search = search_nodes(&conn, "test").await.unwrap();
         let entity_search = &graph_search.entities[0];
         assert!(entity_search.observations.is_empty());
@@ -1316,7 +1316,7 @@ mod tests {
         assert_eq!(entity_search.truths.len(), 1);
         assert_eq!(entity_search.truths.get("k1").unwrap(), "v1");
 
-        // 3. Test open-nodes (should be eager)
+        // 3. Test show (should be eager)
         let graph_open = open_nodes(&conn, vec!["test-entity".to_string()])
             .await
             .unwrap();
@@ -1328,7 +1328,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_skill_storage_and_open_nodes() {
+    async fn test_skill_storage_and_show() {
         let dir = tempdir().unwrap();
         unsafe {
             std::env::set_var(
@@ -1354,14 +1354,14 @@ mod tests {
         .await
         .unwrap();
 
-        // 2. open-nodes should return the body
+        // 2. show should return the body
         let graph = open_nodes(&conn, vec!["skill:test-skill".to_string()])
             .await
             .unwrap();
         let entity = &graph.entities[0];
         assert_eq!(entity.body.as_deref(), Some("body content 1"));
 
-        // 3. read-graph and search-nodes should NOT return the body
+        // 3. graph and search should NOT return the body
         let graph_read = read_graph(&conn).await.unwrap();
         assert!(graph_read.entities[0].body.is_none());
 

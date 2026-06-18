@@ -39,8 +39,8 @@ enum Commands {
     /// Create new entities in the knowledge graph.
     ///
     /// Accepts one or more `NAME TYPE` pairs:
-    /// `create-entities A task B concept` creates two entities.
-    CreateEntities {
+    /// `new A task B concept` creates two entities.
+    New {
         /// Flat list of `NAME TYPE` pairs (count must be a multiple of 2)
         #[arg(num_args = 2.., value_names = ["NAME", "TYPE"])]
         pairs: Vec<String>,
@@ -48,47 +48,47 @@ enum Commands {
     /// Create relations between entities.
     ///
     /// Accepts one or more `FROM TO TYPE` triples:
-    /// `create-relations A B uses C D blocks` creates two relations.
-    CreateRelations {
+    /// `link A B uses C D blocks` creates two relations.
+    Link {
         /// Flat list of `FROM TO TYPE` triples (count must be a multiple of 3)
         #[arg(num_args = 3.., value_names = ["FROM", "TO", "TYPE"])]
         triples: Vec<String>,
     },
     /// Add observations to existing entities
-    AddObservations {
+    Obs {
         name: String,
         #[arg(num_args = 1..)]
         contents: Vec<String>,
     },
     /// Add or update a truth for an entity
-    AddTruth {
+    Truth {
         name: String,
         key: String,
         value: String,
     },
     /// Delete a specific truth for an entity
-    DeleteTruth { name: String, key: String },
+    RmTruth { name: String, key: String },
     /// Delete entities and their relations
-    DeleteEntities { names: Vec<String> },
+    Rm { names: Vec<String> },
     /// Delete specific observations
-    DeleteObservations { name: String, content: String },
+    RmObs { name: String, content: String },
     /// Delete specific relations
-    DeleteRelations {
+    Unlink {
         from: String,
         to: String,
         relation_type: String,
     },
     /// Read the entire knowledge graph
-    ReadGraph,
+    Graph,
     /// Search for nodes
-    SearchNodes {
+    Search {
         query: String,
         /// Maximum number of matched nodes to return
         #[arg(long, default_value_t = asobi::db::DEFAULT_SEARCH_LIMIT)]
         limit: usize,
     },
     /// Retrieve specific nodes by name
-    OpenNodes { names: Vec<String> },
+    Show { names: Vec<String> },
     /// Merge near-duplicate topics, prune sessions, and sync Graph to MD
     #[cfg(feature = "documents")]
     Compact {
@@ -347,7 +347,7 @@ async fn main() -> Result<()> {
     let (db, conn) = asobi::db::init_db().await?;
 
     // Vector store + embedder are only initialised for commands that need them.
-    // Graph-only operations (create-entities, read-graph, etc.) skip the heavy
+    // Graph-only operations (new, graph, etc.) skip the heavy
     // fastembed model load entirely.
     if needs_vector(&cli.command) {
         #[cfg(feature = "documents")]
@@ -412,10 +412,10 @@ async fn main() -> Result<()> {
 
     let json = cli.json;
     match cli.command {
-        Commands::CreateEntities { pairs } => {
+        Commands::New { pairs } => {
             if pairs.is_empty() || pairs.len() % 2 != 0 {
                 anyhow::bail!(
-                    "create-entities expects one or more `NAME TYPE` pairs (got {} arguments)",
+                    "new expects one or more `NAME TYPE` pairs (got {} arguments)",
                     pairs.len()
                 );
             }
@@ -434,10 +434,10 @@ async fn main() -> Result<()> {
                 emit_nodes(&conn, names).await?;
             }
         }
-        Commands::CreateRelations { triples } => {
+        Commands::Link { triples } => {
             if triples.is_empty() || triples.len() % 3 != 0 {
                 anyhow::bail!(
-                    "create-relations expects one or more `FROM TO TYPE` triples (got {} arguments)",
+                    "link expects one or more `FROM TO TYPE` triples (got {} arguments)",
                     triples.len()
                 );
             }
@@ -460,7 +460,7 @@ async fn main() -> Result<()> {
                 emit_nodes(&conn, involved).await?;
             }
         }
-        Commands::AddObservations { name, contents } => {
+        Commands::Obs { name, contents } => {
             let paths = asobi::paths::AsobiPaths::resolve();
             let limit = std::env::var(asobi::constant::ENV_OBSERVATION_LIMIT)
                 .ok()
@@ -480,21 +480,21 @@ async fn main() -> Result<()> {
                 emit_nodes(&conn, vec![name]).await?;
             }
         }
-        Commands::AddTruth { name, key, value } => {
+        Commands::Truth { name, key, value } => {
             asobi::db::truth_upsert(&conn, &name, &key, &value).await?;
             info!("Truth added.");
             if json {
                 emit_nodes(&conn, vec![name]).await?;
             }
         }
-        Commands::DeleteTruth { name, key } => {
+        Commands::RmTruth { name, key } => {
             asobi::db::truth_delete(&conn, &name, &key).await?;
             info!("Truth deleted.");
             if json {
                 emit_nodes(&conn, vec![name]).await?;
             }
         }
-        Commands::DeleteEntities { names } => {
+        Commands::Rm { names } => {
             let deleted = names.clone();
             asobi::db::delete_entities(&conn, names).await?;
             info!("Entities deleted.");
@@ -505,7 +505,7 @@ async fn main() -> Result<()> {
                 );
             }
         }
-        Commands::DeleteObservations { name, content } => {
+        Commands::RmObs { name, content } => {
             asobi::db::delete_observations(
                 &conn,
                 vec![asobi::model::ObservationDeletion {
@@ -519,7 +519,7 @@ async fn main() -> Result<()> {
                 emit_nodes(&conn, vec![name]).await?;
             }
         }
-        Commands::DeleteRelations {
+        Commands::Unlink {
             from,
             to,
             relation_type,
@@ -538,15 +538,15 @@ async fn main() -> Result<()> {
                 emit_nodes(&conn, vec![from, to]).await?;
             }
         }
-        Commands::ReadGraph => {
+        Commands::Graph => {
             let graph = asobi::db::read_graph(&conn).await?;
             println!("{}", serde_json::to_string_pretty(&graph)?);
         }
-        Commands::SearchNodes { query, limit } => {
+        Commands::Search { query, limit } => {
             let graph = asobi::db::search_nodes_with_limit(&conn, &query, limit).await?;
             println!("{}", serde_json::to_string_pretty(&graph)?);
         }
-        Commands::OpenNodes { names } => {
+        Commands::Show { names } => {
             let graph = asobi::db::open_nodes(&conn, names).await?;
             println!("{}", serde_json::to_string_pretty(&graph)?);
         }
@@ -840,8 +840,8 @@ async fn main() -> Result<()> {
 
 /// Print the named entities (and the relations among them) as pretty JSON to
 /// stdout — the `--json` echo after a mutation, so a caller can confirm the
-/// write without a second `open-nodes` round-trip. Names are normalized inside
-/// ``open_nodes`, so raw user input matches what was just stored.
+/// write without a second `show` round-trip. Names are normalized inside
+/// `open_nodes`, so raw user input matches what was just stored.
 async fn emit_nodes(conn: &libsql::Connection, names: Vec<String>) -> Result<()> {
     let graph = asobi::db::open_nodes(conn, names).await?;
     println!("{}", serde_json::to_string_pretty(&graph)?);

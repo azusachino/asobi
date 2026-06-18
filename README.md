@@ -6,8 +6,8 @@ Asobi is a persistent, project-local knowledge graph CLI for AI agents. Agents u
 
 - **Knowledge graph** — entities, append-only (capped) observations, and directed relations.
 - **Truths** — durable `key→value` facts per entity for current state (`status`, `version`).
-- **Fast search** — `search-nodes` over FTS5 (porter stemming + BM25) with a substring fallback.
-- **Lazy reads** — `read-graph`/`search-nodes` return truths + counts; `open-nodes` returns the full body. Cheap to load, cheap on tokens.
+- **Fast search** — `search` over FTS5 (porter stemming + BM25) with a substring fallback.
+- **Lazy reads** — `graph`/`search` return truths + counts; `show` returns the full body. Cheap to load, cheap on tokens.
 - **Skills** — install reusable agent instructions from a git repo or local path.
 - **Document tier** (optional, `--features documents`) — `ingest` + semantic `query` over Markdown.
 
@@ -43,16 +43,16 @@ Or build locally with `make build` (graph CLI) or `make build-documents` (adds `
 asobi init                  # one-time setup (XDG); use --local for a project-scoped graph
 
 # Store and recall context (names are hierarchical, e.g. ame:mobile-support:task-1)
-asobi add-observations "my-project" "Decided to use WAL mode for concurrency"
-asobi add-truth "my-project" "status" "in-progress"
-asobi search-nodes "WAL"
-asobi open-nodes "my-project"
+asobi obs "my-project" "Decided to use WAL mode for concurrency"
+asobi truth "my-project" "status" "in-progress"
+asobi search "WAL"
+asobi show "my-project"
 ```
 
 ## Common Commands
 
-- `asobi read-graph` / `search-nodes <q>` / `open-nodes <name>...` — read the graph.
-- `asobi add-truth <name> <key> <value>` / `delete-truth <name> <key>` — manage truths.
+- `asobi graph` / `search <q>` / `show <name>...` — read the graph.
+- `asobi truth <name> <key> <value>` / `rm-truth <name> <key>` — manage truths.
 - `asobi skills install <src> --all` / `update` / `skills` / `skills show <name>` — manage skills (`--all` and `update` sync, pruning skills dropped upstream; `--select` is additive).
 - `asobi stats` / `export -o graph.json` / `import graph.json` / `reset` — inspect & manage.
 

@@ -85,13 +85,13 @@ def main() -> None:
         env = os.environ.copy()
         env["ASOBI_DATABASE_URL"] = str(Path(tmp) / "asobi.db")
 
-        run(["create-entities", "project-a", "project"], env)
-        run(["create-entities", "project-a:session", "session"], env)
-        run(["create-entities", "UserPreferences", "preference"], env)
+        run(["new", "project-a", "project"], env)
+        run(["new", "project-a:session", "session"], env)
+        run(["new", "UserPreferences", "preference"], env)
 
         run(
             [
-                "add-observations",
+                "obs",
                 "project-a",
                 "Uses libSQL with FTS5 porter stemming for graph recall.",
             ],
@@ -99,7 +99,7 @@ def main() -> None:
         )
         run(
             [
-                "add-observations",
+                "obs",
                 "project-a:session",
                 "status: IN_PROGRESS; next: verify CLI handoff",
             ],
@@ -107,15 +107,15 @@ def main() -> None:
         )
         run(
             [
-                "add-observations",
+                "obs",
                 "UserPreferences",
                 "Prefer narrow graph commands over document-tier startup.",
             ],
             env,
         )
-        run(["create-relations", "project-a", "UserPreferences", "follows"], env)
+        run(["link", "project-a", "UserPreferences", "follows"], env)
 
-        opened = graph(["open-nodes", "project-a", "UserPreferences"], env)
+        opened = graph(["show", "project-a", "UserPreferences"], env)
         names = entity_names(opened)
         assert names == {"project-a", "UserPreferences"}
         assert opened["relations"] == [
@@ -126,37 +126,37 @@ def main() -> None:
             }
         ]
 
-        stemmed = graph(["search-nodes", "stem"], env)
+        stemmed = graph(["search", "stem"], env)
         assert "project-a" in entity_names(stemmed)
 
         for idx in range(5):
-            run(["create-entities", f"limit-{idx}", "project"], env)
-            run(["add-observations", f"limit-{idx}", "limitterm"], env)
+            run(["new", f"limit-{idx}", "project"], env)
+            run(["obs", f"limit-{idx}", "limitterm"], env)
 
-        limited = graph(["search-nodes", "limitterm", "--limit", "3"], env)
+        limited = graph(["search", "limitterm", "--limit", "3"], env)
         assert len(limited["entities"]) == 3
 
-        name_fallback = graph(["search-nodes", "UserPreferences"], env)
+        name_fallback = graph(["search", "UserPreferences"], env)
         assert "UserPreferences" in entity_names(name_fallback)
 
-        invalid_fts = graph(["search-nodes", "AND AND"], env)
+        invalid_fts = graph(["search", "AND AND"], env)
         assert invalid_fts["entities"] == []
 
         suspicious_name = "cli-日本語-'; DROP TABLE mcp_entities; --"
         # New normalization drops non-ascii and collapses separators
         normalized_suspicious_name = "cli-DROP-TABLE-mcp_entities"
         suspicious_observation = "quote:' newline:\n control:\x07 percent:%"
-        run(["create-entities", suspicious_name, "project"], env)
-        run(["add-observations", suspicious_name, suspicious_observation], env)
-        suspicious = graph(["open-nodes", suspicious_name], env)
+        run(["new", suspicious_name, "project"], env)
+        run(["obs", suspicious_name, suspicious_observation], env)
+        suspicious = graph(["show", suspicious_name], env)
         assert entity_names(suspicious) == {normalized_suspicious_name}
         assert observations(suspicious, normalized_suspicious_name) == [
             suspicious_observation
         ]
 
-        injected = graph(["search-nodes", "drop"], env)
+        injected = graph(["search", "drop"], env)
         assert normalized_suspicious_name in entity_names(injected)
-        still_there = graph(["read-graph"], env)
+        still_there = graph(["graph"], env)
         assert {
             "project-a",
             "project-a:session",
@@ -166,33 +166,33 @@ def main() -> None:
 
         run(
             [
-                "delete-observations",
+                "rm-obs",
                 "project-a:session",
                 "status: IN_PROGRESS; next: verify CLI handoff",
             ],
             env,
         )
-        run(["add-observations", "project-a:session", "status: DONE"], env)
+        run(["obs", "project-a:session", "status: DONE"], env)
 
-        session = graph(["open-nodes", "project-a:session"], env)
+        session = graph(["show", "project-a:session"], env)
         assert observations(session, "project-a:session") == ["status: DONE"]
 
         # Truths: structured key-value attributes, upsert + delete
-        run(["add-truth", "project-a", "language", "rust"], env)
-        run(["add-truth", "project-a", "edition", "2021"], env)
-        run(["add-truth", "project-a", "edition", "2024"], env)  # upsert replaces
-        with_truths = graph(["open-nodes", "project-a"], env)
+        run(["truth", "project-a", "language", "rust"], env)
+        run(["truth", "project-a", "edition", "2021"], env)
+        run(["truth", "project-a", "edition", "2024"], env)  # upsert replaces
+        with_truths = graph(["show", "project-a"], env)
         assert truths(with_truths, "project-a") == {
             "language": "rust",
             "edition": "2024",
         }
 
-        run(["delete-truth", "project-a", "language"], env)
-        after_truth_delete = graph(["open-nodes", "project-a"], env)
+        run(["rm-truth", "project-a", "language"], env)
+        after_truth_delete = graph(["show", "project-a"], env)
         assert truths(after_truth_delete, "project-a") == {"edition": "2024"}
 
-        run(["delete-entities", "UserPreferences"], env)
-        after_delete = graph(["open-nodes", "project-a", "UserPreferences"], env)
+        run(["rm", "UserPreferences"], env)
+        after_delete = graph(["show", "project-a", "UserPreferences"], env)
         assert entity_names(after_delete) == {"project-a"}
         assert after_delete["relations"] == []
 
@@ -207,13 +207,13 @@ def main() -> None:
 
         # Reset test
         run(["reset", "--force"], env)
-        empty_graph = graph(["read-graph"], env)
+        empty_graph = graph(["graph"], env)
         assert empty_graph["entities"] == []
         assert empty_graph["relations"] == []
 
         # Import test
         run(["import", export_file], env)
-        restored_graph = graph(["read-graph"], env)
+        restored_graph = graph(["graph"], env)
         assert "project-a" in entity_names(restored_graph)
 
     with tempfile.TemporaryDirectory(prefix="asobi-corrupt-") as tmp:
@@ -221,7 +221,7 @@ def main() -> None:
         db_path.write_bytes(b"not a sqlite database")
         env = os.environ.copy()
         env["ASOBI_DATABASE_URL"] = str(db_path)
-        failed = run_expect_failure(["read-graph"], env)
+        failed = run_expect_failure(["graph"], env)
         assert "database" in failed.stderr.lower()
 
     batch_and_json_checks()
@@ -233,59 +233,53 @@ def main() -> None:
 def batch_and_json_checks() -> None:
     """Coverage for batched writes and the global ``--json`` echo.
 
-    ``create-entities`` takes repeated ``NAME TYPE`` pairs and
-    ``create-relations`` takes repeated ``FROM TO TYPE`` triples in a single
+    ``new`` takes repeated ``NAME TYPE`` pairs and
+    ``link`` takes repeated ``FROM TO TYPE`` triples in a single
     call (the underlying DB layer is already batch-capable). ``--json`` makes a
     mutation print the affected entities to stdout so a caller can confirm a
-    write without a follow-up ``open-nodes``.
+    write without a follow-up ``show``.
     """
     with tempfile.TemporaryDirectory(prefix="asobi-batch-") as tmp:
         env = os.environ.copy()
         env["ASOBI_DATABASE_URL"] = str(Path(tmp) / "asobi.db")
 
-        # create-entities: one call, multiple NAME TYPE pairs.
+        # new: one call, multiple NAME TYPE pairs.
         run(
-            ["create-entities", "alpha", "task", "beta", "concept", "gamma", "ref"],
+            ["new", "alpha", "task", "beta", "concept", "gamma", "ref"],
             env,
         )
-        assert entity_names(graph(["read-graph"], env)) == {"alpha", "beta", "gamma"}
+        assert entity_names(graph(["graph"], env)) == {"alpha", "beta", "gamma"}
 
         # Argument count not a multiple of 2 is rejected with a clear message.
-        bad_pairs = run_expect_failure(["create-entities", "x", "task", "y"], env)
+        bad_pairs = run_expect_failure(["new", "x", "task", "y"], env)
         assert "pair" in bad_pairs.stderr.lower()
 
-        # create-relations: one call, multiple FROM TO TYPE triples.
+        # link: one call, multiple FROM TO TYPE triples.
         run(
-            ["create-relations", "alpha", "beta", "uses", "alpha", "gamma", "blocks"],
+            ["link", "alpha", "beta", "uses", "alpha", "gamma", "blocks"],
             env,
         )
-        rels = graph(["read-graph"], env)["relations"]
+        rels = graph(["graph"], env)["relations"]
         assert {(r["from"], r["to"], r["relationType"]) for r in rels} == {
             ("alpha", "beta", "uses"),
             ("alpha", "gamma", "blocks"),
         }
 
         # Argument count not a multiple of 3 is rejected.
-        bad_triples = run_expect_failure(
-            ["create-relations", "a", "b", "uses", "c"], env
-        )
+        bad_triples = run_expect_failure(["link", "a", "b", "uses", "c"], env)
         assert "triple" in bad_triples.stderr.lower()
 
-        # --json: create-entities echoes the created entity to stdout.
-        echoed = json.loads(
-            run(["create-entities", "delta", "task", "--json"], env).stdout
-        )
+        # --json: new echoes the created entity to stdout.
+        echoed = json.loads(run(["new", "delta", "task", "--json"], env).stdout)
         assert "delta" in entity_names(echoed)
 
-        # --json: add-observations returns the affected entity with its trail.
-        obs_echo = json.loads(
-            run(["add-observations", "delta", "first obs", "--json"], env).stdout
-        )
+        # --json: obs returns the affected entity with its trail.
+        obs_echo = json.loads(run(["obs", "delta", "first obs", "--json"], env).stdout)
         assert observations(obs_echo, "delta") == ["first obs"]
 
-        # --json: create-relations shows the relation among its endpoints.
+        # --json: link shows the relation among its endpoints.
         rel_echo = json.loads(
-            run(["create-relations", "delta", "alpha", "uses", "--json"], env).stdout
+            run(["link", "delta", "alpha", "uses", "--json"], env).stdout
         )
         assert {
             "from": "delta",
@@ -293,15 +287,15 @@ def batch_and_json_checks() -> None:
             "relationType": "uses",
         } in rel_echo["relations"]
 
-        # --json: add-truth / delete-truth return the entity's current truths.
+        # --json: truth / rm-truth return the entity's current truths.
         truth_echo = json.loads(
-            run(["add-truth", "delta", "status", "READY", "--json"], env).stdout
+            run(["truth", "delta", "status", "READY", "--json"], env).stdout
         )
         assert truths(truth_echo, "delta") == {"status": "READY"}
 
-        # --json: delete-entities reports the removed names (entities are gone,
+        # --json: rm reports the removed names (entities are gone,
         # so there is nothing to open — the shape is a deletion receipt).
-        del_echo = json.loads(run(["delete-entities", "gamma", "--json"], env).stdout)
+        del_echo = json.loads(run(["rm", "gamma", "--json"], env).stdout)
         assert del_echo == {"deleted": ["gamma"]}
 
 
