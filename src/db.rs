@@ -6,6 +6,98 @@ use std::env;
 pub const DEFAULT_SEARCH_LIMIT: usize = 100;
 pub use crate::constant::ENV_DATABASE_URL;
 
+/// Idempotent migration: if a 0.1.0 database is detected (tables still named
+/// `mcp_*`), rename them to the asobi-native `asobi_*` names and repopulate
+/// the FTS index. Safe to call on a fresh or already-migrated database — the
+/// detection query is a no-op in both cases.
+///
+/// Ordering:
+///   1. Drop old FTS table and triggers (they pin the old content-table name).
+///   2. Drop the old index.
+///   3. Rename the five base tables (FK refs are updated by SQLite on RENAME).
+///   4. Return `true` so the caller knows to repopulate FTS after recreating it.
+async fn migrate_mcp_to_asobi(conn: &Connection) -> Result<bool> {
+    // Each detection query is scoped in its own block so the read cursor is
+    // dropped (statement finalized) before any DDL runs below — an open cursor
+    // holds a schema lock and would make ALTER/DROP fail with "table is locked".
+
+    // Check whether the legacy table exists.
+    let legacy_exists = {
+        let mut rows = conn
+            .query(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='mcp_entities'",
+                (),
+            )
+            .await?;
+        rows.next().await?.is_some()
+    };
+    if !legacy_exists {
+        // Fresh db or already migrated — nothing to do.
+        return Ok(false);
+    }
+
+    // Also verify the target table does NOT exist yet (idempotency guard).
+    let already_migrated = {
+        let mut rows = conn
+            .query(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='asobi_entities'",
+                (),
+            )
+            .await?;
+        rows.next().await?.is_some()
+    };
+    if already_migrated {
+        // Both names present is impossible in normal operation, but if it ever
+        // happens treat it as done.
+        return Ok(false);
+    }
+
+    // Step 1: Drop old triggers — they reference mcp_obs_fts which must also go.
+    conn.execute("DROP TRIGGER IF EXISTS mcp_obs_ai", ())
+        .await?;
+    conn.execute("DROP TRIGGER IF EXISTS mcp_obs_ad", ())
+        .await?;
+    conn.execute("DROP TRIGGER IF EXISTS mcp_obs_au", ())
+        .await?;
+
+    // Step 2: Drop old FTS virtual table (content='mcp_observations' is baked in).
+    conn.execute("DROP TABLE IF EXISTS mcp_obs_fts", ()).await?;
+
+    // Step 3: Drop old index (will be recreated with the new name).
+    conn.execute("DROP INDEX IF EXISTS idx_mcp_observations_entity_name", ())
+        .await?;
+
+    // Step 4: Rename tables. SQLite >= 3.26 updates child FK references when the
+    // parent table is renamed, so renaming asobi_entities first is safe.
+    conn.execute("ALTER TABLE mcp_entities RENAME TO asobi_entities", ())
+        .await?;
+    conn.execute(
+        "ALTER TABLE mcp_observations RENAME TO asobi_observations",
+        (),
+    )
+    .await?;
+    conn.execute("ALTER TABLE mcp_relations RENAME TO asobi_relations", ())
+        .await?;
+    conn.execute("ALTER TABLE mcp_truths RENAME TO asobi_truths", ())
+        .await?;
+    // mcp_skills may not exist in every 0.1.0 db; guard it (scoped cursor, as above).
+    let has_skills = {
+        let mut rows = conn
+            .query(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='mcp_skills'",
+                (),
+            )
+            .await?;
+        rows.next().await?.is_some()
+    };
+    if has_skills {
+        conn.execute("ALTER TABLE mcp_skills RENAME TO asobi_skills", ())
+            .await?;
+    }
+
+    Ok(true)
+}
+
 pub async fn init_db() -> Result<(Database, Connection)> {
     let paths = crate::paths::AsobiPaths::resolve();
     if !paths.data_dir.exists() {
@@ -19,17 +111,18 @@ pub async fn init_db() -> Result<(Database, Connection)> {
 
     conn.execute(crate::constant::PRAGMA_FOREIGN_KEYS_ON, ())
         .await?;
-    // Enable WAL mode for concurrent write support
-    let mut rows = conn
-        .query(crate::constant::PRAGMA_JOURNAL_MODE_WAL, ())
-        .await?;
-    let _ = rows.next().await?;
-    let mut rows = conn
-        .query(crate::constant::PRAGMA_SYNCHRONOUS_NORMAL, ())
-        .await?;
-    let _ = rows.next().await?;
-    let mut rows = conn.query(crate::constant::PRAGMA_BUSY_TIMEOUT, ()).await?;
-    let _ = rows.next().await?;
+    // Enable WAL mode for concurrent write support. These pragmas can return a
+    // row (e.g. journal_mode), so query + consume. Each cursor is scoped to one
+    // loop iteration and dropped before later DDL/migration runs — a lingering
+    // read statement would hold a schema lock ("database table is locked").
+    for pragma in [
+        crate::constant::PRAGMA_JOURNAL_MODE_WAL,
+        crate::constant::PRAGMA_SYNCHRONOUS_NORMAL,
+        crate::constant::PRAGMA_BUSY_TIMEOUT,
+    ] {
+        let mut rows = conn.query(pragma, ()).await?;
+        let _ = rows.next().await?;
+    }
 
     conn.execute(crate::constant::SCHEMA_CREATE_TOPICS, ())
         .await?;
@@ -41,23 +134,27 @@ pub async fn init_db() -> Result<(Database, Connection)> {
     conn.execute(crate::constant::SCHEMA_CREATE_SESSIONS, ())
         .await?;
 
-    // Graph Tier (Hot)
-    conn.execute(crate::constant::SCHEMA_CREATE_MCP_ENTITIES, ())
+    // Migrate 0.1.0 databases in place before creating new-name tables.
+    // Returns true when a migration ran (FTS must be repopulated afterwards).
+    let migrated = migrate_mcp_to_asobi(&conn).await?;
+
+    // Graph Tier (Hot) — CREATE IF NOT EXISTS is a no-op on migrated tables.
+    conn.execute(crate::constant::SCHEMA_CREATE_ASOBI_ENTITIES, ())
         .await?;
 
-    conn.execute(crate::constant::SCHEMA_CREATE_MCP_OBSERVATIONS, ())
+    conn.execute(crate::constant::SCHEMA_CREATE_ASOBI_OBSERVATIONS, ())
         .await?;
 
-    conn.execute(crate::constant::SCHEMA_CREATE_IDX_MCP_OBSERVATIONS, ())
+    conn.execute(crate::constant::SCHEMA_CREATE_IDX_ASOBI_OBSERVATIONS, ())
         .await?;
 
-    conn.execute(crate::constant::SCHEMA_CREATE_MCP_RELATIONS, ())
+    conn.execute(crate::constant::SCHEMA_CREATE_ASOBI_RELATIONS, ())
         .await?;
 
-    conn.execute(crate::constant::SCHEMA_CREATE_MCP_TRUTHS, ())
+    conn.execute(crate::constant::SCHEMA_CREATE_ASOBI_TRUTHS, ())
         .await?;
 
-    conn.execute(crate::constant::SCHEMA_CREATE_MCP_SKILLS, ())
+    conn.execute(crate::constant::SCHEMA_CREATE_ASOBI_SKILLS, ())
         .await?;
 
     // Document Tier (Vectors)
@@ -80,16 +177,28 @@ pub async fn init_db() -> Result<(Database, Connection)> {
         .await?;
 
     // FTS5 for graph observation search (porter stemming, BM25 ranking)
-    conn.execute(crate::constant::SCHEMA_CREATE_MCP_OBS_FTS, ())
+    conn.execute(crate::constant::SCHEMA_CREATE_ASOBI_OBS_FTS, ())
         .await?;
 
-    // Triggers to keep mcp_obs_fts in sync with mcp_observations
-    conn.execute(crate::constant::SCHEMA_CREATE_TRIGGER_MCP_OBS_AI, ())
+    // Triggers to keep asobi_obs_fts in sync with asobi_observations
+    conn.execute(crate::constant::SCHEMA_CREATE_TRIGGER_ASOBI_OBS_AI, ())
         .await?;
-    conn.execute(crate::constant::SCHEMA_CREATE_TRIGGER_MCP_OBS_AD, ())
+    conn.execute(crate::constant::SCHEMA_CREATE_TRIGGER_ASOBI_OBS_AD, ())
         .await?;
-    conn.execute(crate::constant::SCHEMA_CREATE_TRIGGER_MCP_OBS_AU, ())
+    conn.execute(crate::constant::SCHEMA_CREATE_TRIGGER_ASOBI_OBS_AU, ())
         .await?;
+
+    // Repopulate FTS after migration: the old mcp_obs_fts was dropped and the
+    // new asobi_obs_fts was just created empty. Triggers will keep it in sync
+    // going forward; we bulk-insert the existing rows here.
+    if migrated {
+        conn.execute(
+            "INSERT INTO asobi_obs_fts(rowid, content) \
+             SELECT rowid, content FROM asobi_observations",
+            (),
+        )
+        .await?;
+    }
 
     Ok((db, conn))
 }
@@ -139,7 +248,7 @@ pub async fn delete_topic(conn: &Connection, id: &str) -> Result<()> {
     Ok(())
 }
 
-pub async fn mcp_create_entities(
+pub async fn create_entities(
     conn: &Connection,
     entities: Vec<crate::model::EntityInput>,
 ) -> Result<()> {
@@ -163,7 +272,7 @@ pub async fn mcp_create_entities(
     Ok(())
 }
 
-pub async fn mcp_add_observations(
+pub async fn add_observations(
     conn: &Connection,
     observations: Vec<crate::model::ObservationInput>,
     limit: usize,
@@ -194,7 +303,7 @@ pub async fn mcp_add_observations(
     Ok(())
 }
 
-pub async fn mcp_create_relations(
+pub async fn create_relations(
     conn: &Connection,
     relations: Vec<crate::model::RelationInput>,
 ) -> Result<()> {
@@ -212,7 +321,7 @@ pub async fn mcp_create_relations(
     Ok(())
 }
 
-pub async fn mcp_delete_entities(conn: &Connection, names: Vec<String>) -> Result<()> {
+pub async fn delete_entities(conn: &Connection, names: Vec<String>) -> Result<()> {
     let tx = conn.transaction().await?;
     for name in names {
         let norm_name = crate::normalize::normalize_key(&name);
@@ -236,7 +345,7 @@ pub async fn mcp_delete_entities(conn: &Connection, names: Vec<String>) -> Resul
     Ok(())
 }
 
-pub async fn mcp_delete_observations(
+pub async fn delete_observations(
     conn: &Connection,
     deletions: Vec<crate::model::ObservationDeletion>,
 ) -> Result<()> {
@@ -255,7 +364,7 @@ pub async fn mcp_delete_observations(
     Ok(())
 }
 
-pub async fn mcp_delete_relations(
+pub async fn delete_relations(
     conn: &Connection,
     relations: Vec<crate::model::RelationInput>,
 ) -> Result<()> {
@@ -273,7 +382,7 @@ pub async fn mcp_delete_relations(
     Ok(())
 }
 
-pub async fn mcp_read_graph(conn: &Connection) -> Result<crate::model::Graph> {
+pub async fn read_graph(conn: &Connection) -> Result<crate::model::Graph> {
     let mut entity_names = Vec::new();
     let mut rows = conn
         .query(crate::constant::SQL_SELECT_ALL_ENTITIES, ())
@@ -301,7 +410,7 @@ pub async fn mcp_read_graph(conn: &Connection) -> Result<crate::model::Graph> {
     })
 }
 
-pub async fn mcp_read_graph_eager(conn: &Connection) -> Result<crate::model::Graph> {
+pub async fn read_graph_eager(conn: &Connection) -> Result<crate::model::Graph> {
     let mut entity_names = Vec::new();
     let mut rows = conn
         .query(crate::constant::SQL_SELECT_ALL_ENTITIES, ())
@@ -329,11 +438,11 @@ pub async fn mcp_read_graph_eager(conn: &Connection) -> Result<crate::model::Gra
     })
 }
 
-pub async fn mcp_search_nodes(conn: &Connection, query: &str) -> Result<crate::model::Graph> {
-    mcp_search_nodes_with_limit(conn, query, DEFAULT_SEARCH_LIMIT).await
+pub async fn search_nodes(conn: &Connection, query: &str) -> Result<crate::model::Graph> {
+    search_nodes_with_limit(conn, query, DEFAULT_SEARCH_LIMIT).await
 }
 
-pub async fn mcp_search_nodes_with_limit(
+pub async fn search_nodes_with_limit(
     conn: &Connection,
     query: &str,
     limit: usize,
@@ -408,7 +517,7 @@ pub async fn mcp_search_nodes_with_limit(
     })
 }
 
-pub async fn mcp_open_nodes(conn: &Connection, names: Vec<String>) -> Result<crate::model::Graph> {
+pub async fn open_nodes(conn: &Connection, names: Vec<String>) -> Result<crate::model::Graph> {
     let normalized_names: Vec<String> = names
         .into_iter()
         .map(|n| crate::normalize::normalize_key(&n))
@@ -491,7 +600,7 @@ async fn load_entities_lazy(
 
         // Load observation counts
         let obs_count_sql = format!(
-            "SELECT entity_name, COUNT(*) FROM mcp_observations WHERE entity_name IN ({}) GROUP BY entity_name",
+            "SELECT entity_name, COUNT(*) FROM asobi_observations WHERE entity_name IN ({}) GROUP BY entity_name",
             placeholders
         );
         let mut rows = conn.query(&obs_count_sql, params).await?;
@@ -589,7 +698,7 @@ async fn load_entities_eager(
     Ok(entities)
 }
 
-pub async fn mcp_stats(conn: &Connection) -> Result<(usize, usize, usize)> {
+pub async fn stats(conn: &Connection) -> Result<(usize, usize, usize)> {
     let mut rows = conn.query(crate::constant::SQL_COUNT_ENTITIES, ()).await?;
     let entities_count: i64 = if let Some(row) = rows.next().await? {
         row.get(0)?
@@ -620,7 +729,7 @@ pub async fn mcp_stats(conn: &Connection) -> Result<(usize, usize, usize)> {
     ))
 }
 
-pub async fn mcp_reset(conn: &Connection) -> Result<()> {
+pub async fn reset(conn: &Connection) -> Result<()> {
     conn.execute(crate::constant::SQL_DELETE_ALL_RELATIONS, ())
         .await?;
     conn.execute(crate::constant::SQL_DELETE_ALL_OBSERVATIONS, ())
@@ -839,7 +948,7 @@ mod tests {
     }
 
     async fn seed_entity(conn: &Connection, name: &str, entity_type: &str, obs: &[&str]) {
-        mcp_create_entities(
+        create_entities(
             conn,
             vec![crate::model::EntityInput {
                 name: name.to_string(),
@@ -871,7 +980,7 @@ mod tests {
         .await;
 
         // "run" should match "running" via porter stemming
-        let graph = mcp_search_nodes(&conn, "run").await.unwrap();
+        let graph = search_nodes(&conn, "run").await.unwrap();
         assert_eq!(graph.entities.len(), 1);
         assert_eq!(graph.entities[0].name, "async-patterns");
     }
@@ -890,7 +999,7 @@ mod tests {
         // Entity with no observations — FTS finds nothing, LIKE fallback finds by name
         seed_entity(&conn, "user-preferences", "preference", &[]).await;
 
-        let graph = mcp_search_nodes(&conn, "user-preferences").await.unwrap();
+        let graph = search_nodes(&conn, "user-preferences").await.unwrap();
         assert_eq!(graph.entities.len(), 1);
         assert_eq!(graph.entities[0].name, "user-preferences");
     }
@@ -910,7 +1019,7 @@ mod tests {
         seed_entity(&conn, "alpha", "project", &["async tokio runtime patterns"]).await;
         seed_entity(&conn, "beta", "project", &["tokio scheduler"]).await;
 
-        let graph = mcp_search_nodes(&conn, "async tokio").await.unwrap();
+        let graph = search_nodes(&conn, "async tokio").await.unwrap();
         assert!(!graph.entities.is_empty());
         assert_eq!(graph.entities[0].name, "alpha");
     }
@@ -927,7 +1036,7 @@ mod tests {
         let (_db, conn) = init_db().await.unwrap();
 
         // Invalid FTS5 syntax — must not panic, falls back to LIKE gracefully
-        let result = mcp_search_nodes(&conn, "AND AND").await;
+        let result = search_nodes(&conn, "AND AND").await;
         assert!(result.is_ok());
     }
 
@@ -946,17 +1055,17 @@ mod tests {
             seed_entity(&conn, &format!("entity-{i:03}"), "project", &["commonterm"]).await;
         }
 
-        let default_graph = mcp_search_nodes(&conn, "commonterm").await.unwrap();
+        let default_graph = search_nodes(&conn, "commonterm").await.unwrap();
         assert_eq!(default_graph.entities.len(), DEFAULT_SEARCH_LIMIT);
 
-        let explicit_graph = mcp_search_nodes_with_limit(&conn, "commonterm", 7)
+        let explicit_graph = search_nodes_with_limit(&conn, "commonterm", 7)
             .await
             .unwrap();
         assert_eq!(explicit_graph.entities.len(), 7);
     }
 
     #[tokio::test]
-    async fn test_mcp_stats_and_reset() {
+    async fn test_stats_and_reset() {
         let dir = tempdir().unwrap();
         unsafe {
             std::env::set_var(
@@ -967,13 +1076,13 @@ mod tests {
         let (_db, conn) = init_db().await.unwrap();
 
         // Check empty stats
-        let stats = mcp_stats(&conn).await.unwrap();
-        assert_eq!(stats, (0, 0, 0));
+        let s = stats(&conn).await.unwrap();
+        assert_eq!(s, (0, 0, 0));
 
         // Seed some data
         seed_entity(&conn, "entity1", "project", &["obs1", "obs2"]).await;
         seed_entity(&conn, "entity2", "project", &["obs3"]).await;
-        mcp_create_relations(
+        create_relations(
             &conn,
             vec![crate::model::RelationInput {
                 from: "entity1".to_string(),
@@ -985,15 +1094,15 @@ mod tests {
         .unwrap();
 
         // Check populated stats
-        let stats = mcp_stats(&conn).await.unwrap();
-        assert_eq!(stats, (2, 1, 3));
+        let s = stats(&conn).await.unwrap();
+        assert_eq!(s, (2, 1, 3));
 
         // Test reset
-        mcp_reset(&conn).await.unwrap();
+        reset(&conn).await.unwrap();
 
         // Check empty stats again
-        let stats = mcp_stats(&conn).await.unwrap();
-        assert_eq!(stats, (0, 0, 0));
+        let s = stats(&conn).await.unwrap();
+        assert_eq!(s, (0, 0, 0));
     }
 
     #[tokio::test]
@@ -1093,13 +1202,13 @@ mod tests {
             .await
             .unwrap();
 
-        mcp_delete_entities(&conn, vec!["test-entity".to_string()])
+        delete_entities(&conn, vec!["test-entity".to_string()])
             .await
             .unwrap();
 
         // Check if the truth was deleted.
         let mut rows = conn
-            .query("SELECT COUNT(*) FROM mcp_truths", ())
+            .query("SELECT COUNT(*) FROM asobi_truths", ())
             .await
             .unwrap();
         let count: i64 = rows.next().await.unwrap().unwrap().get(0).unwrap();
@@ -1129,9 +1238,9 @@ mod tests {
                 "obs5".to_string(),
             ],
         }];
-        mcp_add_observations(&conn, inputs, 3).await.unwrap();
+        add_observations(&conn, inputs, 3).await.unwrap();
 
-        let graph = mcp_open_nodes(&conn, vec!["test-entity".to_string()])
+        let graph = open_nodes(&conn, vec!["test-entity".to_string()])
             .await
             .unwrap();
         let entity = &graph.entities[0];
@@ -1166,9 +1275,9 @@ mod tests {
                 "obs5".to_string(),
             ],
         }];
-        mcp_add_observations(&conn, inputs, 0).await.unwrap();
+        add_observations(&conn, inputs, 0).await.unwrap();
 
-        let graph = mcp_open_nodes(&conn, vec!["test-entity".to_string()])
+        let graph = open_nodes(&conn, vec!["test-entity".to_string()])
             .await
             .unwrap();
         let entity = &graph.entities[0];
@@ -1192,7 +1301,7 @@ mod tests {
             .unwrap();
 
         // 1. Test read-graph (should be lazy)
-        let graph_read = mcp_read_graph(&conn).await.unwrap();
+        let graph_read = read_graph(&conn).await.unwrap();
         let entity_read = &graph_read.entities[0];
         assert!(entity_read.observations.is_empty());
         assert_eq!(entity_read.observation_count, 2);
@@ -1200,7 +1309,7 @@ mod tests {
         assert_eq!(entity_read.truths.get("k1").unwrap(), "v1");
 
         // 2. Test search-nodes (should be lazy)
-        let graph_search = mcp_search_nodes(&conn, "test").await.unwrap();
+        let graph_search = search_nodes(&conn, "test").await.unwrap();
         let entity_search = &graph_search.entities[0];
         assert!(entity_search.observations.is_empty());
         assert_eq!(entity_search.observation_count, 2);
@@ -1208,7 +1317,7 @@ mod tests {
         assert_eq!(entity_search.truths.get("k1").unwrap(), "v1");
 
         // 3. Test open-nodes (should be eager)
-        let graph_open = mcp_open_nodes(&conn, vec!["test-entity".to_string()])
+        let graph_open = open_nodes(&conn, vec!["test-entity".to_string()])
             .await
             .unwrap();
         let entity_open = &graph_open.entities[0];
@@ -1219,7 +1328,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_skill_storage_and_mcp_open_nodes() {
+    async fn test_skill_storage_and_open_nodes() {
         let dir = tempdir().unwrap();
         unsafe {
             std::env::set_var(
@@ -1246,17 +1355,17 @@ mod tests {
         .unwrap();
 
         // 2. open-nodes should return the body
-        let graph = mcp_open_nodes(&conn, vec!["skill:test-skill".to_string()])
+        let graph = open_nodes(&conn, vec!["skill:test-skill".to_string()])
             .await
             .unwrap();
         let entity = &graph.entities[0];
         assert_eq!(entity.body.as_deref(), Some("body content 1"));
 
         // 3. read-graph and search-nodes should NOT return the body
-        let graph_read = mcp_read_graph(&conn).await.unwrap();
+        let graph_read = read_graph(&conn).await.unwrap();
         assert!(graph_read.entities[0].body.is_none());
 
-        let graph_search = mcp_search_nodes(&conn, "skill").await.unwrap();
+        let graph_search = search_nodes(&conn, "skill").await.unwrap();
         assert!(graph_search.entities[0].body.is_none());
 
         // 4. Second upsert should replace the body
@@ -1269,7 +1378,7 @@ mod tests {
         )
         .await
         .unwrap();
-        let graph_2 = mcp_open_nodes(&conn, vec!["skill:test-skill".to_string()])
+        let graph_2 = open_nodes(&conn, vec!["skill:test-skill".to_string()])
             .await
             .unwrap();
         assert_eq!(graph_2.entities[0].body.as_deref(), Some("body content 2"));
@@ -1283,14 +1392,14 @@ mod tests {
         assert_eq!(skills[0].source, "source-1");
 
         // 6. delete-entities cascades skills
-        mcp_delete_entities(&conn, vec!["skill:test-skill".to_string()])
+        delete_entities(&conn, vec!["skill:test-skill".to_string()])
             .await
             .unwrap();
         let body_after = skill_body(&conn, "skill:test-skill").await.unwrap();
         assert!(body_after.is_none());
 
         let count_skills: i64 = conn
-            .query("SELECT COUNT(*) FROM mcp_skills", ())
+            .query("SELECT COUNT(*) FROM asobi_skills", ())
             .await
             .unwrap()
             .next()
@@ -1300,5 +1409,169 @@ mod tests {
             .get(0)
             .unwrap();
         assert_eq!(count_skills, 0);
+    }
+
+    /// Round-trip migration test: build an old-schema (mcp_*) database by hand,
+    /// run init_db against it, then verify that:
+    ///   1. Data is accessible under asobi_* names.
+    ///   2. FTS search works on the migrated observations.
+    ///   3. A second init_db call is a no-op (idempotent).
+    ///
+    /// Uses a real temp file — NOT :memory: — because migration touches the WAL
+    /// and FTS external-content table, both of which behave differently in-process.
+    #[tokio::test]
+    async fn test_migration_mcp_to_asobi_round_trip() {
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("legacy.db");
+        unsafe {
+            std::env::set_var(ENV_DATABASE_URL, db_path.to_str().unwrap());
+        }
+
+        // --- Phase 1: Build a legacy 0.1.0 database by hand ---
+        // We use the `sqlite3` system CLI (always available on Linux/macOS) to
+        // create the legacy database in a subprocess. This guarantees the file
+        // handle is fully released before Phase 2 opens it — no threading
+        // conflict with libSQL, no async WAL residue.
+        let sql = "
+            PRAGMA foreign_keys = ON;
+            CREATE TABLE mcp_entities (
+                name        TEXT PRIMARY KEY,
+                entity_type TEXT NOT NULL,
+                created_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
+                updated_at  DATETIME DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE TABLE mcp_observations (
+                id          TEXT PRIMARY KEY,
+                entity_name TEXT NOT NULL,
+                content     TEXT NOT NULL,
+                created_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (entity_name) REFERENCES mcp_entities(name) ON DELETE CASCADE
+            );
+            CREATE TABLE mcp_relations (
+                from_entity   TEXT NOT NULL,
+                to_entity     TEXT NOT NULL,
+                relation_type TEXT NOT NULL,
+                PRIMARY KEY (from_entity, to_entity, relation_type),
+                FOREIGN KEY (from_entity) REFERENCES mcp_entities(name) ON DELETE CASCADE,
+                FOREIGN KEY (to_entity)   REFERENCES mcp_entities(name) ON DELETE CASCADE
+            );
+            CREATE TABLE mcp_truths (
+                entity_name TEXT NOT NULL,
+                key         TEXT NOT NULL,
+                value       TEXT NOT NULL,
+                PRIMARY KEY (entity_name, key),
+                FOREIGN KEY (entity_name) REFERENCES mcp_entities(name) ON DELETE CASCADE
+            );
+            CREATE TABLE mcp_skills (
+                entity_name  TEXT PRIMARY KEY,
+                body         TEXT NOT NULL,
+                source       TEXT NOT NULL,
+                version      TEXT NOT NULL,
+                installed_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (entity_name) REFERENCES mcp_entities(name) ON DELETE CASCADE
+            );
+            CREATE VIRTUAL TABLE mcp_obs_fts
+                USING fts5(content, content='mcp_observations', content_rowid='rowid', tokenize='porter unicode61');
+            CREATE TRIGGER mcp_obs_ai AFTER INSERT ON mcp_observations BEGIN
+                INSERT INTO mcp_obs_fts(rowid, content) VALUES (new.rowid, new.content);
+            END;
+            INSERT INTO mcp_entities (name, entity_type) VALUES ('legacy-entity', 'concept');
+            INSERT INTO mcp_observations (id, entity_name, content)
+                VALUES ('obs-1', 'legacy-entity', 'the quick brown fox');
+            INSERT INTO mcp_truths (entity_name, key, value)
+                VALUES ('legacy-entity', 'status', 'active');
+        ";
+        let status = std::process::Command::new("sqlite3")
+            .arg(db_path.to_str().unwrap())
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .and_then(|mut child| {
+                use std::io::Write;
+                child
+                    .stdin
+                    .as_mut()
+                    .unwrap()
+                    .write_all(sql.as_bytes())
+                    .unwrap();
+                child.wait()
+            })
+            .expect("sqlite3 must be installed for this test");
+        assert!(status.success(), "sqlite3 failed to build legacy database");
+
+        // --- Phase 2: Run init_db (migration fires) ---
+        let (_db, conn) = init_db().await.unwrap();
+
+        // Data must exist under the new table names.
+        let mut rows = conn
+            .query(
+                "SELECT name, entity_type FROM asobi_entities WHERE name = 'legacy-entity'",
+                (),
+            )
+            .await
+            .unwrap();
+        let row = rows
+            .next()
+            .await
+            .unwrap()
+            .expect("entity must exist after migration");
+        assert_eq!(row.get::<String>(0).unwrap(), "legacy-entity");
+        assert_eq!(row.get::<String>(1).unwrap(), "concept");
+
+        // Observation must be accessible.
+        let mut rows = conn
+            .query(
+                "SELECT content FROM asobi_observations WHERE entity_name = 'legacy-entity'",
+                (),
+            )
+            .await
+            .unwrap();
+        let obs_row = rows.next().await.unwrap().expect("observation must exist");
+        assert_eq!(obs_row.get::<String>(0).unwrap(), "the quick brown fox");
+
+        // Truth must be accessible.
+        let mut rows = conn
+            .query(
+                "SELECT value FROM asobi_truths WHERE entity_name = 'legacy-entity' AND key = 'status'",
+                (),
+            )
+            .await
+            .unwrap();
+        let truth_row = rows.next().await.unwrap().expect("truth must exist");
+        assert_eq!(truth_row.get::<String>(0).unwrap(), "active");
+
+        // FTS search must find the observation after FTS repopulation.
+        let graph = search_nodes(&conn, "quick").await.unwrap();
+        assert_eq!(
+            graph.entities.len(),
+            1,
+            "FTS should find legacy-entity via repopulated asobi_obs_fts"
+        );
+        assert_eq!(graph.entities[0].name, "legacy-entity");
+
+        // Old mcp_entities table must be gone.
+        let mut rows = conn
+            .query(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='mcp_entities'",
+                (),
+            )
+            .await
+            .unwrap();
+        assert!(
+            rows.next().await.unwrap().is_none(),
+            "mcp_entities must be absent after migration"
+        );
+
+        // --- Phase 3: Second init_db must be idempotent (no error) ---
+        let (_db2, conn2) = init_db().await.unwrap();
+
+        // Data still intact after second init.
+        let mut rows = conn2
+            .query("SELECT COUNT(*) FROM asobi_entities", ())
+            .await
+            .unwrap();
+        let count: i64 = rows.next().await.unwrap().unwrap().get(0).unwrap();
+        assert_eq!(count, 1, "second init_db must not drop data");
     }
 }

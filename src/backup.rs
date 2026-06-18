@@ -24,7 +24,7 @@ use crate::constant::{
 use crate::paths::AsobiPaths;
 
 /// Tables a valid Asobi snapshot must contain.
-const REQUIRED_TABLES: [&str; 2] = ["mcp_entities", "topics"];
+const REQUIRED_TABLES: [&str; 2] = ["asobi_entities", "topics"];
 /// Prefix for snapshots produced by the `backup` command (pruned by retention).
 const BACKUP_PREFIX: &str = "asobi";
 /// Prefix for the safety snapshot taken before a restore (kept, not pruned).
@@ -300,7 +300,7 @@ mod tests {
     }
 
     async fn seed(conn: &Connection, name: &str) {
-        crate::db::mcp_create_entities(
+        crate::db::create_entities(
             conn,
             vec![EntityInput {
                 name: name.to_string(),
@@ -326,12 +326,12 @@ mod tests {
         assert!(snap.exists());
 
         // Mutate after the backup so a successful restore is observable.
-        crate::db::mcp_reset(&conn).await.unwrap();
+        crate::db::reset(&conn).await.unwrap();
 
         restore(db, conn, &snap, true).await.unwrap();
 
         let (_db, conn) = crate::db::init_db().await.unwrap();
-        let graph = crate::db::mcp_open_nodes(&conn, vec!["alpha".to_string()])
+        let graph = crate::db::open_nodes(&conn, vec!["alpha".to_string()])
             .await
             .unwrap();
         assert_eq!(graph.entities.len(), 1, "restore did not bring back alpha");

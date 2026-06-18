@@ -428,7 +428,7 @@ async fn main() -> Result<()> {
                 })
                 .collect();
             let names: Vec<String> = entities.iter().map(|e| e.name.clone()).collect();
-            asobi::db::mcp_create_entities(&conn, entities).await?;
+            asobi::db::create_entities(&conn, entities).await?;
             info!("{} entit{} created.", names.len(), plural(names.len()));
             if json {
                 emit_nodes(&conn, names).await?;
@@ -454,7 +454,7 @@ async fn main() -> Result<()> {
                 .flat_map(|r| [r.from.clone(), r.to.clone()])
                 .collect();
             let count = relations.len();
-            asobi::db::mcp_create_relations(&conn, relations).await?;
+            asobi::db::create_relations(&conn, relations).await?;
             info!("{} relation{} created.", count, suffix(count));
             if json {
                 emit_nodes(&conn, involved).await?;
@@ -466,7 +466,7 @@ async fn main() -> Result<()> {
                 .ok()
                 .and_then(|v| v.parse::<usize>().ok())
                 .unwrap_or(paths.observation_limit.unwrap_or(50));
-            asobi::db::mcp_add_observations(
+            asobi::db::add_observations(
                 &conn,
                 vec![asobi::model::ObservationInput {
                     entity_name: name.clone(),
@@ -496,7 +496,7 @@ async fn main() -> Result<()> {
         }
         Commands::DeleteEntities { names } => {
             let deleted = names.clone();
-            asobi::db::mcp_delete_entities(&conn, names).await?;
+            asobi::db::delete_entities(&conn, names).await?;
             info!("Entities deleted.");
             if json {
                 println!(
@@ -506,7 +506,7 @@ async fn main() -> Result<()> {
             }
         }
         Commands::DeleteObservations { name, content } => {
-            asobi::db::mcp_delete_observations(
+            asobi::db::delete_observations(
                 &conn,
                 vec![asobi::model::ObservationDeletion {
                     entity_name: name.clone(),
@@ -524,7 +524,7 @@ async fn main() -> Result<()> {
             to,
             relation_type,
         } => {
-            asobi::db::mcp_delete_relations(
+            asobi::db::delete_relations(
                 &conn,
                 vec![asobi::model::RelationInput {
                     from: from.clone(),
@@ -539,26 +539,26 @@ async fn main() -> Result<()> {
             }
         }
         Commands::ReadGraph => {
-            let graph = asobi::db::mcp_read_graph(&conn).await?;
+            let graph = asobi::db::read_graph(&conn).await?;
             println!("{}", serde_json::to_string_pretty(&graph)?);
         }
         Commands::SearchNodes { query, limit } => {
-            let graph = asobi::db::mcp_search_nodes_with_limit(&conn, &query, limit).await?;
+            let graph = asobi::db::search_nodes_with_limit(&conn, &query, limit).await?;
             println!("{}", serde_json::to_string_pretty(&graph)?);
         }
         Commands::OpenNodes { names } => {
-            let graph = asobi::db::mcp_open_nodes(&conn, names).await?;
+            let graph = asobi::db::open_nodes(&conn, names).await?;
             println!("{}", serde_json::to_string_pretty(&graph)?);
         }
         Commands::Stats => {
-            let (entities, relations, observations) = asobi::db::mcp_stats(&conn).await?;
+            let (entities, relations, observations) = asobi::db::stats(&conn).await?;
             println!("Knowledge Graph Statistics:");
             println!("  Entities:     {}", entities);
             println!("  Relations:    {}", relations);
             println!("  Observations: {}", observations);
         }
         Commands::Export { output } => {
-            let graph = asobi::db::mcp_read_graph_eager(&conn).await?;
+            let graph = asobi::db::read_graph_eager(&conn).await?;
             let json = serde_json::to_string_pretty(&graph)?;
             if let Some(path) = output {
                 std::fs::write(&path, json)?;
@@ -582,11 +582,11 @@ async fn main() -> Result<()> {
             }
 
             if !entities.is_empty() {
-                asobi::db::mcp_create_entities(&conn, entities).await?;
+                asobi::db::create_entities(&conn, entities).await?;
                 info!("Imported entities and observations.");
             }
             if !graph.relations.is_empty() {
-                asobi::db::mcp_create_relations(&conn, graph.relations).await?;
+                asobi::db::create_relations(&conn, graph.relations).await?;
                 info!("Imported relations.");
             }
             info!("Import complete.");
@@ -603,7 +603,7 @@ async fn main() -> Result<()> {
                     return Ok(());
                 }
             }
-            asobi::db::mcp_reset(&conn).await?;
+            asobi::db::reset(&conn).await?;
             info!("Knowledge graph reset successfully.");
         }
         Commands::Backup { output, keep } => {
@@ -782,11 +782,11 @@ async fn main() -> Result<()> {
 
                     if !entities_to_delete.is_empty() {
                         info!("Deleting {} skill entities...", entities_to_delete.len());
-                        asobi::db::mcp_delete_entities(&conn, entities_to_delete).await?;
+                        asobi::db::delete_entities(&conn, entities_to_delete).await?;
                         info!("Skills removed successfully.");
                     } else if target.starts_with("skill:") {
                         info!("Deleting skill entity {}...", target);
-                        asobi::db::mcp_delete_entities(&conn, vec![target.clone()]).await?;
+                        asobi::db::delete_entities(&conn, vec![target.clone()]).await?;
                         info!("Skills removed successfully.");
                     } else {
                         anyhow::bail!("No installed skills found matching target {:?}", target);
@@ -841,9 +841,9 @@ async fn main() -> Result<()> {
 /// Print the named entities (and the relations among them) as pretty JSON to
 /// stdout — the `--json` echo after a mutation, so a caller can confirm the
 /// write without a second `open-nodes` round-trip. Names are normalized inside
-/// `mcp_open_nodes`, so raw user input matches what was just stored.
+/// ``open_nodes`, so raw user input matches what was just stored.
 async fn emit_nodes(conn: &libsql::Connection, names: Vec<String>) -> Result<()> {
-    let graph = asobi::db::mcp_open_nodes(conn, names).await?;
+    let graph = asobi::db::open_nodes(conn, names).await?;
     println!("{}", serde_json::to_string_pretty(&graph)?);
     Ok(())
 }
