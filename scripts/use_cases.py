@@ -15,6 +15,7 @@ BIN = ROOT / "target" / "debug" / "asobi"
 def run_cmd(args: list[str], db_path: str) -> str:
     env = os.environ.copy()
     env["ASOBI_DATABASE_URL"] = db_path
+    env["ASOBI_HOME"] = str(Path(db_path).parent)
     
     start = time.perf_counter()
     result = subprocess.run(
@@ -106,6 +107,35 @@ def main() -> None:
         entity = show_graph["entities"][0]
         assert entity["truths"]["status"] == "DONE"
         assert "Completed migration check, code is fully functional." in entity["observations"]
+        
+        # -------------------------------------------------------------
+        # Use-Case 4: Skills Registry (Install, List, and Show)
+        # -------------------------------------------------------------
+        print("\n--- Use-Case 4: Skills Registry (Install, List, and Show) ---")
+        
+        # Create a mock local skill
+        skills_src_dir = Path(tmp_dir) / "mock-skills"
+        skills_src_dir.mkdir()
+        skill_file = skills_src_dir / "test-skill.md"
+        skill_file.write_text(
+            "---\n"
+            "name: test-skill\n"
+            "description: A mock skill for use-case validation\n"
+            "---\n"
+            "This is the body of the test skill."
+        )
+        
+        # Install the mock skill
+        run_cmd(["skills", "install", str(skills_src_dir), "--all"], db_path)
+        
+        # List all skills
+        list_stdout = run_cmd(["skills"], db_path)
+        assert "test-skill" in list_stdout
+        assert "A mock skill for use-case validation" in list_stdout
+        
+        # Show specific skill body
+        show_stdout = run_cmd(["skills", "show", "test-skill"], db_path)
+        assert "This is the body of the test skill." in show_stdout
         
         print("\nAll integration use-cases successfully validated!")
 
