@@ -76,7 +76,7 @@ fn main() {
             })
             .await;
 
-            let export_hits = db::search_nodes_with_limit(&conn, "commonterm", entity_count)
+            let export_hits = db::search_nodes_with_limit(&conn, "commonterm", entity_count, &[])
                 .await
                 .expect("broad export search")
                 .entities
@@ -87,7 +87,7 @@ fn main() {
             );
             let export_elapsed = time_many(BROAD_EXPORT_ITERS, || async {
                 let graph =
-                    db::search_nodes_with_limit(&conn, black_box("commonterm"), entity_count)
+                    db::search_nodes_with_limit(&conn, black_box("commonterm"), entity_count, &[])
                         .await
                         .expect("broad export search");
                 black_box(graph.entities.len());

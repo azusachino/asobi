@@ -80,7 +80,7 @@ asobi new "CLAUDE.md" "reference"
 asobi link "project-x" "UserPreferences" "follows"
 ```
 
-**Search (supports FTS5 and segment matching):**
+**Search (supports FTS5, segment matching, and truth filters):**
 
 ```bash
 asobi search "tokio"           # finds "tokio", "tokio-util", stemmed variants
@@ -89,6 +89,8 @@ asobi search "auth*"           # prefix: matches "auth", "authentication", "auth
 asobi search "async AND error" # both words must appear
 asobi search "deploy OR ship"  # either word
 asobi search "auth" --limit 25 # override the default top 100 matches
+asobi search --where status=READY # find all entities with status truth set to READY
+asobi search "bug" --where status=READY --where priority=high # filter by multiple truths AND the query
 ```
 
 Use `graph` for full export. `search` is intentionally top-K by default so a broad term does not accidentally return the whole graph.
@@ -297,6 +299,7 @@ No files to pass, no state to reconstruct. The graph is the handoff.
 - `search "UserPreferences"` → exact name match via LIKE fallback (entity has no observations)
 - `search "AND AND"` → invalid FTS5 syntax, silently falls back to LIKE, returns empty
 - `search "auth" --limit 500` → return more than the default top 100 matches
+- `search --where KEY=VALUE` → filters matching entities by truth values (e.g. `--where status=READY`). Can be repeated; multiple filters perform an intersection (AND condition). If a query term is also provided, it matches the intersection of the filters and the FTS/LIKE results.
 
 For exact entity retrieval, prefer `show` over `search`:
 

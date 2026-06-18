@@ -65,13 +65,15 @@ asobi graph
 Returns the full graph as JSON: `{ "entities": [...], "relations": [...] }`. Each entity includes all its observations.
 
 ```
-asobi search <QUERY> [--limit <N>]
+asobi search <QUERY> [--limit <N>] [--where KEY=VALUE ...]
 ```
 
 Returns a subgraph (same JSON shape) of entities matching `QUERY`. Uses two search paths, merged in order:
 
 1. **FTS5 on observations** — porter stemming + BM25 ranking. `"run"` matches `"running"`, `"tokio async"` ranks entities that contain both words higher. Supports FTS5 operators: `AND`, `OR`, `NOT`, prefix with `*` (e.g. `auth*`).
 2. **LIKE on entity name / type** — substring fallback, always runs. Catches exact-name lookups (`UserPreferences`) and entities with no observations.
+
+Supports filtering the search results by matching entity truths via repeatable `--where KEY=VALUE` filters (e.g. `asobi search --where status=READY`). If multiple `--where` filters are specified, they are treated as an intersection (AND condition).
 
 Relations between matched entities are included. Results are ordered by BM25 relevance (FTS matches first, then name/type matches).
 The default limit is 100 matched nodes; use `--limit` for larger ranked exports.

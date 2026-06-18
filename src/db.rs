@@ -439,60 +439,124 @@ pub async fn read_graph_eager(conn: &Connection) -> Result<crate::model::Graph> 
 }
 
 pub async fn search_nodes(conn: &Connection, query: &str) -> Result<crate::model::Graph> {
-    search_nodes_with_limit(conn, query, DEFAULT_SEARCH_LIMIT).await
+    search_nodes_with_limit(conn, query, DEFAULT_SEARCH_LIMIT, &[]).await
 }
 
 pub async fn search_nodes_with_limit(
     conn: &Connection,
     query: &str,
     limit: usize,
+    filters: &[(String, String)],
 ) -> Result<crate::model::Graph> {
     let limit = limit.max(1);
     let mut entity_names: Vec<String> = Vec::new();
 
-    // Primary: FTS5 on observation content — porter stemming + BM25 ranking.
-    // Wrapped in an async block so any error (invalid syntax, bad token) is
-    // caught at the boundary and we fall through to the LIKE path.
-    let fts_hits: Vec<String> = async {
-        let fts_fetch_limit = limit.saturating_mul(8).max(limit) as i64;
-        let mut rows = conn
-            .query(
-                crate::constant::SQL_SEARCH_OBSERVATIONS_FTS,
-                libsql::params![query, fts_fetch_limit],
-            )
-            .await?;
-        let mut names = Vec::new();
-        while let Some(row) = rows.next().await? {
-            names.push(row.get::<String>(0)?);
-        }
-        Ok::<Vec<String>, anyhow::Error>(names)
-    }
-    .await
-    .unwrap_or_default();
-    for name in fts_hits {
-        if !entity_names.contains(&name) {
-            entity_names.push(name);
-            if entity_names.len() >= limit {
-                break;
+    let mut filtered_names = std::collections::HashSet::new();
+    if !filters.is_empty() {
+        let mut sql = "SELECT entity_name FROM asobi_truths WHERE ".to_string();
+        let mut params = Vec::new();
+        for (i, (k, v)) in filters.iter().enumerate() {
+            if i > 0 {
+                sql.push_str(" OR ");
             }
+            sql.push_str(&format!(
+                "(key = ?{} AND value = ?{})",
+                i * 2 + 1,
+                i * 2 + 2
+            ));
+            params.push(libsql::Value::from(k.clone()));
+            params.push(libsql::Value::from(v.clone()));
+        }
+        sql.push_str(" GROUP BY entity_name HAVING COUNT(DISTINCT key) = ?");
+        params.push(libsql::Value::from(filters.len() as i64));
+
+        let mut rows = conn.query(&sql, libsql::params_from_iter(params)).await?;
+        while let Some(row) = rows.next().await? {
+            filtered_names.insert(row.get::<String>(0)?);
+        }
+
+        if filtered_names.is_empty() {
+            return Ok(crate::model::Graph {
+                entities: vec![],
+                relations: vec![],
+            });
         }
     }
 
-    // Secondary: LIKE on entity name / type — always runs, catches exact-name
-    // lookups and entity types that aren't in observations.
-    let pattern = format!("%{}%", query);
-    let mut rows = conn
-        .query(
-            crate::constant::SQL_SEARCH_ENTITIES_LIKE,
-            libsql::params![pattern, limit as i64],
-        )
-        .await?;
-    while let Some(row) = rows.next().await? {
-        let name: String = row.get(0)?;
-        if !entity_names.contains(&name) {
-            entity_names.push(name);
-            if entity_names.len() >= limit {
-                break;
+    if query.trim().is_empty() {
+        if !filters.is_empty() {
+            entity_names = filtered_names.into_iter().take(limit).collect();
+        } else {
+            let mut rows = conn
+                .query(
+                    "SELECT name FROM asobi_entities LIMIT ?1",
+                    libsql::params![limit as i64],
+                )
+                .await?;
+            while let Some(row) = rows.next().await? {
+                entity_names.push(row.get(0)?);
+            }
+        }
+    } else {
+        // Primary: FTS5 on observation content
+        let fts_hits: Vec<String> = async {
+            let fts_fetch_limit = if filters.is_empty() {
+                limit.saturating_mul(8).max(limit) as i64
+            } else {
+                5000
+            };
+            let mut rows = conn
+                .query(
+                    crate::constant::SQL_SEARCH_OBSERVATIONS_FTS,
+                    libsql::params![query, fts_fetch_limit],
+                )
+                .await?;
+            let mut names = Vec::new();
+            while let Some(row) = rows.next().await? {
+                names.push(row.get::<String>(0)?);
+            }
+            Ok::<Vec<String>, anyhow::Error>(names)
+        }
+        .await
+        .unwrap_or_default();
+
+        for name in fts_hits {
+            if !filters.is_empty() && !filtered_names.contains(&name) {
+                continue;
+            }
+            if !entity_names.contains(&name) {
+                entity_names.push(name);
+                if entity_names.len() >= limit {
+                    break;
+                }
+            }
+        }
+
+        if entity_names.len() < limit {
+            // Secondary: LIKE on entity name / type
+            let pattern = format!("%{}%", query);
+            let like_limit = if filters.is_empty() {
+                limit as i64
+            } else {
+                5000
+            };
+            let mut rows = conn
+                .query(
+                    crate::constant::SQL_SEARCH_ENTITIES_LIKE,
+                    libsql::params![pattern, like_limit],
+                )
+                .await?;
+            while let Some(row) = rows.next().await? {
+                let name: String = row.get(0)?;
+                if !filters.is_empty() && !filtered_names.contains(&name) {
+                    continue;
+                }
+                if !entity_names.contains(&name) {
+                    entity_names.push(name);
+                    if entity_names.len() >= limit {
+                        break;
+                    }
+                }
             }
         }
     }
@@ -1058,10 +1122,93 @@ mod tests {
         let default_graph = search_nodes(&conn, "commonterm").await.unwrap();
         assert_eq!(default_graph.entities.len(), DEFAULT_SEARCH_LIMIT);
 
-        let explicit_graph = search_nodes_with_limit(&conn, "commonterm", 7)
+        let explicit_graph = search_nodes_with_limit(&conn, "commonterm", 7, &[])
             .await
             .unwrap();
         assert_eq!(explicit_graph.entities.len(), 7);
+    }
+
+    #[tokio::test]
+    async fn test_search_nodes_with_where_filters() {
+        let dir = tempdir().unwrap();
+        unsafe {
+            std::env::set_var(
+                ENV_DATABASE_URL,
+                dir.path().join("test.db").to_str().unwrap(),
+            );
+        }
+        let (_db, conn) = init_db().await.unwrap();
+
+        // Seed some entities
+        seed_entity(&conn, "task-1", "task", &["fix bug"]).await;
+        truth_upsert(&conn, "task-1", "status", "READY")
+            .await
+            .unwrap();
+        truth_upsert(&conn, "task-1", "priority", "high")
+            .await
+            .unwrap();
+
+        seed_entity(&conn, "task-2", "task", &["fix crash"]).await;
+        truth_upsert(&conn, "task-2", "status", "BLOCKED")
+            .await
+            .unwrap();
+        truth_upsert(&conn, "task-2", "priority", "high")
+            .await
+            .unwrap();
+
+        seed_entity(&conn, "task-3", "task", &["write test"]).await;
+        truth_upsert(&conn, "task-3", "status", "READY")
+            .await
+            .unwrap();
+        truth_upsert(&conn, "task-3", "priority", "low")
+            .await
+            .unwrap();
+
+        // 1. Search with status=READY
+        let g1 = search_nodes_with_limit(
+            &conn,
+            "",
+            10,
+            &[("status".to_string(), "READY".to_string())],
+        )
+        .await
+        .unwrap();
+        let names1: std::collections::HashSet<_> =
+            g1.entities.iter().map(|e| e.name.clone()).collect();
+        assert_eq!(names1.len(), 2);
+        assert!(names1.contains("task-1"));
+        assert!(names1.contains("task-3"));
+
+        // 2. Search status=READY and priority=high
+        let g2 = search_nodes_with_limit(
+            &conn,
+            "",
+            10,
+            &[
+                ("status".to_string(), "READY".to_string()),
+                ("priority".to_string(), "high".to_string()),
+            ],
+        )
+        .await
+        .unwrap();
+        let names2: std::collections::HashSet<_> =
+            g2.entities.iter().map(|e| e.name.clone()).collect();
+        assert_eq!(names2.len(), 1);
+        assert!(names2.contains("task-1"));
+
+        // 3. Search status=READY with a query term "test"
+        let g3 = search_nodes_with_limit(
+            &conn,
+            "test",
+            10,
+            &[("status".to_string(), "READY".to_string())],
+        )
+        .await
+        .unwrap();
+        let names3: std::collections::HashSet<_> =
+            g3.entities.iter().map(|e| e.name.clone()).collect();
+        assert_eq!(names3.len(), 1);
+        assert!(names3.contains("task-3"));
     }
 
     #[tokio::test]

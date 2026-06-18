@@ -92,6 +92,9 @@ enum Commands {
         /// Maximum number of matched nodes to return
         #[arg(long, default_value_t = asobi::db::DEFAULT_SEARCH_LIMIT)]
         limit: usize,
+        /// Filter by entity truths: `--where KEY=VALUE` (repeatable)
+        #[arg(long = "where", value_name = "KEY=VALUE")]
+        filters: Vec<String>,
     },
     /// Retrieve specific nodes by name
     Show { names: Vec<String> },
@@ -555,8 +558,21 @@ async fn main() -> Result<()> {
             let graph = asobi::db::read_graph(&conn).await?;
             println!("{}", serde_json::to_string_pretty(&graph)?);
         }
-        Commands::Search { query, limit } => {
-            let graph = asobi::db::search_nodes_with_limit(&conn, &query, limit).await?;
+        Commands::Search {
+            query,
+            limit,
+            filters,
+        } => {
+            let mut parsed_filters = Vec::new();
+            for f in &filters {
+                if let Some((k, v)) = f.split_once('=') {
+                    parsed_filters.push((k.trim().to_string(), v.trim().to_string()));
+                } else {
+                    anyhow::bail!("Invalid filter format: '{}'. Expected KEY=VALUE.", f);
+                }
+            }
+            let graph =
+                asobi::db::search_nodes_with_limit(&conn, &query, limit, &parsed_filters).await?;
             println!("{}", serde_json::to_string_pretty(&graph)?);
         }
         Commands::Show { names } => {
