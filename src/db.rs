@@ -130,7 +130,7 @@ pub async fn delete_topic(conn: &Connection, id: &str) -> Result<()> {
 
 pub async fn mcp_create_entities(
     conn: &Connection,
-    entities: Vec<crate::mcp::EntityInput>,
+    entities: Vec<crate::model::EntityInput>,
 ) -> Result<()> {
     let tx = conn.transaction().await?;
     for mut ent in entities {
@@ -154,7 +154,7 @@ pub async fn mcp_create_entities(
 
 pub async fn mcp_add_observations(
     conn: &Connection,
-    observations: Vec<crate::mcp::ObservationInput>,
+    observations: Vec<crate::model::ObservationInput>,
     limit: usize,
 ) -> Result<()> {
     let tx = conn.transaction().await?;
@@ -185,7 +185,7 @@ pub async fn mcp_add_observations(
 
 pub async fn mcp_create_relations(
     conn: &Connection,
-    relations: Vec<crate::mcp::RelationInput>,
+    relations: Vec<crate::model::RelationInput>,
 ) -> Result<()> {
     let tx = conn.transaction().await?;
     for mut rel in relations {
@@ -227,7 +227,7 @@ pub async fn mcp_delete_entities(conn: &Connection, names: Vec<String>) -> Resul
 
 pub async fn mcp_delete_observations(
     conn: &Connection,
-    deletions: Vec<crate::mcp::ObservationDeletion>,
+    deletions: Vec<crate::model::ObservationDeletion>,
 ) -> Result<()> {
     let tx = conn.transaction().await?;
     for mut del in deletions {
@@ -246,7 +246,7 @@ pub async fn mcp_delete_observations(
 
 pub async fn mcp_delete_relations(
     conn: &Connection,
-    relations: Vec<crate::mcp::RelationInput>,
+    relations: Vec<crate::model::RelationInput>,
 ) -> Result<()> {
     let tx = conn.transaction().await?;
     for mut rel in relations {
@@ -262,7 +262,7 @@ pub async fn mcp_delete_relations(
     Ok(())
 }
 
-pub async fn mcp_read_graph(conn: &Connection) -> Result<crate::mcp::Graph> {
+pub async fn mcp_read_graph(conn: &Connection) -> Result<crate::model::Graph> {
     let mut entity_names = Vec::new();
     let mut rows = conn
         .query(crate::constant::SQL_SELECT_ALL_ENTITIES, ())
@@ -277,20 +277,20 @@ pub async fn mcp_read_graph(conn: &Connection) -> Result<crate::mcp::Graph> {
         .query(crate::constant::SQL_SELECT_ALL_RELATIONS, ())
         .await?;
     while let Some(row) = rel_rows.next().await? {
-        relations.push(crate::mcp::RelationInput {
+        relations.push(crate::model::RelationInput {
             from: row.get(0)?,
             to: row.get(1)?,
             relation_type: row.get(2)?,
         });
     }
 
-    Ok(crate::mcp::Graph {
+    Ok(crate::model::Graph {
         entities,
         relations,
     })
 }
 
-pub async fn mcp_read_graph_eager(conn: &Connection) -> Result<crate::mcp::Graph> {
+pub async fn mcp_read_graph_eager(conn: &Connection) -> Result<crate::model::Graph> {
     let mut entity_names = Vec::new();
     let mut rows = conn
         .query(crate::constant::SQL_SELECT_ALL_ENTITIES, ())
@@ -305,20 +305,20 @@ pub async fn mcp_read_graph_eager(conn: &Connection) -> Result<crate::mcp::Graph
         .query(crate::constant::SQL_SELECT_ALL_RELATIONS, ())
         .await?;
     while let Some(row) = rel_rows.next().await? {
-        relations.push(crate::mcp::RelationInput {
+        relations.push(crate::model::RelationInput {
             from: row.get(0)?,
             to: row.get(1)?,
             relation_type: row.get(2)?,
         });
     }
 
-    Ok(crate::mcp::Graph {
+    Ok(crate::model::Graph {
         entities,
         relations,
     })
 }
 
-pub async fn mcp_search_nodes(conn: &Connection, query: &str) -> Result<crate::mcp::Graph> {
+pub async fn mcp_search_nodes(conn: &Connection, query: &str) -> Result<crate::model::Graph> {
     mcp_search_nodes_with_limit(conn, query, DEFAULT_SEARCH_LIMIT).await
 }
 
@@ -326,7 +326,7 @@ pub async fn mcp_search_nodes_with_limit(
     conn: &Connection,
     query: &str,
     limit: usize,
-) -> Result<crate::mcp::Graph> {
+) -> Result<crate::model::Graph> {
     let limit = limit.max(1);
     let mut entity_names: Vec<String> = Vec::new();
 
@@ -391,13 +391,13 @@ pub async fn mcp_search_nodes_with_limit(
 
     let entities = load_entities_lazy(conn, &all_entity_names).await?;
 
-    Ok(crate::mcp::Graph {
+    Ok(crate::model::Graph {
         entities,
         relations,
     })
 }
 
-pub async fn mcp_open_nodes(conn: &Connection, names: Vec<String>) -> Result<crate::mcp::Graph> {
+pub async fn mcp_open_nodes(conn: &Connection, names: Vec<String>) -> Result<crate::model::Graph> {
     let normalized_names: Vec<String> = names
         .into_iter()
         .map(|n| crate::normalize::normalize_key(&n))
@@ -405,7 +405,7 @@ pub async fn mcp_open_nodes(conn: &Connection, names: Vec<String>) -> Result<cra
     let entities = load_entities_eager(conn, &normalized_names).await?;
     let relations = load_relations(conn, &normalized_names).await?;
 
-    Ok(crate::mcp::Graph {
+    Ok(crate::model::Graph {
         entities,
         relations,
     })
@@ -414,7 +414,7 @@ pub async fn mcp_open_nodes(conn: &Connection, names: Vec<String>) -> Result<cra
 async fn load_relations(
     conn: &Connection,
     names: &[String],
-) -> Result<Vec<crate::mcp::RelationInput>> {
+) -> Result<Vec<crate::model::RelationInput>> {
     let mut relations = Vec::new();
     if names.is_empty() {
         return Ok(relations);
@@ -438,7 +438,7 @@ async fn load_relations(
 
         let mut rel_rows = conn.query(&sql, params).await?;
         while let Some(row) = rel_rows.next().await? {
-            relations.push(crate::mcp::RelationInput {
+            relations.push(crate::model::RelationInput {
                 from: row.get(0)?,
                 to: row.get(1)?,
                 relation_type: row.get(2)?,
@@ -452,7 +452,7 @@ async fn load_relations(
 async fn load_entities_lazy(
     conn: &Connection,
     names: &[String],
-) -> Result<Vec<crate::mcp::EntityOutput>> {
+) -> Result<Vec<crate::model::EntityOutput>> {
     if names.is_empty() {
         return Ok(Vec::new());
     }
@@ -494,7 +494,7 @@ async fn load_entities_lazy(
         if let Some(entity_type) = entity_types.get(name) {
             let entity_truths = truths.get(name).cloned().unwrap_or_default();
             let count = obs_counts.get(name).cloned().unwrap_or(0);
-            entities.push(crate::mcp::EntityOutput {
+            entities.push(crate::model::EntityOutput {
                 name: name.clone(),
                 entity_type: entity_type.clone(),
                 observations: Vec::new(),
@@ -510,7 +510,7 @@ async fn load_entities_lazy(
 async fn load_entities_eager(
     conn: &Connection,
     names: &[String],
-) -> Result<Vec<crate::mcp::EntityOutput>> {
+) -> Result<Vec<crate::model::EntityOutput>> {
     if names.is_empty() {
         return Ok(Vec::new());
     }
@@ -565,7 +565,7 @@ async fn load_entities_eager(
             let entity_obs = observations.remove(name).unwrap_or_default();
             let count = entity_obs.len();
             let body = skill_bodies.get(name).cloned();
-            entities.push(crate::mcp::EntityOutput {
+            entities.push(crate::model::EntityOutput {
                 name: name.clone(),
                 entity_type: entity_type.clone(),
                 observations: entity_obs,
@@ -830,7 +830,7 @@ mod tests {
     async fn seed_entity(conn: &Connection, name: &str, entity_type: &str, obs: &[&str]) {
         mcp_create_entities(
             conn,
-            vec![crate::mcp::EntityInput {
+            vec![crate::model::EntityInput {
                 name: name.to_string(),
                 entity_type: entity_type.to_string(),
                 observations: obs.iter().map(|s| s.to_string()).collect(),
@@ -964,7 +964,7 @@ mod tests {
         seed_entity(&conn, "entity2", "project", &["obs3"]).await;
         mcp_create_relations(
             &conn,
-            vec![crate::mcp::RelationInput {
+            vec![crate::model::RelationInput {
                 from: "entity1".to_string(),
                 to: "entity2".to_string(),
                 relation_type: "related".to_string(),
@@ -1108,7 +1108,7 @@ mod tests {
 
         seed_entity(&conn, "test-entity", "concept", &[]).await;
 
-        let inputs = vec![crate::mcp::ObservationInput {
+        let inputs = vec![crate::model::ObservationInput {
             entity_name: "test-entity".to_string(),
             contents: vec![
                 "obs1".to_string(),
@@ -1145,7 +1145,7 @@ mod tests {
 
         seed_entity(&conn, "test-entity", "concept", &[]).await;
 
-        let inputs = vec![crate::mcp::ObservationInput {
+        let inputs = vec![crate::model::ObservationInput {
             entity_name: "test-entity".to_string(),
             contents: vec![
                 "obs1".to_string(),

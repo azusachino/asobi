@@ -15,6 +15,11 @@ use tracing_subscriber::EnvFilter;
 struct Cli {
     #[command(subcommand)]
     command: Commands,
+    /// After a mutation, print the affected entity/entities as JSON to stdout
+    /// (instead of leaving stdout empty). No effect on read commands, which
+    /// already emit JSON.
+    #[arg(long, global = true)]
+    json: bool,
 }
 
 #[derive(Subcommand)]
@@ -31,13 +36,23 @@ enum Commands {
         /// Query string
         query: String,
     },
-    /// Create new entities in the knowledge graph
-    CreateEntities { name: String, entity_type: String },
-    /// Create relations between entities
+    /// Create new entities in the knowledge graph.
+    ///
+    /// Accepts one or more `NAME TYPE` pairs:
+    /// `create-entities A task B concept` creates two entities.
+    CreateEntities {
+        /// Flat list of `NAME TYPE` pairs (count must be a multiple of 2)
+        #[arg(num_args = 2.., value_names = ["NAME", "TYPE"])]
+        pairs: Vec<String>,
+    },
+    /// Create relations between entities.
+    ///
+    /// Accepts one or more `FROM TO TYPE` triples:
+    /// `create-relations A B uses C D blocks` creates two relations.
     CreateRelations {
-        from: String,
-        to: String,
-        relation_type: String,
+        /// Flat list of `FROM TO TYPE` triples (count must be a multiple of 3)
+        #[arg(num_args = 3.., value_names = ["FROM", "TO", "TYPE"])]
+        triples: Vec<String>,
     },
     /// Add observations to existing entities
     AddObservations {
@@ -81,8 +96,6 @@ enum Commands {
         #[arg(long, default_value = "90")]
         older_than: u32,
     },
-    /// Start the MCP stdio server (legacy/compatibility)
-    Mcp,
     /// Initialise a Asobi workspace (XDG by default, `--local` for cwd)
     Init {
         /// Create `.asobi/` and `asobi.toml` in the current directory
@@ -177,7 +190,6 @@ fn needs_vector(_: &Commands) -> bool {
 }
 
 pub const ENV_FASTEMBED_CACHE_DIR: &str = "ASOBI_FASTEMBED_CACHE_DIR";
-pub const ENV_EMBED_PROVIDER: &str = "ASOBI_EMBED_PROVIDER";
 pub const ENV_TOPICS_DIR: &str = "ASOBI_TOPICS_DIR";
 
 #[cfg(feature = "documents")]
@@ -189,15 +201,11 @@ async fn init_vector(
     Arc<asobi::embed::FastEmbedProvider>,
 )> {
     let store = asobi::vector::VectorStore::new(conn);
+    let cache_dir = std::env::var(ENV_FASTEMBED_CACHE_DIR)
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| paths.data_dir.join("fastembed_cache"));
     let embedder: Arc<asobi::embed::FastEmbedProvider> =
-        if std::env::var(ENV_EMBED_PROVIDER).as_deref() == Ok("claude") {
-            anyhow::bail!("ClaudeProvider not yet implemented")
-        } else {
-            let cache_dir = std::env::var(ENV_FASTEMBED_CACHE_DIR)
-                .map(std::path::PathBuf::from)
-                .unwrap_or_else(|_| paths.data_dir.join("fastembed_cache"));
-            Arc::new(asobi::embed::FastEmbedProvider::new(cache_dir)?)
-        };
+        Arc::new(asobi::embed::FastEmbedProvider::new(cache_dir)?);
     if store.dim() != embedder.dim() {
         anyhow::bail!(
             "Vector store dimension mismatch: store={}, embedder={}",
@@ -402,34 +410,55 @@ async fn main() -> Result<()> {
         return Ok(());
     }
 
+    let json = cli.json;
     match cli.command {
-        Commands::CreateEntities { name, entity_type } => {
-            asobi::db::mcp_create_entities(
-                &conn,
-                vec![asobi::mcp::EntityInput {
-                    name: name.clone(),
-                    entity_type,
+        Commands::CreateEntities { pairs } => {
+            if pairs.is_empty() || pairs.len() % 2 != 0 {
+                anyhow::bail!(
+                    "create-entities expects one or more `NAME TYPE` pairs (got {} arguments)",
+                    pairs.len()
+                );
+            }
+            let entities: Vec<asobi::model::EntityInput> = pairs
+                .chunks_exact(2)
+                .map(|c| asobi::model::EntityInput {
+                    name: c[0].clone(),
+                    entity_type: c[1].clone(),
                     observations: vec![],
-                }],
-            )
-            .await?;
-            info!("Entity '{}' created.", name);
+                })
+                .collect();
+            let names: Vec<String> = entities.iter().map(|e| e.name.clone()).collect();
+            asobi::db::mcp_create_entities(&conn, entities).await?;
+            info!("{} entit{} created.", names.len(), plural(names.len()));
+            if json {
+                emit_nodes(&conn, names).await?;
+            }
         }
-        Commands::CreateRelations {
-            from,
-            to,
-            relation_type,
-        } => {
-            asobi::db::mcp_create_relations(
-                &conn,
-                vec![asobi::mcp::RelationInput {
-                    from,
-                    to,
-                    relation_type,
-                }],
-            )
-            .await?;
-            info!("Relation created.");
+        Commands::CreateRelations { triples } => {
+            if triples.is_empty() || triples.len() % 3 != 0 {
+                anyhow::bail!(
+                    "create-relations expects one or more `FROM TO TYPE` triples (got {} arguments)",
+                    triples.len()
+                );
+            }
+            let relations: Vec<asobi::model::RelationInput> = triples
+                .chunks_exact(3)
+                .map(|c| asobi::model::RelationInput {
+                    from: c[0].clone(),
+                    to: c[1].clone(),
+                    relation_type: c[2].clone(),
+                })
+                .collect();
+            let involved: Vec<String> = relations
+                .iter()
+                .flat_map(|r| [r.from.clone(), r.to.clone()])
+                .collect();
+            let count = relations.len();
+            asobi::db::mcp_create_relations(&conn, relations).await?;
+            info!("{} relation{} created.", count, suffix(count));
+            if json {
+                emit_nodes(&conn, involved).await?;
+            }
         }
         Commands::AddObservations { name, contents } => {
             let paths = asobi::paths::AsobiPaths::resolve();
@@ -439,37 +468,56 @@ async fn main() -> Result<()> {
                 .unwrap_or(paths.observation_limit.unwrap_or(50));
             asobi::db::mcp_add_observations(
                 &conn,
-                vec![asobi::mcp::ObservationInput {
-                    entity_name: name,
+                vec![asobi::model::ObservationInput {
+                    entity_name: name.clone(),
                     contents,
                 }],
                 limit,
             )
             .await?;
             info!("Observation added.");
+            if json {
+                emit_nodes(&conn, vec![name]).await?;
+            }
         }
         Commands::AddTruth { name, key, value } => {
             asobi::db::truth_upsert(&conn, &name, &key, &value).await?;
             info!("Truth added.");
+            if json {
+                emit_nodes(&conn, vec![name]).await?;
+            }
         }
         Commands::DeleteTruth { name, key } => {
             asobi::db::truth_delete(&conn, &name, &key).await?;
             info!("Truth deleted.");
+            if json {
+                emit_nodes(&conn, vec![name]).await?;
+            }
         }
         Commands::DeleteEntities { names } => {
+            let deleted = names.clone();
             asobi::db::mcp_delete_entities(&conn, names).await?;
             info!("Entities deleted.");
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({ "deleted": deleted }))?
+                );
+            }
         }
         Commands::DeleteObservations { name, content } => {
             asobi::db::mcp_delete_observations(
                 &conn,
-                vec![asobi::mcp::ObservationDeletion {
-                    entity_name: name,
+                vec![asobi::model::ObservationDeletion {
+                    entity_name: name.clone(),
                     observations: vec![content],
                 }],
             )
             .await?;
             info!("Observations deleted.");
+            if json {
+                emit_nodes(&conn, vec![name]).await?;
+            }
         }
         Commands::DeleteRelations {
             from,
@@ -478,14 +526,17 @@ async fn main() -> Result<()> {
         } => {
             asobi::db::mcp_delete_relations(
                 &conn,
-                vec![asobi::mcp::RelationInput {
-                    from,
-                    to,
+                vec![asobi::model::RelationInput {
+                    from: from.clone(),
+                    to: to.clone(),
                     relation_type,
                 }],
             )
             .await?;
             info!("Relations deleted.");
+            if json {
+                emit_nodes(&conn, vec![from, to]).await?;
+            }
         }
         Commands::ReadGraph => {
             let graph = asobi::db::mcp_read_graph(&conn).await?;
@@ -498,9 +549,6 @@ async fn main() -> Result<()> {
         Commands::OpenNodes { names } => {
             let graph = asobi::db::mcp_open_nodes(&conn, names).await?;
             println!("{}", serde_json::to_string_pretty(&graph)?);
-        }
-        Commands::Mcp => {
-            asobi::mcp::run_server(conn).await?;
         }
         Commands::Stats => {
             let (entities, relations, observations) = asobi::db::mcp_stats(&conn).await?;
@@ -521,12 +569,12 @@ async fn main() -> Result<()> {
         }
         Commands::Import { file } => {
             let content = std::fs::read_to_string(&file)?;
-            let graph: asobi::mcp::Graph = serde_json::from_str(&content)?;
+            let graph: asobi::model::Graph = serde_json::from_str(&content)?;
 
             // Re-construct entity inputs
             let mut entities = Vec::new();
             for e in graph.entities {
-                entities.push(asobi::mcp::EntityInput {
+                entities.push(asobi::model::EntityInput {
                     name: e.name,
                     entity_type: e.entity_type,
                     observations: e.observations,
@@ -788,6 +836,26 @@ async fn main() -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Print the named entities (and the relations among them) as pretty JSON to
+/// stdout — the `--json` echo after a mutation, so a caller can confirm the
+/// write without a second `open-nodes` round-trip. Names are normalized inside
+/// `mcp_open_nodes`, so raw user input matches what was just stored.
+async fn emit_nodes(conn: &libsql::Connection, names: Vec<String>) -> Result<()> {
+    let graph = asobi::db::mcp_open_nodes(conn, names).await?;
+    println!("{}", serde_json::to_string_pretty(&graph)?);
+    Ok(())
+}
+
+/// `""`/`"s"` suffix for count-based log lines.
+fn suffix(n: usize) -> &'static str {
+    if n == 1 { "" } else { "s" }
+}
+
+/// `"y"`/`"ies"` suffix for "entit{y,ies}".
+fn plural(n: usize) -> &'static str {
+    if n == 1 { "y" } else { "ies" }
 }
 
 fn print_init_report(report: &asobi::init::InitReport) {

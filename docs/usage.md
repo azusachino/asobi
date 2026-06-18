@@ -20,7 +20,7 @@ Or build locally:
 
 ```bash
 git clone https://github.com/azusachino/asobi && cd asobi
-make build            # graph/MCP CLI at ./target/debug/asobi
+make build            # graph CLI at ./target/debug/asobi
 make build-documents  # includes ingest/query/compact
 ```
 
@@ -304,21 +304,4 @@ For exact entity retrieval, prefer `open-nodes` over `search-nodes`:
 asobi open-nodes "project-x:session" "UserPreferences"
 ```
 
-### MCP server mode (optional)
-
-If your agent framework supports MCP stdio servers:
-
-```bash
-# Register once
-claude mcp add asobi -- asobi mcp
-
-# Protocol: MCP 2024-11-05, 11 tools
-# Tools: create_entities, create_relations, add_observations,
-#        delete_entities, delete_observations, delete_relations,
-#        add_truth, delete_truth,
-#        read_graph, search_nodes, open_nodes
-```
-
-The MCP server uses the same storage as the CLI — data written via `asobi mcp` is immediately readable via `asobi read-graph` and vice versa.
-
-`search_nodes` accepts an optional `limit` argument. Omit it for the default top 100 matches; set it explicitly for larger ranked exports.
+`search-nodes` accepts an optional `--limit` argument. Omit it for the default top 100 matches; set it explicitly for larger ranked exports.

@@ -1,5 +1,5 @@
 use asobi::db::{ENV_DATABASE_URL, init_db, mcp_create_entities, mcp_read_graph};
-use asobi::mcp::EntityInput;
+use asobi::model::EntityInput;
 use tempfile::tempdir;
 
 #[tokio::test]

@@ -9,7 +9,6 @@ Asobi is a persistent, project-local knowledge graph CLI for AI agents. Agents u
 - **Fast search** — `search-nodes` over FTS5 (porter stemming + BM25) with a substring fallback.
 - **Lazy reads** — `read-graph`/`search-nodes` return truths + counts; `open-nodes` returns the full body. Cheap to load, cheap on tokens.
 - **Skills** — install reusable agent instructions from a git repo or local path.
-- **MCP server** — `asobi mcp` serves the graph over stdio to MCP-aware clients.
 - **Document tier** (optional, `--features documents`) — `ingest` + semantic `query` over Markdown.
 
 ## Installation
@@ -36,7 +35,7 @@ cargo binstall asobi
 cargo install --git https://github.com/azusachino/asobi
 ```
 
-Or build locally with `make build` (graph/MCP CLI) or `make build-documents` (adds `ingest`/`query`/`compact`). Requires Rust 1.85+, Edition 2024.
+Or build locally with `make build` (graph CLI) or `make build-documents` (adds `ingest`/`query`/`compact`). Requires Rust 1.85+, Edition 2024.
 
 ## Quick Start
 
@@ -55,7 +54,6 @@ asobi open-nodes "my-project"
 - `asobi read-graph` / `search-nodes <q>` / `open-nodes <name>...` — read the graph.
 - `asobi add-truth <name> <key> <value>` / `delete-truth <name> <key>` — manage truths.
 - `asobi skills install <src> --all` / `update` / `skills` / `skills show <name>` — manage skills (`--all` and `update` sync, pruning skills dropped upstream; `--select` is additive).
-- `asobi mcp` — run as an MCP stdio server.
 - `asobi stats` / `export -o graph.json` / `import graph.json` / `reset` — inspect & manage.
 
 ## Development

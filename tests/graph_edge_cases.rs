@@ -1,4 +1,4 @@
-use asobi::{db, mcp};
+use asobi::{db, model};
 use std::fs;
 use tempfile::tempdir;
 
@@ -19,12 +19,12 @@ async fn graph_crud_handles_edges() {
     db::mcp_create_entities(
         &conn,
         vec![
-            mcp::EntityInput {
+            model::EntityInput {
                 name: "alpha".into(),
                 entity_type: "project".into(),
                 observations: vec!["running async tasks".into()],
             },
-            mcp::EntityInput {
+            model::EntityInput {
                 name: "beta".into(),
                 entity_type: "concept".into(),
                 observations: vec!["scheduler queue".into()],
@@ -36,7 +36,7 @@ async fn graph_crud_handles_edges() {
 
     db::mcp_create_relations(
         &conn,
-        vec![mcp::RelationInput {
+        vec![model::RelationInput {
             from: "alpha".into(),
             to: "beta".into(),
             relation_type: "uses".into(),
@@ -60,7 +60,7 @@ async fn graph_crud_handles_edges() {
     // creating a relation to a missing entity should fail foreign key constraints
     let bad_relation = db::mcp_create_relations(
         &conn,
-        vec![mcp::RelationInput {
+        vec![model::RelationInput {
             from: "alpha".into(),
             to: "missing".into(),
             relation_type: "uses".into(),
@@ -95,7 +95,7 @@ async fn graph_accepts_irregular_text_without_sql_injection() {
 
     db::mcp_create_entities(
         &conn,
-        vec![mcp::EntityInput {
+        vec![model::EntityInput {
             name: raw_name.into(),
             entity_type: "project'; DROP TABLE mcp_observations; --".into(),
             observations: vec![odd_observation.into(), large_observation.clone()],
@@ -107,7 +107,7 @@ async fn graph_accepts_irregular_text_without_sql_injection() {
     // Duplicate create is an entity no-op, but supplied observations are still appended.
     db::mcp_create_entities(
         &conn,
-        vec![mcp::EntityInput {
+        vec![model::EntityInput {
             name: raw_name.into(),
             entity_type: "ignored".into(),
             observations: vec!["second insert observation".into()],
@@ -139,7 +139,7 @@ async fn graph_accepts_irregular_text_without_sql_injection() {
 
     db::mcp_create_entities(
         &conn,
-        vec![mcp::EntityInput {
+        vec![model::EntityInput {
             name: "safe-target".into(),
             entity_type: "concept".into(),
             observations: vec![],
@@ -150,7 +150,7 @@ async fn graph_accepts_irregular_text_without_sql_injection() {
 
     db::mcp_create_relations(
         &conn,
-        vec![mcp::RelationInput {
+        vec![model::RelationInput {
             from: raw_name.into(),
             to: "safe-target".into(),
             relation_type: "relates'; DELETE FROM mcp_relations; --".into(),
@@ -177,7 +177,7 @@ async fn graph_deletes_exact_observation_only() {
     let (_dir, conn) = test_conn().await;
     db::mcp_create_entities(
         &conn,
-        vec![mcp::EntityInput {
+        vec![model::EntityInput {
             name: "exact".into(),
             entity_type: "project".into(),
             observations: vec!["same prefix".into(), "same prefix extended".into()],
@@ -188,7 +188,7 @@ async fn graph_deletes_exact_observation_only() {
 
     db::mcp_delete_observations(
         &conn,
-        vec![mcp::ObservationDeletion {
+        vec![model::ObservationDeletion {
             entity_name: "exact".into(),
             observations: vec!["same prefix".into()],
         }],
@@ -237,7 +237,7 @@ async fn graph_handles_malicious_payloads_gracefully() {
         // Use a safe name so we can reliably fetch it.
         db::mcp_create_entities(
             &conn,
-            vec![mcp::EntityInput {
+            vec![model::EntityInput {
                 name: raw_name.clone(),
                 entity_type: payload.to_string(),
                 observations: vec![payload.to_string()],
@@ -259,7 +259,7 @@ async fn graph_handles_malicious_payloads_gracefully() {
         // Create a relation using the malicious payload as the relation type
         db::mcp_create_entities(
             &conn,
-            vec![mcp::EntityInput {
+            vec![model::EntityInput {
                 name: "safe-target".to_string(),
                 entity_type: "safe".to_string(),
                 observations: vec![],
@@ -270,7 +270,7 @@ async fn graph_handles_malicious_payloads_gracefully() {
 
         db::mcp_create_relations(
             &conn,
-            vec![mcp::RelationInput {
+            vec![model::RelationInput {
                 from: raw_name.clone(),
                 to: "safe-target".to_string(),
                 relation_type: payload.to_string(),

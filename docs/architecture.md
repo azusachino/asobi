@@ -122,25 +122,6 @@ The lazy-init split is enforced in `main.rs` via `needs_vector()`. Graph command
 
 ---
 
-## MCP stdio server
-
-`asobi mcp` runs a JSON-RPC 2.0 server over stdin/stdout that implements the Memory MCP protocol:
-
-1. Client sends `initialize` → server responds with protocol version `2024-11-05` and tool capabilities
-2. Client sends `notifications/initialized` (no response — it's a notification)
-3. Client sends `tools/list` → server responds with all 11 tool schemas
-4. Client sends `tools/call` with `name` + `arguments` → server dispatches to the graph tier and responds with `content[{type, text}]`
-
-This makes `asobi mcp` a drop-in replacement for `@modelcontextprotocol/server-memory` in Claude Code:
-
-```bash
-claude mcp add asobi -- asobi mcp
-```
-
-The MCP path reuses the same libSQL operations as the CLI commands — no separate code path.
-
----
-
 ## Performance headroom
 
 The current implementation is correct and fast for typical use. `search-nodes`

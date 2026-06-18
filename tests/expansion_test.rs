@@ -1,7 +1,7 @@
 use asobi::db::{
     ENV_DATABASE_URL, init_db, mcp_create_entities, mcp_create_relations, mcp_search_nodes,
 };
-use asobi::mcp::{EntityInput, RelationInput};
+use asobi::model::{EntityInput, RelationInput};
 use tempfile::tempdir;
 
 #[tokio::test]

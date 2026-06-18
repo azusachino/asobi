@@ -292,7 +292,7 @@ impl Drop for OperationLock {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::mcp::EntityInput;
+    use crate::model::EntityInput;
     use tempfile::tempdir;
 
     fn set_db(path: &Path) {

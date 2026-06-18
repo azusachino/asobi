@@ -8,14 +8,14 @@ Rust (edition 2024) on `tokio`; `clap` CLI, `tracing` logs (stderr, `RUST_LOG`).
 
 ## Layout
 
-- `src/main.rs` — CLI dispatch · `src/db.rs` — schema, graph CRUD, FTS5 · `src/mcp.rs` — MCP stdio server
+- `src/main.rs` — CLI dispatch · `src/db.rs` — schema, graph CRUD, FTS5 · `src/model.rs` — graph I/O types
 - `src/paths.rs` — workspace resolution (project-local > XDG) · `src/init.rs` — `asobi init` · `src/skills.rs` — skills install/parse
 - `src/ingest.rs`, `src/chunk.rs`, `src/embed/`, `src/vector.rs`, `src/recall.rs` — document tier
 - `src/compact.rs`, `src/digest.rs`, `src/backup.rs` — maintenance · `docs/` — reference · `scripts/` — `uv` utilities
 
 ## CLI
 
-Graph (CLI + MCP): `create-entities`, `add-observations`, `create-relations`, `delete-*`, `read-graph`, `search-nodes`, `open-nodes`. Truths: `add-truth`, `delete-truth`. Plus `skills`, `ingest`, `query`, `compact`, `init`, `mcp`, `backup`, `restore`. Full reference: [`SKILL.md`](SKILL.md), [`docs/usage.md`](docs/usage.md).
+Graph: `create-entities`, `add-observations`, `create-relations`, `delete-*`, `read-graph`, `search-nodes`, `open-nodes`. Truths: `add-truth`, `delete-truth`. Plus `skills`, `ingest`, `query`, `compact`, `init`, `backup`, `restore`. Full reference: [`SKILL.md`](SKILL.md), [`docs/usage.md`](docs/usage.md).
 
 ## Make
 

@@ -224,9 +224,85 @@ def main() -> None:
         failed = run_expect_failure(["read-graph"], env)
         assert "database" in failed.stderr.lower()
 
+    batch_and_json_checks()
     skills_checks()
 
     print("CLI graph integration checks passed")
+
+
+def batch_and_json_checks() -> None:
+    """Coverage for batched writes and the global ``--json`` echo.
+
+    ``create-entities`` takes repeated ``NAME TYPE`` pairs and
+    ``create-relations`` takes repeated ``FROM TO TYPE`` triples in a single
+    call (the underlying DB layer is already batch-capable). ``--json`` makes a
+    mutation print the affected entities to stdout so a caller can confirm a
+    write without a follow-up ``open-nodes``.
+    """
+    with tempfile.TemporaryDirectory(prefix="asobi-batch-") as tmp:
+        env = os.environ.copy()
+        env["ASOBI_DATABASE_URL"] = str(Path(tmp) / "asobi.db")
+
+        # create-entities: one call, multiple NAME TYPE pairs.
+        run(
+            ["create-entities", "alpha", "task", "beta", "concept", "gamma", "ref"],
+            env,
+        )
+        assert entity_names(graph(["read-graph"], env)) == {"alpha", "beta", "gamma"}
+
+        # Argument count not a multiple of 2 is rejected with a clear message.
+        bad_pairs = run_expect_failure(["create-entities", "x", "task", "y"], env)
+        assert "pair" in bad_pairs.stderr.lower()
+
+        # create-relations: one call, multiple FROM TO TYPE triples.
+        run(
+            ["create-relations", "alpha", "beta", "uses", "alpha", "gamma", "blocks"],
+            env,
+        )
+        rels = graph(["read-graph"], env)["relations"]
+        assert {(r["from"], r["to"], r["relationType"]) for r in rels} == {
+            ("alpha", "beta", "uses"),
+            ("alpha", "gamma", "blocks"),
+        }
+
+        # Argument count not a multiple of 3 is rejected.
+        bad_triples = run_expect_failure(
+            ["create-relations", "a", "b", "uses", "c"], env
+        )
+        assert "triple" in bad_triples.stderr.lower()
+
+        # --json: create-entities echoes the created entity to stdout.
+        echoed = json.loads(
+            run(["create-entities", "delta", "task", "--json"], env).stdout
+        )
+        assert "delta" in entity_names(echoed)
+
+        # --json: add-observations returns the affected entity with its trail.
+        obs_echo = json.loads(
+            run(["add-observations", "delta", "first obs", "--json"], env).stdout
+        )
+        assert observations(obs_echo, "delta") == ["first obs"]
+
+        # --json: create-relations shows the relation among its endpoints.
+        rel_echo = json.loads(
+            run(["create-relations", "delta", "alpha", "uses", "--json"], env).stdout
+        )
+        assert {
+            "from": "delta",
+            "to": "alpha",
+            "relationType": "uses",
+        } in rel_echo["relations"]
+
+        # --json: add-truth / delete-truth return the entity's current truths.
+        truth_echo = json.loads(
+            run(["add-truth", "delta", "status", "READY", "--json"], env).stdout
+        )
+        assert truths(truth_echo, "delta") == {"status": "READY"}
+
+        # --json: delete-entities reports the removed names (entities are gone,
+        # so there is nothing to open — the shape is a deletion receipt).
+        del_echo = json.loads(run(["delete-entities", "gamma", "--json"], env).stdout)
+        assert del_echo == {"deleted": ["gamma"]}
 
 
 def skills_checks() -> None:

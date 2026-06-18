@@ -32,15 +32,17 @@ One graph, a few node parts — knowing which to write is the skill:
 
 ## Command Reference
 
-All commands print a one-line confirmation (`Entity 'X' created.`, `Observation added.`, etc.) on success. Graph-read commands print JSON to stdout.
+Stream contract (matters for scripted callers): **mutating** commands print a one-line confirmation (`Entity 'X' created.`, `Observation added.`, etc.) to **stderr** and leave **stdout empty** on success — check the exit code, not stdout. **Read** commands (`read-graph`, `search-nodes`, `open-nodes`, `stats`, `export`) write their result to **stdout**; graph reads emit JSON.
+
+Pass the global `--json` flag to any mutating command to also print the affected entity/entities (and the relations among them) as JSON to **stdout** — e.g. `asobi create-entities A task --json`. This removes the follow-up `open-nodes` round-trip; `delete-entities --json` instead prints `{"deleted": [...]}`.
 
 ### Create
 
 ```
-asobi create-entities <NAME> <ENTITY_TYPE>
+asobi create-entities <NAME> <ENTITY_TYPE> [<NAME> <ENTITY_TYPE> ...]
 ```
 
-Creates a single entity. Silently no-ops if the name already exists (`INSERT OR IGNORE`).
+Creates one or more entities in a single call — pass repeated `NAME TYPE` pairs (`create-entities A task B concept` creates two). The argument count must be a multiple of 2. Silently no-ops on names that already exist (`INSERT OR IGNORE`). Prefer one batched call over many invocations.
 
 ```
 asobi add-observations <NAME> <CONTENT> [<CONTENT> ...]
@@ -49,10 +51,10 @@ asobi add-observations <NAME> <CONTENT> [<CONTENT> ...]
 Appends one or more observation strings to an existing entity. The entity must already exist. Observations are subject to a rolling history cap (defaults to 50 oldest evicted per entity, customizable via `ASOBI_OBSERVATION_LIMIT` or `asobi.toml`'s `observation_limit`).
 
 ```
-asobi create-relations <FROM> <TO> <RELATION_TYPE>
+asobi create-relations <FROM> <TO> <RELATION_TYPE> [<FROM> <TO> <RELATION_TYPE> ...]
 ```
 
-Creates a directed relation between two existing entities. Upserts on the composite key `(from, to, relation_type)`.
+Creates one or more directed relations in a single call — pass repeated `FROM TO TYPE` triples (`create-relations A B uses C D blocks`). The argument count must be a multiple of 3. Upserts on the composite key `(from, to, relation_type)`.
 
 ### Read
 
@@ -164,14 +166,6 @@ asobi query <QUERY>
 ```
 
 Hybrid semantic + FTS keyword search over ingested topics. Returns: `TITLE | (score: X.XX) | PATH` per result.
-
-### MCP server
-
-```
-asobi mcp
-```
-
-Runs Asobi as an MCP server over stdio (JSON-RPC), exposing the graph + truth operations as tools (`create_entities`, `add_observations`, `add_truth`, `open_nodes`, `read_graph`, `search_nodes`, `delete_*`, …) on the same database as the CLI. Skills and document ingestion stay CLI-only.
 
 ### Workspace init
 
@@ -314,7 +308,7 @@ asobi create-entities "<project>:session" "session"
 }
 ```
 
-**Mutating commands** print a plain-text confirmation line — no JSON.
+**Mutating commands** print a plain-text confirmation line to **stderr** (no JSON, stdout empty). Rely on the process exit code for success/failure, then `open-nodes` the affected entity if you need to read back the result.
 
 ---
 

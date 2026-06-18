@@ -7,7 +7,7 @@
 //! fully isolates writes and resets from any other database file.
 
 use asobi::db;
-use asobi::mcp::EntityInput;
+use asobi::model::EntityInput;
 use tempfile::tempdir;
 
 fn set_db(path: &std::path::Path) {
