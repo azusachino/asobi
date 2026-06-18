@@ -62,7 +62,7 @@ Add `.asobi/` to `.gitignore`; the `asobi.toml` itself can be checked in.
 **Start a work session — load prior context:**
 
 ```bash
-asobi search "session"
+asobi search --where status=IN_PROGRESS
 asobi show "my-project:session"
 ```
 **Store a decision (supports hierarchical naming and seeded observations):**
@@ -97,10 +97,9 @@ Use `graph` for full export. `search` is intentionally top-K by default so a bro
 **End a session — persist state:**
 
 ```bash
-asobi rm-obs "my-project:session" "status: IN_PROGRESS"
-asobi obs "my-project:session" "status: DONE"
+asobi truth "my-project:session" "status" "DONE"
+asobi truth "my-project:session" "last-updated" "2026-05-21"
 asobi obs "my-project:session" "next: implement FTS5 index"
-asobi obs "my-project:session" "last-updated: 2026-05-21"
 asobi compact  # syncs graph → markdown files for durable backup
 ```
 
@@ -168,8 +167,8 @@ All operations are CLI commands. No server to start. No authentication. Latency 
 # Option A: load a specific entity
 asobi show "<project>:session"
 
-# Option B: keyword search
-asobi search "session"
+# Option B: query by status truth
+asobi search --where status=IN_PROGRESS
 
 # Option C: full graph (small projects)
 asobi graph
@@ -179,18 +178,17 @@ asobi graph
 
 ```bash
 asobi obs "<project>" "Decided to use WAL mode for concurrent agent access"
-asobi obs "<project>:session" "status: IN_PROGRESS"
+asobi truth "<project>:session" "status" "IN_PROGRESS"
 ```
 
 **At session end:**
 
 ```bash
 # Update volatile state
-asobi rm-obs "<project>:session" "<old status line>"
-asobi obs "<project>:session" "status: DONE"
+asobi truth "<project>:session" "status" "DONE"
+asobi truth "<project>:session" "last-updated" "2026-05-21"
 asobi obs "<project>:session" "completed: implemented FTS5 search"
 asobi obs "<project>:session" "next: add WAL mode and entity_name index"
-asobi obs "<project>:session" "last-updated: 2026-05-21"
 
 # Archive to markdown (durable, re-indexed)
 asobi compact
@@ -200,8 +198,9 @@ asobi compact
 
 ```bash
 asobi rm "<project>:session"
-# Next agent creates it fresh
+# Next agent creates it fresh and sets initial status
 asobi new "<project>:session" "session"
+asobi truth "<project>:session" "status" "IN_PROGRESS"
 ```
 
 ### Entity naming conventions

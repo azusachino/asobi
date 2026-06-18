@@ -215,8 +215,8 @@ Use consistent types so `search` and `show` filters are predictable:
 ### Session Start
 
 ```bash
-asobi search "session"       # find active session entities
-asobi show "<project>:session"  # load specific session state
+asobi search --where status=IN_PROGRESS      # find active session entities
+asobi show "<project>:session"              # load specific session state
 ```
 
 Or load everything and filter client-side:
@@ -229,10 +229,9 @@ asobi graph
 
 ```bash
 # Update session state
-asobi rm-obs "<project>:session" "<old status line>"
-asobi obs "<project>:session" "status: DONE"
+asobi truth "<project>:session" "status" "DONE"
+asobi truth "<project>:session" "last-updated" "YYYY-MM-DD"
 asobi obs "<project>:session" "next: <one sentence handoff>"
-asobi obs "<project>:session" "last-updated: YYYY-MM-DD"
 
 # Archive to Markdown (durable backup + refreshes vector/FTS)
 asobi compact
@@ -244,6 +243,7 @@ asobi compact
 asobi rm "<project>:session"
 # recreate at next session start
 asobi new "<project>:session" "session"
+asobi truth "<project>:session" "status" "IN_PROGRESS"
 ```
 
 ---
