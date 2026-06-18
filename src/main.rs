@@ -35,6 +35,12 @@ enum Commands {
     Query {
         /// Query string
         query: String,
+        /// Maximum number of matched topics to return
+        #[arg(long, default_value_t = 5)]
+        limit: usize,
+        /// Print results as JSON
+        #[arg(long)]
+        json: bool,
     },
     /// Create new entities in the knowledge graph.
     ///
@@ -369,12 +375,19 @@ async fn main() -> Result<()> {
                         info!("Done.");
                     }
                 }
-                Commands::Query { query } => {
+                Commands::Query { query, limit, json } => {
                     info!("Searching: {}...", query);
-                    let results =
-                        asobi::recall::recall(&query, store.conn(), &store, embedder.as_ref(), 5)
-                            .await?;
-                    if results.is_empty() {
+                    let results = asobi::recall::recall(
+                        &query,
+                        store.conn(),
+                        &store,
+                        embedder.as_ref(),
+                        limit,
+                    )
+                    .await?;
+                    if json {
+                        println!("{}", serde_json::to_string_pretty(&results)?);
+                    } else if results.is_empty() {
                         info!("No results found.");
                     } else {
                         for r in results {

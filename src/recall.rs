@@ -1,9 +1,11 @@
 use crate::{db::search_fts, embed::EmbeddingProvider, vector::VectorStore};
 use anyhow::Result;
 use libsql::Connection;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct RecallResult {
     pub topic_id: String,
     pub title: String,
@@ -167,5 +169,29 @@ mod tests {
             .unwrap();
         assert!(!results.is_empty(), "expected at least one result");
         assert!(results[0].title.contains("Pinning"));
+    }
+
+    #[test]
+    fn test_recall_result_serialization() {
+        let result = RecallResult {
+            topic_id: "test-id".to_string(),
+            title: "Test Title".to_string(),
+            file_path: "path/to/file.md".to_string(),
+            snippet: "some snippet text".to_string(),
+            score: 0.85,
+        };
+        let json = serde_json::to_string(&result).unwrap();
+        assert!(json.contains("\"topicId\":\"test-id\""));
+        assert!(json.contains("\"title\":\"Test Title\""));
+        assert!(json.contains("\"filePath\":\"path/to/file.md\""));
+        assert!(json.contains("\"snippet\":\"some snippet text\""));
+        assert!(json.contains("\"score\":0.85"));
+
+        let deserialized: RecallResult = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.topic_id, "test-id");
+        assert_eq!(deserialized.title, "Test Title");
+        assert_eq!(deserialized.file_path, "path/to/file.md");
+        assert_eq!(deserialized.snippet, "some snippet text");
+        assert_eq!(deserialized.score, 0.85);
     }
 }
