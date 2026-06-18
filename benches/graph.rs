@@ -1,4 +1,4 @@
-use asobi::{db, mcp};
+use asobi::db;
 use std::env;
 use std::hint::black_box;
 use std::time::{Duration, Instant};
@@ -166,7 +166,7 @@ async fn seed_graph(conn: &libsql::Connection, entity_count: usize) {
         };
         db::create_entities(
             conn,
-            vec![mcp::EntityInput {
+            vec![asobi::model::EntityInput {
                 name: format!("entity-{i}"),
                 entity_type: "bench".to_string(),
                 observations: vec![format!(
