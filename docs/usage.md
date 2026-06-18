@@ -20,7 +20,7 @@ Or build locally:
 
 ```bash
 git clone https://github.com/azusachino/asobi && cd asobi
-make build            # graph/MCP CLI at ./target/debug/asobi
+make build            # graph CLI at ./target/debug/asobi
 make build-documents  # includes ingest/query/compact
 ```
 
@@ -62,44 +62,44 @@ Add `.asobi/` to `.gitignore`; the `asobi.toml` itself can be checked in.
 **Start a work session — load prior context:**
 
 ```bash
-asobi search-nodes "session"
-asobi open-nodes "my-project:session"
+asobi search --where status=IN_PROGRESS
+asobi show "my-project:session"
 ```
-**Store a decision (supports hierarchical naming):**
+**Store a decision (supports hierarchical naming and seeded observations):**
 
 ```bash
-asobi create-entities "project-x:architecture" "project"
-asobi add-observations "project-x:architecture" "Switched from serde_yaml to toml crate — better error messages"
+asobi new "project-x:architecture" "project" --obs "Switched from serde_yaml to toml crate — better error messages"
 ```
 
 **Link related concepts (preserves case and dots):**
 
 ```bash
-asobi create-entities "UserPreferences" "preference"
-asobi create-entities "CLAUDE.md" "reference"
-asobi create-relations "project-x" "UserPreferences" "follows"
+asobi new "UserPreferences" "preference"
+asobi new "CLAUDE.md" "reference"
+asobi link "project-x" "UserPreferences" "follows"
 ```
 
-**Search (supports FTS5 and segment matching):**
+**Search (supports FTS5, segment matching, and truth filters):**
 
 ```bash
-asobi search-nodes "tokio"           # finds "tokio", "tokio-util", stemmed variants
-asobi search-nodes "mobile"          # finds "ame:mobile-support:task-1" (segment match)
-asobi search-nodes "auth*"           # prefix: matches "auth", "authentication", "authorize"
-asobi search-nodes "async AND error" # both words must appear
-asobi search-nodes "deploy OR ship"  # either word
-asobi search-nodes "auth" --limit 25 # override the default top 100 matches
+asobi search "tokio"           # finds "tokio", "tokio-util", stemmed variants
+asobi search "mobile"          # finds "ame:mobile-support:task-1" (segment match)
+asobi search "auth*"           # prefix: matches "auth", "authentication", "authorize"
+asobi search "async AND error" # both words must appear
+asobi search "deploy OR ship"  # either word
+asobi search "auth" --limit 25 # override the default top 100 matches
+asobi search --where status=READY # find all entities with status truth set to READY
+asobi search "bug" --where status=READY --where priority=high # filter by multiple truths AND the query
 ```
 
-Use `read-graph` for full export. `search-nodes` is intentionally top-K by default so a broad term does not accidentally return the whole graph.
+Use `graph` for full export. `search` is intentionally top-K by default so a broad term does not accidentally return the whole graph.
 
 **End a session — persist state:**
 
 ```bash
-asobi delete-observations "my-project:session" "status: IN_PROGRESS"
-asobi add-observations "my-project:session" "status: DONE"
-asobi add-observations "my-project:session" "next: implement FTS5 index"
-asobi add-observations "my-project:session" "last-updated: 2026-05-21"
+asobi truth "my-project:session" "status" "DONE"
+asobi truth "my-project:session" "last-updated" "2026-05-21"
+asobi obs "my-project:session" "next: implement FTS5 index"
 asobi compact  # syncs graph → markdown files for durable backup
 ```
 
@@ -107,7 +107,7 @@ asobi compact  # syncs graph → markdown files for durable backup
 
 ```bash
 asobi stats                                # Quick count of entities, relations, observations
-asobi read-graph | jq '.entities[] | select(.entityType == "session")'
+asobi graph | jq '.entities[] | select(.entityType == "session")'
 ```
 
 **Backup, Restore, and Reset:**
@@ -121,8 +121,8 @@ asobi reset                                # Interactively clear the entire grap
 **Manage truths (structured key-value attributes):**
 
 ```bash
-asobi add-truth "project-x" "language" "rust"
-asobi delete-truth "project-x" "language"
+asobi truth "project-x" "language" "rust"
+asobi rm-truth "project-x" "language"
 ```
 
 **Manage skills (reusable workflows and knowledge):**
@@ -165,31 +165,30 @@ All operations are CLI commands. No server to start. No authentication. Latency 
 
 ```bash
 # Option A: load a specific entity
-asobi open-nodes "<project>:session"
+asobi show "<project>:session"
 
-# Option B: keyword search
-asobi search-nodes "session"
+# Option B: query by status truth
+asobi search --where status=IN_PROGRESS
 
 # Option C: full graph (small projects)
-asobi read-graph
+asobi graph
 ```
 
 **During session — record facts as you learn them:**
 
 ```bash
-asobi add-observations "<project>" "Decided to use WAL mode for concurrent agent access"
-asobi add-observations "<project>:session" "status: IN_PROGRESS"
+asobi obs "<project>" "Decided to use WAL mode for concurrent agent access"
+asobi truth "<project>:session" "status" "IN_PROGRESS"
 ```
 
 **At session end:**
 
 ```bash
 # Update volatile state
-asobi delete-observations "<project>:session" "<old status line>"
-asobi add-observations "<project>:session" "status: DONE"
-asobi add-observations "<project>:session" "completed: implemented FTS5 search"
-asobi add-observations "<project>:session" "next: add WAL mode and entity_name index"
-asobi add-observations "<project>:session" "last-updated: 2026-05-21"
+asobi truth "<project>:session" "status" "DONE"
+asobi truth "<project>:session" "last-updated" "2026-05-21"
+asobi obs "<project>:session" "completed: implemented FTS5 search"
+asobi obs "<project>:session" "next: add WAL mode and entity_name index"
 
 # Archive to markdown (durable, re-indexed)
 asobi compact
@@ -198,9 +197,10 @@ asobi compact
 **Full session reset (next agent starts clean):**
 
 ```bash
-asobi delete-entities "<project>:session"
-# Next agent creates it fresh
-asobi create-entities "<project>:session" "session"
+asobi rm "<project>:session"
+# Next agent creates it fresh and sets initial status
+asobi new "<project>:session" "session"
+asobi truth "<project>:session" "status" "IN_PROGRESS"
 ```
 
 ### Entity naming conventions
@@ -218,7 +218,7 @@ asobi create-entities "<project>:session" "session"
 
 Asobi operates under a **lazy-read contract** to minimize token overhead.
 
-`read-graph` and `search-nodes` return a lazy JSON structure (excluding `observations` and skill `body`, only providing `truths` and `observationCount`):
+`graph` and `search` return a lazy JSON structure (excluding `observations` and skill `body`, only providing `truths` and `observationCount`):
 
 ```json
 {
@@ -242,7 +242,7 @@ Asobi operates under a **lazy-read contract** to minimize token overhead.
 }
 ```
 
-`open-nodes` eagerly returns all `observations` and the skill `body` (if it's a skill entity):
+`show` eagerly returns all `observations` and the skill `body` (if it's a skill entity):
 
 ```json
 {
@@ -276,12 +276,12 @@ When Agent A finishes and Agent B picks up:
 
 ```bash
 # Agent A (end of session)
-asobi add-observations "project-x:session" "status: BLOCKED"
-asobi add-observations "project-x:session" "next: Agent B should implement WAL mode in src/db.rs init_db()"
+asobi obs "project-x:session" "status: BLOCKED"
+asobi obs "project-x:session" "next: Agent B should implement WAL mode in src/db.rs init_db()"
 asobi compact
 
 # Agent B (start of session)
-asobi open-nodes "project-x:session"
+asobi show "project-x:session"
 # → reads: status BLOCKED, next action, last-updated
 ```
 
@@ -289,36 +289,20 @@ No files to pass, no state to reconstruct. The graph is the handoff.
 
 ### Search tips
 
-`search-nodes` uses FTS5 with porter stemming. Practical implications:
+`search` uses FTS5 with porter stemming. Practical implications:
 
-- `search-nodes "run"` → finds entities with "running", "runner", "ran"
-- `search-nodes "implement"` → finds "implementation", "implementing"
-- `search-nodes "tokio async"` → finds entities with both words (ranked higher) or either word
-- `search-nodes "UserPreferences"` → exact name match via LIKE fallback (entity has no observations)
-- `search-nodes "AND AND"` → invalid FTS5 syntax, silently falls back to LIKE, returns empty
-- `search-nodes "auth" --limit 500` → return more than the default top 100 matches
+- `search "run"` → finds entities with "running", "runner", "ran"
+- `search "implement"` → finds "implementation", "implementing"
+- `search "tokio async"` → finds entities with both words (ranked higher) or either word
+- `search "UserPreferences"` → exact name match via LIKE fallback (entity has no observations)
+- `search "AND AND"` → invalid FTS5 syntax, silently falls back to LIKE, returns empty
+- `search "auth" --limit 500` → return more than the default top 100 matches
+- `search --where KEY=VALUE` → filters matching entities by truth values (e.g. `--where status=READY`). Can be repeated; multiple filters perform an intersection (AND condition). If a query term is also provided, it matches the intersection of the filters and the FTS/LIKE results.
 
-For exact entity retrieval, prefer `open-nodes` over `search-nodes`:
-
-```bash
-asobi open-nodes "project-x:session" "UserPreferences"
-```
-
-### MCP server mode (optional)
-
-If your agent framework supports MCP stdio servers:
+For exact entity retrieval, prefer `show` over `search`:
 
 ```bash
-# Register once
-claude mcp add asobi -- asobi mcp
-
-# Protocol: MCP 2024-11-05, 11 tools
-# Tools: create_entities, create_relations, add_observations,
-#        delete_entities, delete_observations, delete_relations,
-#        add_truth, delete_truth,
-#        read_graph, search_nodes, open_nodes
+asobi show "project-x:session" "UserPreferences"
 ```
 
-The MCP server uses the same storage as the CLI — data written via `asobi mcp` is immediately readable via `asobi read-graph` and vice versa.
-
-`search_nodes` accepts an optional `limit` argument. Omit it for the default top 100 matches; set it explicitly for larger ranked exports.
+`search` accepts an optional `--limit` argument. Omit it for the default top 100 matches; set it explicitly for larger ranked exports.

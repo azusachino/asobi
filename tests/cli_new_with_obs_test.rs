@@ -2,7 +2,7 @@ use std::process::Command;
 use tempfile::tempdir;
 
 #[test]
-fn test_cli_add_observations_multi_arg() {
+fn test_cli_new_with_obs() {
     // 1. Setup temp database
     let dir = tempdir().unwrap();
     let db_path = dir.path().join("test.db");
@@ -10,7 +10,7 @@ fn test_cli_add_observations_multi_arg() {
 
     // 2. Find the asobi binary. We assume it is compiled at target/debug/asobi
     let mut bin_path = std::env::current_exe().unwrap();
-    // Navigate up from target/debug/deps/cli_add_observations_test-XXXX to target/debug/asobi
+    // Navigate up from target/debug/deps/cli_new_with_obs_test-XXXX to target/debug/asobi
     bin_path.pop(); // remove filename
     if bin_path.ends_with("deps") {
         bin_path.pop(); // remove deps
@@ -23,35 +23,27 @@ fn test_cli_add_observations_multi_arg() {
         bin_path
     );
 
-    // 3. Create entity 'foo'
-    let status = Command::new(&bin_path)
+    // 3. Create entity 'foo' with seeded observations
+    let output = Command::new(&bin_path)
         .arg("new")
         .arg("foo")
         .arg("concept")
-        .env("ASOBI_DATABASE_URL", db_path_str)
-        .status()
-        .expect("failed to execute asobi");
-    assert!(status.success(), "Failed to create entity 'foo'");
-
-    // 4. Add multiple observations
-    let output = Command::new(&bin_path)
-        .arg("obs")
-        .arg("foo")
-        .arg("a")
-        .arg("b")
-        .arg("c")
+        .arg("--obs")
+        .arg("first observation")
+        .arg("--obs")
+        .arg("second observation")
         .env("ASOBI_DATABASE_URL", db_path_str)
         .output()
         .expect("failed to execute asobi");
 
     assert!(
         output.status.success(),
-        "Expected obs command to succeed, but it failed.\nstdout:\n{}\nstderr:\n{}",
+        "Expected new command with --obs to succeed, but it failed.\nstdout:\n{}\nstderr:\n{}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
 
-    // 5. Verify observations using show
+    // 4. Verify observations using show
     let output = Command::new(&bin_path)
         .arg("show")
         .arg("foo")
@@ -78,5 +70,5 @@ fn test_cli_add_observations_multi_arg() {
     let mut obs_strs: Vec<&str> = observations.iter().map(|v| v.as_str().unwrap()).collect();
     obs_strs.sort();
 
-    assert_eq!(obs_strs, vec!["a", "b", "c"]);
+    assert_eq!(obs_strs, vec!["first observation", "second observation"]);
 }

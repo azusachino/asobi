@@ -7,7 +7,7 @@
 //! fully isolates writes and resets from any other database file.
 
 use asobi::db;
-use asobi::mcp::EntityInput;
+use asobi::model::EntityInput;
 use tempfile::tempdir;
 
 fn set_db(path: &std::path::Path) {
@@ -15,7 +15,7 @@ fn set_db(path: &std::path::Path) {
 }
 
 async fn seed(conn: &libsql::Connection, name: &str) {
-    db::mcp_create_entities(
+    db::create_entities(
         conn,
         vec![EntityInput {
             name: name.to_string(),
@@ -46,13 +46,13 @@ async fn bench_env_var_isolates_real_graph() {
     {
         let (_db, conn) = db::init_db().await.unwrap();
         seed(&conn, "bench-entity").await;
-        db::mcp_reset(&conn).await.unwrap();
+        db::reset(&conn).await.unwrap();
     }
 
     // The real graph must survive the bench's reset untouched.
     set_db(&real_db);
     let (_db, conn) = db::init_db().await.unwrap();
-    let graph = db::mcp_open_nodes(&conn, vec!["keep-me".to_string()])
+    let graph = db::open_nodes(&conn, vec!["keep-me".to_string()])
         .await
         .unwrap();
     assert_eq!(graph.entities.len(), 1, "bench reset wiped the real graph");

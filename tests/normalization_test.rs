@@ -1,5 +1,5 @@
-use asobi::db::{ENV_DATABASE_URL, init_db, mcp_create_entities, mcp_read_graph};
-use asobi::mcp::EntityInput;
+use asobi::db::{ENV_DATABASE_URL, create_entities, init_db, read_graph};
+use asobi::model::EntityInput;
 use tempfile::tempdir;
 
 #[tokio::test]
@@ -19,9 +19,9 @@ async fn test_entity_name_normalization() {
         observations: vec!["test obs".to_string()],
     }];
 
-    mcp_create_entities(&conn, entities).await.unwrap();
+    create_entities(&conn, entities).await.unwrap();
 
-    let graph = mcp_read_graph(&conn).await.unwrap();
+    let graph = read_graph(&conn).await.unwrap();
     assert_eq!(graph.entities.len(), 1);
     assert_eq!(graph.entities[0].name, "User-Preferences");
 }

@@ -26,44 +26,48 @@ One graph, a few node parts — knowing which to write is the skill:
 - **Relation** — directed edge `(from, to, type)`.
 - **Skill** — an installed instruction: Markdown body + `description`/`source`/`version` truths.
 
-`read-graph`/`search-nodes` return truths + `observationCount` only (cheap); `open-nodes` also returns observations and the skill body.
+`graph`/`search` return truths + `observationCount` only (cheap); `show` also returns observations and the skill body.
 
 ---
 
 ## Command Reference
 
-All commands print a one-line confirmation (`Entity 'X' created.`, `Observation added.`, etc.) on success. Graph-read commands print JSON to stdout.
+Stream contract (matters for scripted callers): **mutating** commands print a one-line confirmation (`Entity 'X' created.`, `Observation added.`, etc.) to **stderr** and leave **stdout empty** on success — check the exit code, not stdout. **Read** commands (`graph`, `search`, `show`, `stats`, `export`) write their result to **stdout**; graph reads emit JSON.
+
+Pass the global `--json` flag to any mutating command to also print the affected entity/entities (and the relations among them) as JSON to **stdout** — e.g. `asobi new A task --json`. This removes the follow-up `show` round-trip; `rm --json` instead prints `{"deleted": [...]}`.
 
 ### Create
 
 ```
-asobi create-entities <NAME> <ENTITY_TYPE>
+asobi new <NAME> <ENTITY_TYPE> [<NAME> <ENTITY_TYPE> ...] [--obs <OBSERVATION> ...]
 ```
 
-Creates a single entity. Silently no-ops if the name already exists (`INSERT OR IGNORE`).
+Creates one or more entities in a single call — pass repeated `NAME TYPE` pairs (`new A task B concept` creates two). The argument count must be a multiple of 2. Silently no-ops on names that already exist (`INSERT OR IGNORE`). Prefer one batched call over many invocations.
+
+Supports seeding observations at creation via repeatable `--obs <OBSERVATION>` options (e.g. `asobi new my-node task --obs "initial observation"`). If multiple entities are created in a single call, the specified observations are seeded to all of them.
 
 ```
-asobi add-observations <NAME> <CONTENT> [<CONTENT> ...]
+asobi obs <NAME> <CONTENT> [<CONTENT> ...]
 ```
 
 Appends one or more observation strings to an existing entity. The entity must already exist. Observations are subject to a rolling history cap (defaults to 50 oldest evicted per entity, customizable via `ASOBI_OBSERVATION_LIMIT` or `asobi.toml`'s `observation_limit`).
 
 ```
-asobi create-relations <FROM> <TO> <RELATION_TYPE>
+asobi link <FROM> <TO> <RELATION_TYPE> [<FROM> <TO> <RELATION_TYPE> ...]
 ```
 
-Creates a directed relation between two existing entities. Upserts on the composite key `(from, to, relation_type)`.
+Creates one or more directed relations in a single call — pass repeated `FROM TO TYPE` triples (`link A B uses C D blocks`). The argument count must be a multiple of 3. Upserts on the composite key `(from, to, relation_type)`.
 
 ### Read
 
 ```
-asobi read-graph
+asobi graph
 ```
 
 Returns the full graph as JSON: `{ "entities": [...], "relations": [...] }`. Each entity includes all its observations.
 
 ```
-asobi search-nodes <QUERY> [--limit <N>]
+asobi search <QUERY> [--limit <N>] [--where KEY=VALUE ...]
 ```
 
 Returns a subgraph (same JSON shape) of entities matching `QUERY`. Uses two search paths, merged in order:
@@ -71,13 +75,15 @@ Returns a subgraph (same JSON shape) of entities matching `QUERY`. Uses two sear
 1. **FTS5 on observations** — porter stemming + BM25 ranking. `"run"` matches `"running"`, `"tokio async"` ranks entities that contain both words higher. Supports FTS5 operators: `AND`, `OR`, `NOT`, prefix with `*` (e.g. `auth*`).
 2. **LIKE on entity name / type** — substring fallback, always runs. Catches exact-name lookups (`UserPreferences`) and entities with no observations.
 
+Supports filtering the search results by matching entity truths via repeatable `--where KEY=VALUE` filters (e.g. `asobi search --where status=READY`). If multiple `--where` filters are specified, they are treated as an intersection (AND condition).
+
 Relations between matched entities are included. Results are ordered by BM25 relevance (FTS matches first, then name/type matches).
 The default limit is 100 matched nodes; use `--limit` for larger ranked exports.
-Use `read-graph` when the caller needs the full graph; do not use a broad
-`search-nodes` query as an implicit export.
+Use `graph` when the caller needs the full graph; do not use a broad
+`search` query as an implicit export.
 
 ```
-asobi open-nodes <NAME> [<NAME> ...]
+asobi show <NAME> [<NAME> ...]
 ```
 
 Returns a subgraph for the named entities plus relations between them. Takes one or more names as positional args.
@@ -85,13 +91,13 @@ Returns a subgraph for the named entities plus relations between them. Takes one
 ### Truths
 
 ```
-asobi add-truth <NAME> <KEY> <VALUE>
+asobi truth <NAME> <KEY> <VALUE>
 ```
 
 Add or update a truth key-value pair for the named entity.
 
 ```
-asobi delete-truth <NAME> <KEY>
+asobi rm-truth <NAME> <KEY>
 ```
 
 Delete a specific truth key from the named entity.
@@ -131,19 +137,19 @@ Show the raw body of an installed skill without JSON escaping. Useful for humans
 ### Delete
 
 ```
-asobi delete-entities <NAME> [<NAME> ...]
+asobi rm <NAME> [<NAME> ...]
 ```
 
 Deletes one or more entities and all their observations and relations (cascades).
 
 ```
-asobi delete-observations <NAME> <CONTENT>
+asobi rm-obs <NAME> <CONTENT>
 ```
 
 Removes a single observation (exact content match) from the named entity.
 
 ```
-asobi delete-relations <FROM> <TO> <RELATION_TYPE>
+asobi unlink <FROM> <TO> <RELATION_TYPE>
 ```
 
 Removes a single relation by its three-part key.
@@ -164,14 +170,6 @@ asobi query <QUERY>
 ```
 
 Hybrid semantic + FTS keyword search over ingested topics. Returns: `TITLE | (score: X.XX) | PATH` per result.
-
-### MCP server
-
-```
-asobi mcp
-```
-
-Runs Asobi as an MCP server over stdio (JSON-RPC), exposing the graph + truth operations as tools (`create_entities`, `add_observations`, `add_truth`, `open_nodes`, `read_graph`, `search_nodes`, `delete_*`, …) on the same database as the CLI. Skills and document ingestion stay CLI-only.
 
 ### Workspace init
 
@@ -198,7 +196,7 @@ Three-step maintenance sweep:
 
 ## Entity Type Conventions
 
-Use consistent types so `search-nodes` and `open-nodes` filters are predictable:
+Use consistent types so `search` and `show` filters are predictable:
 
 | Type         | Use for                                          |
 | ------------ | ------------------------------------------------ |
@@ -217,24 +215,23 @@ Use consistent types so `search-nodes` and `open-nodes` filters are predictable:
 ### Session Start
 
 ```bash
-asobi search-nodes "session"       # find active session entities
-asobi open-nodes "<project>:session"  # load specific session state
+asobi search --where status=IN_PROGRESS      # find active session entities
+asobi show "<project>:session"              # load specific session state
 ```
 
 Or load everything and filter client-side:
 
 ```bash
-asobi read-graph
+asobi graph
 ```
 
 ### Session End
 
 ```bash
 # Update session state
-asobi delete-observations "<project>:session" "<old status line>"
-asobi add-observations "<project>:session" "status: DONE"
-asobi add-observations "<project>:session" "next: <one sentence handoff>"
-asobi add-observations "<project>:session" "last-updated: YYYY-MM-DD"
+asobi truth "<project>:session" "status" "DONE"
+asobi truth "<project>:session" "last-updated" "YYYY-MM-DD"
+asobi obs "<project>:session" "next: <one sentence handoff>"
 
 # Archive to Markdown (durable backup + refreshes vector/FTS)
 asobi compact
@@ -243,9 +240,10 @@ asobi compact
 ### Full Session Reset (next agent starts clean)
 
 ```bash
-asobi delete-entities "<project>:session"
+asobi rm "<project>:session"
 # recreate at next session start
-asobi create-entities "<project>:session" "session"
+asobi new "<project>:session" "session"
+asobi truth "<project>:session" "status" "IN_PROGRESS"
 ```
 
 ---
@@ -264,7 +262,7 @@ asobi create-entities "<project>:session" "session"
 
 **Graph commands** return a JSON object containing `entities` and `relations`.
 
-`read-graph` and `search-nodes` use a **lazy-read contract** (they do not populate observation content or skill bodies, returning only `observationCount` and `truths`):
+`graph` and `search` use a **lazy-read contract** (they do not populate observation content or skill bodies, returning only `observationCount` and `truths`):
 
 ```json
 {
@@ -288,7 +286,7 @@ asobi create-entities "<project>:session" "session"
 }
 ```
 
-`open-nodes` eagerly returns all `observations` and the skill `body` (if it's a skill entity):
+`show` eagerly returns all `observations` and the skill `body` (if it's a skill entity):
 
 ```json
 {
@@ -314,7 +312,7 @@ asobi create-entities "<project>:session" "session"
 }
 ```
 
-**Mutating commands** print a plain-text confirmation line — no JSON.
+**Mutating commands** print a plain-text confirmation line to **stderr** (no JSON, stdout empty). Rely on the process exit code for success/failure, then `show` the affected entity if you need to read back the result.
 
 ---
 
@@ -347,26 +345,26 @@ topics_dir = ".asobi/topics"
 
 ```bash
 # Store a project decision
-asobi create-entities "my-project" "project"
-asobi add-observations "my-project" "Uses libSQL for storage — chosen for embedded + remote parity"
+asobi new "my-project" "project"
+asobi obs "my-project" "Uses libSQL for storage — chosen for embedded + remote parity"
 
 # Store user preference
-asobi create-entities "UserPreferences" "preference"
-asobi add-observations "UserPreferences" "Prefer make over cargo commands directly"
+asobi new "UserPreferences" "preference"
+asobi obs "UserPreferences" "Prefer make over cargo commands directly"
 
 # Link them
-asobi create-relations "my-project" "UserPreferences" "follows"
+asobi link "my-project" "UserPreferences" "follows"
 
 # Resume context
-asobi open-nodes "my-project" "UserPreferences"
+asobi show "my-project" "UserPreferences"
 
 # Correct a stale observation
-asobi delete-observations "my-project" "Uses libSQL for storage — chosen for embedded + remote parity"
-asobi add-observations "my-project" "Uses libSQL (libsql crate v0.6) — embedded SQLite with Turso remote sync option"
+asobi rm-obs "my-project" "Uses libSQL for storage — chosen for embedded + remote parity"
+asobi obs "my-project" "Uses libSQL (libsql crate v0.6) — embedded SQLite with Turso remote sync option"
 
 # Search by keyword
-asobi search-nodes "libSQL"
+asobi search "libSQL"
 
 # Deliberately request a larger ranked result set
-asobi search-nodes "auth" --limit 500
+asobi search "auth" --limit 500
 ```

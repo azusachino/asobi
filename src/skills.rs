@@ -223,7 +223,7 @@ pub async fn install_skills_from_dir<
                 orphans.len(),
                 source
             );
-            crate::db::mcp_delete_entities(conn, orphans).await?;
+            crate::db::delete_entities(conn, orphans).await?;
         }
     }
 
@@ -274,7 +274,7 @@ pub async fn install_skills_from_dir<
         )
         .await?;
 
-        // 3. Upsert into mcp_skills
+        // 3. Upsert into asobi_skills
         tx.execute(
             crate::constant::SQL_UPSERT_SKILL,
             libsql::params![entity_name.clone(), body.clone(), source, version],

@@ -1,5 +1,26 @@
 # Changelog
 
+## v0.2.0 — Full de-MCP
+
+### Changed (breaking)
+
+- **Flat terse CLI verbs (hard cut, no aliases).** Commands are renamed: `create-entities`→`new`, `add-observations`→`obs`, `create-relations`→`link`, `delete-entities`→`rm`, `delete-observations`→`rm-obs`, `delete-relations`→`unlink`, `read-graph`→`graph`, `search-nodes`→`search`, `open-nodes`→`show`, `add-truth`→`truth`, `delete-truth`→`rm-truth`. Old names no longer resolve.
+- **Native `asobi_*` database schema.** Tables renamed from `mcp_*` to `asobi_*`; opening an existing 0.1.x database migrates it in place (FTS/triggers/index are rebuilt). `backup`/`restore` round-trip the new format. **Reinstall the binary (`cargo install asobi`) before opening a v0.1 database with v0.2.**
+
+### Added
+
+- **`search --where key=value`** — filter entities by truths (repeatable, AND-combined); the query term is now optional, so `search --where status=READY_TO_DISPATCH` returns matching entities with no search text. Makes a status board a single O(1) read.
+- **`query --json` / `--limit N`** — structured, scriptable semantic-recall output (`documents` feature).
+- **`new NAME TYPE --obs "…"`** — seed observations at entity creation (repeatable), collapsing session-save write amplification.
+- **Concurrent-write reliability** — the database opens with `journal_mode=WAL`, `synchronous=NORMAL`, and `busy_timeout`, so a lead agent and dispatched sub-agents can write without lock errors.
+- **Status-as-truth convention** — task/session status lives in a truth (current state); observations hold transition notes. Documented in `SKILL.md` and `docs/usage.md`.
+
+### Removed
+
+- **MCP server and the `mcp` command.** Asobi is a standalone CLI; the stdio MCP server is gone.
+
+---
+
 ## v0.1.0 — First crates.io release
 
 ### Changed

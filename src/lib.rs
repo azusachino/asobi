@@ -19,7 +19,7 @@ pub mod recall;
 pub mod vector;
 
 // Shared Utilities
-pub mod mcp;
+pub mod model;
 pub mod normalize;
 pub mod paths;
 pub mod skills;

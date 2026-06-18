@@ -1,4 +1,4 @@
-use asobi::{db, mcp};
+use asobi::db;
 use std::env;
 use std::hint::black_box;
 use std::time::{Duration, Instant};
@@ -44,21 +44,21 @@ fn main() {
 
             seed_graph(&conn, entity_count).await;
 
-            let selective_hits = db::mcp_search_nodes(&conn, "rareterm7777")
+            let selective_hits = db::search_nodes(&conn, "rareterm7777")
                 .await
                 .expect("selective search")
                 .entities
                 .len();
             assert!(selective_hits > 0, "selective search returned no hits");
             let selective_elapsed = time_many(SEARCH_ITERS, || async {
-                let graph = db::mcp_search_nodes(&conn, black_box("rareterm7777"))
+                let graph = db::search_nodes(&conn, black_box("rareterm7777"))
                     .await
                     .expect("selective search");
                 black_box(graph.entities.len());
             })
             .await;
 
-            let capped_hits = db::mcp_search_nodes(&conn, "commonterm")
+            let capped_hits = db::search_nodes(&conn, "commonterm")
                 .await
                 .expect("broad capped search")
                 .entities
@@ -69,14 +69,14 @@ fn main() {
                 "default broad search should be capped"
             );
             let broad_elapsed = time_many(BROAD_SEARCH_ITERS, || async {
-                let graph = db::mcp_search_nodes(&conn, black_box("commonterm"))
+                let graph = db::search_nodes(&conn, black_box("commonterm"))
                     .await
                     .expect("broad capped search");
                 black_box(graph.entities.len());
             })
             .await;
 
-            let export_hits = db::mcp_search_nodes_with_limit(&conn, "commonterm", entity_count)
+            let export_hits = db::search_nodes_with_limit(&conn, "commonterm", entity_count, &[])
                 .await
                 .expect("broad export search")
                 .entities
@@ -87,7 +87,7 @@ fn main() {
             );
             let export_elapsed = time_many(BROAD_EXPORT_ITERS, || async {
                 let graph =
-                    db::mcp_search_nodes_with_limit(&conn, black_box("commonterm"), entity_count)
+                    db::search_nodes_with_limit(&conn, black_box("commonterm"), entity_count, &[])
                         .await
                         .expect("broad export search");
                 black_box(graph.entities.len());
@@ -95,7 +95,7 @@ fn main() {
             .await;
 
             let open_elapsed = time_many(OPEN_ITERS, || async {
-                let graph = db::mcp_open_nodes(
+                let graph = db::open_nodes(
                     &conn,
                     black_box(vec![
                         "entity-10".to_string(),
@@ -110,7 +110,7 @@ fn main() {
             .await;
 
             let stats_elapsed = time_many(STATS_ITERS, || async {
-                let stats = db::mcp_stats(&conn).await.expect("stats");
+                let stats = db::stats(&conn).await.expect("stats");
                 black_box(stats);
             })
             .await;
@@ -150,7 +150,7 @@ fn main() {
             );
 
             let reset_start = Instant::now();
-            db::mcp_reset(&conn).await.expect("reset");
+            db::reset(&conn).await.expect("reset");
             let reset_elapsed = reset_start.elapsed();
             println!("reset: total={:?}", reset_elapsed);
         }
@@ -164,9 +164,9 @@ async fn seed_graph(conn: &libsql::Connection, entity_count: usize) {
         } else {
             ""
         };
-        db::mcp_create_entities(
+        db::create_entities(
             conn,
-            vec![mcp::EntityInput {
+            vec![asobi::model::EntityInput {
                 name: format!("entity-{i}"),
                 entity_type: "bench".to_string(),
                 observations: vec![format!(

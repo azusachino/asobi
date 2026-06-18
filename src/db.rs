@@ -19,6 +19,18 @@ pub async fn init_db() -> Result<(Database, Connection)> {
 
     conn.execute(crate::constant::PRAGMA_FOREIGN_KEYS_ON, ())
         .await?;
+    // Enable WAL mode for concurrent write support. These pragmas can return a
+    // row (e.g. journal_mode), so query + consume. Each cursor is scoped to one
+    // loop iteration and dropped before later DDL/migration runs — a lingering
+    // read statement would hold a schema lock ("database table is locked").
+    for pragma in [
+        crate::constant::PRAGMA_JOURNAL_MODE_WAL,
+        crate::constant::PRAGMA_SYNCHRONOUS_NORMAL,
+        crate::constant::PRAGMA_BUSY_TIMEOUT,
+    ] {
+        let mut rows = conn.query(pragma, ()).await?;
+        let _ = rows.next().await?;
+    }
 
     conn.execute(crate::constant::SCHEMA_CREATE_TOPICS, ())
         .await?;
@@ -30,23 +42,23 @@ pub async fn init_db() -> Result<(Database, Connection)> {
     conn.execute(crate::constant::SCHEMA_CREATE_SESSIONS, ())
         .await?;
 
-    // Graph Tier (Hot)
-    conn.execute(crate::constant::SCHEMA_CREATE_MCP_ENTITIES, ())
+    // Graph Tier (Hot) — CREATE IF NOT EXISTS is a no-op on migrated tables.
+    conn.execute(crate::constant::SCHEMA_CREATE_ASOBI_ENTITIES, ())
         .await?;
 
-    conn.execute(crate::constant::SCHEMA_CREATE_MCP_OBSERVATIONS, ())
+    conn.execute(crate::constant::SCHEMA_CREATE_ASOBI_OBSERVATIONS, ())
         .await?;
 
-    conn.execute(crate::constant::SCHEMA_CREATE_IDX_MCP_OBSERVATIONS, ())
+    conn.execute(crate::constant::SCHEMA_CREATE_IDX_ASOBI_OBSERVATIONS, ())
         .await?;
 
-    conn.execute(crate::constant::SCHEMA_CREATE_MCP_RELATIONS, ())
+    conn.execute(crate::constant::SCHEMA_CREATE_ASOBI_RELATIONS, ())
         .await?;
 
-    conn.execute(crate::constant::SCHEMA_CREATE_MCP_TRUTHS, ())
+    conn.execute(crate::constant::SCHEMA_CREATE_ASOBI_TRUTHS, ())
         .await?;
 
-    conn.execute(crate::constant::SCHEMA_CREATE_MCP_SKILLS, ())
+    conn.execute(crate::constant::SCHEMA_CREATE_ASOBI_SKILLS, ())
         .await?;
 
     // Document Tier (Vectors)
@@ -69,15 +81,15 @@ pub async fn init_db() -> Result<(Database, Connection)> {
         .await?;
 
     // FTS5 for graph observation search (porter stemming, BM25 ranking)
-    conn.execute(crate::constant::SCHEMA_CREATE_MCP_OBS_FTS, ())
+    conn.execute(crate::constant::SCHEMA_CREATE_ASOBI_OBS_FTS, ())
         .await?;
 
-    // Triggers to keep mcp_obs_fts in sync with mcp_observations
-    conn.execute(crate::constant::SCHEMA_CREATE_TRIGGER_MCP_OBS_AI, ())
+    // Triggers to keep asobi_obs_fts in sync with asobi_observations
+    conn.execute(crate::constant::SCHEMA_CREATE_TRIGGER_ASOBI_OBS_AI, ())
         .await?;
-    conn.execute(crate::constant::SCHEMA_CREATE_TRIGGER_MCP_OBS_AD, ())
+    conn.execute(crate::constant::SCHEMA_CREATE_TRIGGER_ASOBI_OBS_AD, ())
         .await?;
-    conn.execute(crate::constant::SCHEMA_CREATE_TRIGGER_MCP_OBS_AU, ())
+    conn.execute(crate::constant::SCHEMA_CREATE_TRIGGER_ASOBI_OBS_AU, ())
         .await?;
 
     Ok((db, conn))
@@ -128,9 +140,9 @@ pub async fn delete_topic(conn: &Connection, id: &str) -> Result<()> {
     Ok(())
 }
 
-pub async fn mcp_create_entities(
+pub async fn create_entities(
     conn: &Connection,
-    entities: Vec<crate::mcp::EntityInput>,
+    entities: Vec<crate::model::EntityInput>,
 ) -> Result<()> {
     let tx = conn.transaction().await?;
     for mut ent in entities {
@@ -152,9 +164,9 @@ pub async fn mcp_create_entities(
     Ok(())
 }
 
-pub async fn mcp_add_observations(
+pub async fn add_observations(
     conn: &Connection,
-    observations: Vec<crate::mcp::ObservationInput>,
+    observations: Vec<crate::model::ObservationInput>,
     limit: usize,
 ) -> Result<()> {
     let tx = conn.transaction().await?;
@@ -183,9 +195,9 @@ pub async fn mcp_add_observations(
     Ok(())
 }
 
-pub async fn mcp_create_relations(
+pub async fn create_relations(
     conn: &Connection,
-    relations: Vec<crate::mcp::RelationInput>,
+    relations: Vec<crate::model::RelationInput>,
 ) -> Result<()> {
     let tx = conn.transaction().await?;
     for mut rel in relations {
@@ -201,7 +213,7 @@ pub async fn mcp_create_relations(
     Ok(())
 }
 
-pub async fn mcp_delete_entities(conn: &Connection, names: Vec<String>) -> Result<()> {
+pub async fn delete_entities(conn: &Connection, names: Vec<String>) -> Result<()> {
     let tx = conn.transaction().await?;
     for name in names {
         let norm_name = crate::normalize::normalize_key(&name);
@@ -225,9 +237,9 @@ pub async fn mcp_delete_entities(conn: &Connection, names: Vec<String>) -> Resul
     Ok(())
 }
 
-pub async fn mcp_delete_observations(
+pub async fn delete_observations(
     conn: &Connection,
-    deletions: Vec<crate::mcp::ObservationDeletion>,
+    deletions: Vec<crate::model::ObservationDeletion>,
 ) -> Result<()> {
     let tx = conn.transaction().await?;
     for mut del in deletions {
@@ -244,9 +256,9 @@ pub async fn mcp_delete_observations(
     Ok(())
 }
 
-pub async fn mcp_delete_relations(
+pub async fn delete_relations(
     conn: &Connection,
-    relations: Vec<crate::mcp::RelationInput>,
+    relations: Vec<crate::model::RelationInput>,
 ) -> Result<()> {
     let tx = conn.transaction().await?;
     for mut rel in relations {
@@ -262,7 +274,7 @@ pub async fn mcp_delete_relations(
     Ok(())
 }
 
-pub async fn mcp_read_graph(conn: &Connection) -> Result<crate::mcp::Graph> {
+pub async fn read_graph(conn: &Connection) -> Result<crate::model::Graph> {
     let mut entity_names = Vec::new();
     let mut rows = conn
         .query(crate::constant::SQL_SELECT_ALL_ENTITIES, ())
@@ -277,20 +289,20 @@ pub async fn mcp_read_graph(conn: &Connection) -> Result<crate::mcp::Graph> {
         .query(crate::constant::SQL_SELECT_ALL_RELATIONS, ())
         .await?;
     while let Some(row) = rel_rows.next().await? {
-        relations.push(crate::mcp::RelationInput {
+        relations.push(crate::model::RelationInput {
             from: row.get(0)?,
             to: row.get(1)?,
             relation_type: row.get(2)?,
         });
     }
 
-    Ok(crate::mcp::Graph {
+    Ok(crate::model::Graph {
         entities,
         relations,
     })
 }
 
-pub async fn mcp_read_graph_eager(conn: &Connection) -> Result<crate::mcp::Graph> {
+pub async fn read_graph_eager(conn: &Connection) -> Result<crate::model::Graph> {
     let mut entity_names = Vec::new();
     let mut rows = conn
         .query(crate::constant::SQL_SELECT_ALL_ENTITIES, ())
@@ -305,74 +317,138 @@ pub async fn mcp_read_graph_eager(conn: &Connection) -> Result<crate::mcp::Graph
         .query(crate::constant::SQL_SELECT_ALL_RELATIONS, ())
         .await?;
     while let Some(row) = rel_rows.next().await? {
-        relations.push(crate::mcp::RelationInput {
+        relations.push(crate::model::RelationInput {
             from: row.get(0)?,
             to: row.get(1)?,
             relation_type: row.get(2)?,
         });
     }
 
-    Ok(crate::mcp::Graph {
+    Ok(crate::model::Graph {
         entities,
         relations,
     })
 }
 
-pub async fn mcp_search_nodes(conn: &Connection, query: &str) -> Result<crate::mcp::Graph> {
-    mcp_search_nodes_with_limit(conn, query, DEFAULT_SEARCH_LIMIT).await
+pub async fn search_nodes(conn: &Connection, query: &str) -> Result<crate::model::Graph> {
+    search_nodes_with_limit(conn, query, DEFAULT_SEARCH_LIMIT, &[]).await
 }
 
-pub async fn mcp_search_nodes_with_limit(
+pub async fn search_nodes_with_limit(
     conn: &Connection,
     query: &str,
     limit: usize,
-) -> Result<crate::mcp::Graph> {
+    filters: &[(String, String)],
+) -> Result<crate::model::Graph> {
     let limit = limit.max(1);
     let mut entity_names: Vec<String> = Vec::new();
 
-    // Primary: FTS5 on observation content — porter stemming + BM25 ranking.
-    // Wrapped in an async block so any error (invalid syntax, bad token) is
-    // caught at the boundary and we fall through to the LIKE path.
-    let fts_hits: Vec<String> = async {
-        let fts_fetch_limit = limit.saturating_mul(8).max(limit) as i64;
-        let mut rows = conn
-            .query(
-                crate::constant::SQL_SEARCH_OBSERVATIONS_FTS,
-                libsql::params![query, fts_fetch_limit],
-            )
-            .await?;
-        let mut names = Vec::new();
-        while let Some(row) = rows.next().await? {
-            names.push(row.get::<String>(0)?);
-        }
-        Ok::<Vec<String>, anyhow::Error>(names)
-    }
-    .await
-    .unwrap_or_default();
-    for name in fts_hits {
-        if !entity_names.contains(&name) {
-            entity_names.push(name);
-            if entity_names.len() >= limit {
-                break;
+    let mut filtered_names = std::collections::HashSet::new();
+    if !filters.is_empty() {
+        let mut sql = "SELECT entity_name FROM asobi_truths WHERE ".to_string();
+        let mut params = Vec::new();
+        for (i, (k, v)) in filters.iter().enumerate() {
+            if i > 0 {
+                sql.push_str(" OR ");
             }
+            sql.push_str(&format!(
+                "(key = ?{} AND value = ?{})",
+                i * 2 + 1,
+                i * 2 + 2
+            ));
+            params.push(libsql::Value::from(k.clone()));
+            params.push(libsql::Value::from(v.clone()));
+        }
+        sql.push_str(" GROUP BY entity_name HAVING COUNT(DISTINCT key) = ?");
+        params.push(libsql::Value::from(filters.len() as i64));
+
+        let mut rows = conn.query(&sql, libsql::params_from_iter(params)).await?;
+        while let Some(row) = rows.next().await? {
+            filtered_names.insert(row.get::<String>(0)?);
+        }
+
+        if filtered_names.is_empty() {
+            return Ok(crate::model::Graph {
+                entities: vec![],
+                relations: vec![],
+            });
         }
     }
 
-    // Secondary: LIKE on entity name / type — always runs, catches exact-name
-    // lookups and entity types that aren't in observations.
-    let pattern = format!("%{}%", query);
-    let mut rows = conn
-        .query(
-            crate::constant::SQL_SEARCH_ENTITIES_LIKE,
-            libsql::params![pattern, limit as i64],
-        )
-        .await?;
-    while let Some(row) = rows.next().await? {
-        let name: String = row.get(0)?;
-        if !entity_names.contains(&name) {
-            entity_names.push(name);
-            if entity_names.len() >= limit {
-                break;
+    if query.trim().is_empty() {
+        if !filters.is_empty() {
+            entity_names = filtered_names.into_iter().take(limit).collect();
+        } else {
+            let mut rows = conn
+                .query(
+                    "SELECT name FROM asobi_entities LIMIT ?1",
+                    libsql::params![limit as i64],
+                )
+                .await?;
+            while let Some(row) = rows.next().await? {
+                entity_names.push(row.get(0)?);
+            }
+        }
+    } else {
+        // Primary: FTS5 on observation content
+        let fts_hits: Vec<String> = async {
+            let fts_fetch_limit = if filters.is_empty() {
+                limit.saturating_mul(8).max(limit) as i64
+            } else {
+                5000
+            };
+            let mut rows = conn
+                .query(
+                    crate::constant::SQL_SEARCH_OBSERVATIONS_FTS,
+                    libsql::params![query, fts_fetch_limit],
+                )
+                .await?;
+            let mut names = Vec::new();
+            while let Some(row) = rows.next().await? {
+                names.push(row.get::<String>(0)?);
+            }
+            Ok::<Vec<String>, anyhow::Error>(names)
+        }
+        .await
+        .unwrap_or_default();
+
+        for name in fts_hits {
+            if !filters.is_empty() && !filtered_names.contains(&name) {
+                continue;
+            }
+            if !entity_names.contains(&name) {
+                entity_names.push(name);
+                if entity_names.len() >= limit {
+                    break;
+                }
+            }
+        }
+
+        if entity_names.len() < limit {
+            // Secondary: LIKE on entity name / type
+            let pattern = format!("%{}%", query);
+            let like_limit = if filters.is_empty() {
+                limit as i64
+            } else {
+                5000
+            };
+            let mut rows = conn
+                .query(
+                    crate::constant::SQL_SEARCH_ENTITIES_LIKE,
+                    libsql::params![pattern, like_limit],
+                )
+                .await?;
+            while let Some(row) = rows.next().await? {
+                let name: String = row.get(0)?;
+                if !filters.is_empty() && !filtered_names.contains(&name) {
+                    continue;
+                }
+                if !entity_names.contains(&name) {
+                    entity_names.push(name);
+                    if entity_names.len() >= limit {
+                        break;
+                    }
+                }
             }
         }
     }
@@ -391,13 +467,13 @@ pub async fn mcp_search_nodes_with_limit(
 
     let entities = load_entities_lazy(conn, &all_entity_names).await?;
 
-    Ok(crate::mcp::Graph {
+    Ok(crate::model::Graph {
         entities,
         relations,
     })
 }
 
-pub async fn mcp_open_nodes(conn: &Connection, names: Vec<String>) -> Result<crate::mcp::Graph> {
+pub async fn open_nodes(conn: &Connection, names: Vec<String>) -> Result<crate::model::Graph> {
     let normalized_names: Vec<String> = names
         .into_iter()
         .map(|n| crate::normalize::normalize_key(&n))
@@ -405,7 +481,7 @@ pub async fn mcp_open_nodes(conn: &Connection, names: Vec<String>) -> Result<cra
     let entities = load_entities_eager(conn, &normalized_names).await?;
     let relations = load_relations(conn, &normalized_names).await?;
 
-    Ok(crate::mcp::Graph {
+    Ok(crate::model::Graph {
         entities,
         relations,
     })
@@ -414,7 +490,7 @@ pub async fn mcp_open_nodes(conn: &Connection, names: Vec<String>) -> Result<cra
 async fn load_relations(
     conn: &Connection,
     names: &[String],
-) -> Result<Vec<crate::mcp::RelationInput>> {
+) -> Result<Vec<crate::model::RelationInput>> {
     let mut relations = Vec::new();
     if names.is_empty() {
         return Ok(relations);
@@ -438,7 +514,7 @@ async fn load_relations(
 
         let mut rel_rows = conn.query(&sql, params).await?;
         while let Some(row) = rel_rows.next().await? {
-            relations.push(crate::mcp::RelationInput {
+            relations.push(crate::model::RelationInput {
                 from: row.get(0)?,
                 to: row.get(1)?,
                 relation_type: row.get(2)?,
@@ -452,7 +528,7 @@ async fn load_relations(
 async fn load_entities_lazy(
     conn: &Connection,
     names: &[String],
-) -> Result<Vec<crate::mcp::EntityOutput>> {
+) -> Result<Vec<crate::model::EntityOutput>> {
     if names.is_empty() {
         return Ok(Vec::new());
     }
@@ -480,7 +556,7 @@ async fn load_entities_lazy(
 
         // Load observation counts
         let obs_count_sql = format!(
-            "SELECT entity_name, COUNT(*) FROM mcp_observations WHERE entity_name IN ({}) GROUP BY entity_name",
+            "SELECT entity_name, COUNT(*) FROM asobi_observations WHERE entity_name IN ({}) GROUP BY entity_name",
             placeholders
         );
         let mut rows = conn.query(&obs_count_sql, params).await?;
@@ -494,7 +570,7 @@ async fn load_entities_lazy(
         if let Some(entity_type) = entity_types.get(name) {
             let entity_truths = truths.get(name).cloned().unwrap_or_default();
             let count = obs_counts.get(name).cloned().unwrap_or(0);
-            entities.push(crate::mcp::EntityOutput {
+            entities.push(crate::model::EntityOutput {
                 name: name.clone(),
                 entity_type: entity_type.clone(),
                 observations: Vec::new(),
@@ -510,7 +586,7 @@ async fn load_entities_lazy(
 async fn load_entities_eager(
     conn: &Connection,
     names: &[String],
-) -> Result<Vec<crate::mcp::EntityOutput>> {
+) -> Result<Vec<crate::model::EntityOutput>> {
     if names.is_empty() {
         return Ok(Vec::new());
     }
@@ -565,7 +641,7 @@ async fn load_entities_eager(
             let entity_obs = observations.remove(name).unwrap_or_default();
             let count = entity_obs.len();
             let body = skill_bodies.get(name).cloned();
-            entities.push(crate::mcp::EntityOutput {
+            entities.push(crate::model::EntityOutput {
                 name: name.clone(),
                 entity_type: entity_type.clone(),
                 observations: entity_obs,
@@ -578,7 +654,7 @@ async fn load_entities_eager(
     Ok(entities)
 }
 
-pub async fn mcp_stats(conn: &Connection) -> Result<(usize, usize, usize)> {
+pub async fn stats(conn: &Connection) -> Result<(usize, usize, usize)> {
     let mut rows = conn.query(crate::constant::SQL_COUNT_ENTITIES, ()).await?;
     let entities_count: i64 = if let Some(row) = rows.next().await? {
         row.get(0)?
@@ -609,7 +685,7 @@ pub async fn mcp_stats(conn: &Connection) -> Result<(usize, usize, usize)> {
     ))
 }
 
-pub async fn mcp_reset(conn: &Connection) -> Result<()> {
+pub async fn reset(conn: &Connection) -> Result<()> {
     conn.execute(crate::constant::SQL_DELETE_ALL_RELATIONS, ())
         .await?;
     conn.execute(crate::constant::SQL_DELETE_ALL_OBSERVATIONS, ())
@@ -828,9 +904,9 @@ mod tests {
     }
 
     async fn seed_entity(conn: &Connection, name: &str, entity_type: &str, obs: &[&str]) {
-        mcp_create_entities(
+        create_entities(
             conn,
-            vec![crate::mcp::EntityInput {
+            vec![crate::model::EntityInput {
                 name: name.to_string(),
                 entity_type: entity_type.to_string(),
                 observations: obs.iter().map(|s| s.to_string()).collect(),
@@ -860,7 +936,7 @@ mod tests {
         .await;
 
         // "run" should match "running" via porter stemming
-        let graph = mcp_search_nodes(&conn, "run").await.unwrap();
+        let graph = search_nodes(&conn, "run").await.unwrap();
         assert_eq!(graph.entities.len(), 1);
         assert_eq!(graph.entities[0].name, "async-patterns");
     }
@@ -879,7 +955,7 @@ mod tests {
         // Entity with no observations — FTS finds nothing, LIKE fallback finds by name
         seed_entity(&conn, "user-preferences", "preference", &[]).await;
 
-        let graph = mcp_search_nodes(&conn, "user-preferences").await.unwrap();
+        let graph = search_nodes(&conn, "user-preferences").await.unwrap();
         assert_eq!(graph.entities.len(), 1);
         assert_eq!(graph.entities[0].name, "user-preferences");
     }
@@ -899,7 +975,7 @@ mod tests {
         seed_entity(&conn, "alpha", "project", &["async tokio runtime patterns"]).await;
         seed_entity(&conn, "beta", "project", &["tokio scheduler"]).await;
 
-        let graph = mcp_search_nodes(&conn, "async tokio").await.unwrap();
+        let graph = search_nodes(&conn, "async tokio").await.unwrap();
         assert!(!graph.entities.is_empty());
         assert_eq!(graph.entities[0].name, "alpha");
     }
@@ -916,7 +992,7 @@ mod tests {
         let (_db, conn) = init_db().await.unwrap();
 
         // Invalid FTS5 syntax — must not panic, falls back to LIKE gracefully
-        let result = mcp_search_nodes(&conn, "AND AND").await;
+        let result = search_nodes(&conn, "AND AND").await;
         assert!(result.is_ok());
     }
 
@@ -935,17 +1011,100 @@ mod tests {
             seed_entity(&conn, &format!("entity-{i:03}"), "project", &["commonterm"]).await;
         }
 
-        let default_graph = mcp_search_nodes(&conn, "commonterm").await.unwrap();
+        let default_graph = search_nodes(&conn, "commonterm").await.unwrap();
         assert_eq!(default_graph.entities.len(), DEFAULT_SEARCH_LIMIT);
 
-        let explicit_graph = mcp_search_nodes_with_limit(&conn, "commonterm", 7)
+        let explicit_graph = search_nodes_with_limit(&conn, "commonterm", 7, &[])
             .await
             .unwrap();
         assert_eq!(explicit_graph.entities.len(), 7);
     }
 
     #[tokio::test]
-    async fn test_mcp_stats_and_reset() {
+    async fn test_search_nodes_with_where_filters() {
+        let dir = tempdir().unwrap();
+        unsafe {
+            std::env::set_var(
+                ENV_DATABASE_URL,
+                dir.path().join("test.db").to_str().unwrap(),
+            );
+        }
+        let (_db, conn) = init_db().await.unwrap();
+
+        // Seed some entities
+        seed_entity(&conn, "task-1", "task", &["fix bug"]).await;
+        truth_upsert(&conn, "task-1", "status", "READY")
+            .await
+            .unwrap();
+        truth_upsert(&conn, "task-1", "priority", "high")
+            .await
+            .unwrap();
+
+        seed_entity(&conn, "task-2", "task", &["fix crash"]).await;
+        truth_upsert(&conn, "task-2", "status", "BLOCKED")
+            .await
+            .unwrap();
+        truth_upsert(&conn, "task-2", "priority", "high")
+            .await
+            .unwrap();
+
+        seed_entity(&conn, "task-3", "task", &["write test"]).await;
+        truth_upsert(&conn, "task-3", "status", "READY")
+            .await
+            .unwrap();
+        truth_upsert(&conn, "task-3", "priority", "low")
+            .await
+            .unwrap();
+
+        // 1. Search with status=READY
+        let g1 = search_nodes_with_limit(
+            &conn,
+            "",
+            10,
+            &[("status".to_string(), "READY".to_string())],
+        )
+        .await
+        .unwrap();
+        let names1: std::collections::HashSet<_> =
+            g1.entities.iter().map(|e| e.name.clone()).collect();
+        assert_eq!(names1.len(), 2);
+        assert!(names1.contains("task-1"));
+        assert!(names1.contains("task-3"));
+
+        // 2. Search status=READY and priority=high
+        let g2 = search_nodes_with_limit(
+            &conn,
+            "",
+            10,
+            &[
+                ("status".to_string(), "READY".to_string()),
+                ("priority".to_string(), "high".to_string()),
+            ],
+        )
+        .await
+        .unwrap();
+        let names2: std::collections::HashSet<_> =
+            g2.entities.iter().map(|e| e.name.clone()).collect();
+        assert_eq!(names2.len(), 1);
+        assert!(names2.contains("task-1"));
+
+        // 3. Search status=READY with a query term "test"
+        let g3 = search_nodes_with_limit(
+            &conn,
+            "test",
+            10,
+            &[("status".to_string(), "READY".to_string())],
+        )
+        .await
+        .unwrap();
+        let names3: std::collections::HashSet<_> =
+            g3.entities.iter().map(|e| e.name.clone()).collect();
+        assert_eq!(names3.len(), 1);
+        assert!(names3.contains("task-3"));
+    }
+
+    #[tokio::test]
+    async fn test_stats_and_reset() {
         let dir = tempdir().unwrap();
         unsafe {
             std::env::set_var(
@@ -956,15 +1115,15 @@ mod tests {
         let (_db, conn) = init_db().await.unwrap();
 
         // Check empty stats
-        let stats = mcp_stats(&conn).await.unwrap();
-        assert_eq!(stats, (0, 0, 0));
+        let s = stats(&conn).await.unwrap();
+        assert_eq!(s, (0, 0, 0));
 
         // Seed some data
         seed_entity(&conn, "entity1", "project", &["obs1", "obs2"]).await;
         seed_entity(&conn, "entity2", "project", &["obs3"]).await;
-        mcp_create_relations(
+        create_relations(
             &conn,
-            vec![crate::mcp::RelationInput {
+            vec![crate::model::RelationInput {
                 from: "entity1".to_string(),
                 to: "entity2".to_string(),
                 relation_type: "related".to_string(),
@@ -974,15 +1133,15 @@ mod tests {
         .unwrap();
 
         // Check populated stats
-        let stats = mcp_stats(&conn).await.unwrap();
-        assert_eq!(stats, (2, 1, 3));
+        let s = stats(&conn).await.unwrap();
+        assert_eq!(s, (2, 1, 3));
 
         // Test reset
-        mcp_reset(&conn).await.unwrap();
+        reset(&conn).await.unwrap();
 
         // Check empty stats again
-        let stats = mcp_stats(&conn).await.unwrap();
-        assert_eq!(stats, (0, 0, 0));
+        let s = stats(&conn).await.unwrap();
+        assert_eq!(s, (0, 0, 0));
     }
 
     #[tokio::test]
@@ -1082,13 +1241,13 @@ mod tests {
             .await
             .unwrap();
 
-        mcp_delete_entities(&conn, vec!["test-entity".to_string()])
+        delete_entities(&conn, vec!["test-entity".to_string()])
             .await
             .unwrap();
 
         // Check if the truth was deleted.
         let mut rows = conn
-            .query("SELECT COUNT(*) FROM mcp_truths", ())
+            .query("SELECT COUNT(*) FROM asobi_truths", ())
             .await
             .unwrap();
         let count: i64 = rows.next().await.unwrap().unwrap().get(0).unwrap();
@@ -1108,7 +1267,7 @@ mod tests {
 
         seed_entity(&conn, "test-entity", "concept", &[]).await;
 
-        let inputs = vec![crate::mcp::ObservationInput {
+        let inputs = vec![crate::model::ObservationInput {
             entity_name: "test-entity".to_string(),
             contents: vec![
                 "obs1".to_string(),
@@ -1118,9 +1277,9 @@ mod tests {
                 "obs5".to_string(),
             ],
         }];
-        mcp_add_observations(&conn, inputs, 3).await.unwrap();
+        add_observations(&conn, inputs, 3).await.unwrap();
 
-        let graph = mcp_open_nodes(&conn, vec!["test-entity".to_string()])
+        let graph = open_nodes(&conn, vec!["test-entity".to_string()])
             .await
             .unwrap();
         let entity = &graph.entities[0];
@@ -1145,7 +1304,7 @@ mod tests {
 
         seed_entity(&conn, "test-entity", "concept", &[]).await;
 
-        let inputs = vec![crate::mcp::ObservationInput {
+        let inputs = vec![crate::model::ObservationInput {
             entity_name: "test-entity".to_string(),
             contents: vec![
                 "obs1".to_string(),
@@ -1155,9 +1314,9 @@ mod tests {
                 "obs5".to_string(),
             ],
         }];
-        mcp_add_observations(&conn, inputs, 0).await.unwrap();
+        add_observations(&conn, inputs, 0).await.unwrap();
 
-        let graph = mcp_open_nodes(&conn, vec!["test-entity".to_string()])
+        let graph = open_nodes(&conn, vec!["test-entity".to_string()])
             .await
             .unwrap();
         let entity = &graph.entities[0];
@@ -1181,23 +1340,23 @@ mod tests {
             .unwrap();
 
         // 1. Test read-graph (should be lazy)
-        let graph_read = mcp_read_graph(&conn).await.unwrap();
+        let graph_read = read_graph(&conn).await.unwrap();
         let entity_read = &graph_read.entities[0];
         assert!(entity_read.observations.is_empty());
         assert_eq!(entity_read.observation_count, 2);
         assert_eq!(entity_read.truths.len(), 1);
         assert_eq!(entity_read.truths.get("k1").unwrap(), "v1");
 
-        // 2. Test search-nodes (should be lazy)
-        let graph_search = mcp_search_nodes(&conn, "test").await.unwrap();
+        // 2. Test search (should be lazy)
+        let graph_search = search_nodes(&conn, "test").await.unwrap();
         let entity_search = &graph_search.entities[0];
         assert!(entity_search.observations.is_empty());
         assert_eq!(entity_search.observation_count, 2);
         assert_eq!(entity_search.truths.len(), 1);
         assert_eq!(entity_search.truths.get("k1").unwrap(), "v1");
 
-        // 3. Test open-nodes (should be eager)
-        let graph_open = mcp_open_nodes(&conn, vec!["test-entity".to_string()])
+        // 3. Test show (should be eager)
+        let graph_open = open_nodes(&conn, vec!["test-entity".to_string()])
             .await
             .unwrap();
         let entity_open = &graph_open.entities[0];
@@ -1208,7 +1367,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_skill_storage_and_mcp_open_nodes() {
+    async fn test_skill_storage_and_show() {
         let dir = tempdir().unwrap();
         unsafe {
             std::env::set_var(
@@ -1234,18 +1393,18 @@ mod tests {
         .await
         .unwrap();
 
-        // 2. open-nodes should return the body
-        let graph = mcp_open_nodes(&conn, vec!["skill:test-skill".to_string()])
+        // 2. show should return the body
+        let graph = open_nodes(&conn, vec!["skill:test-skill".to_string()])
             .await
             .unwrap();
         let entity = &graph.entities[0];
         assert_eq!(entity.body.as_deref(), Some("body content 1"));
 
-        // 3. read-graph and search-nodes should NOT return the body
-        let graph_read = mcp_read_graph(&conn).await.unwrap();
+        // 3. graph and search should NOT return the body
+        let graph_read = read_graph(&conn).await.unwrap();
         assert!(graph_read.entities[0].body.is_none());
 
-        let graph_search = mcp_search_nodes(&conn, "skill").await.unwrap();
+        let graph_search = search_nodes(&conn, "skill").await.unwrap();
         assert!(graph_search.entities[0].body.is_none());
 
         // 4. Second upsert should replace the body
@@ -1258,7 +1417,7 @@ mod tests {
         )
         .await
         .unwrap();
-        let graph_2 = mcp_open_nodes(&conn, vec!["skill:test-skill".to_string()])
+        let graph_2 = open_nodes(&conn, vec!["skill:test-skill".to_string()])
             .await
             .unwrap();
         assert_eq!(graph_2.entities[0].body.as_deref(), Some("body content 2"));
@@ -1272,14 +1431,14 @@ mod tests {
         assert_eq!(skills[0].source, "source-1");
 
         // 6. delete-entities cascades skills
-        mcp_delete_entities(&conn, vec!["skill:test-skill".to_string()])
+        delete_entities(&conn, vec!["skill:test-skill".to_string()])
             .await
             .unwrap();
         let body_after = skill_body(&conn, "skill:test-skill").await.unwrap();
         assert!(body_after.is_none());
 
         let count_skills: i64 = conn
-            .query("SELECT COUNT(*) FROM mcp_skills", ())
+            .query("SELECT COUNT(*) FROM asobi_skills", ())
             .await
             .unwrap()
             .next()

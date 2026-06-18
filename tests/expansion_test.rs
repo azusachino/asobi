@@ -1,7 +1,5 @@
-use asobi::db::{
-    ENV_DATABASE_URL, init_db, mcp_create_entities, mcp_create_relations, mcp_search_nodes,
-};
-use asobi::mcp::{EntityInput, RelationInput};
+use asobi::db::{ENV_DATABASE_URL, create_entities, create_relations, init_db, search_nodes};
+use asobi::model::{EntityInput, RelationInput};
 use tempfile::tempdir;
 
 #[tokio::test]
@@ -16,7 +14,7 @@ async fn test_search_nodes_expands_neighbors() {
     let (_db, conn) = init_db().await.unwrap();
 
     // Create 2 entities and a relation
-    mcp_create_entities(
+    create_entities(
         &conn,
         vec![
             EntityInput {
@@ -34,7 +32,7 @@ async fn test_search_nodes_expands_neighbors() {
     .await
     .unwrap();
 
-    mcp_create_relations(
+    create_relations(
         &conn,
         vec![RelationInput {
             from: "source".to_string(),
@@ -46,7 +44,7 @@ async fn test_search_nodes_expands_neighbors() {
     .unwrap();
 
     // Search for "source" — should return source and target via neighbor expansion
-    let graph = mcp_search_nodes(&conn, "source").await.unwrap();
+    let graph = search_nodes(&conn, "source").await.unwrap();
 
     assert_eq!(
         graph.entities.len(),
