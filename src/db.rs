@@ -19,6 +19,17 @@ pub async fn init_db() -> Result<(Database, Connection)> {
 
     conn.execute(crate::constant::PRAGMA_FOREIGN_KEYS_ON, ())
         .await?;
+    // Enable WAL mode for concurrent write support
+    let mut rows = conn
+        .query(crate::constant::PRAGMA_JOURNAL_MODE_WAL, ())
+        .await?;
+    let _ = rows.next().await?;
+    let mut rows = conn
+        .query(crate::constant::PRAGMA_SYNCHRONOUS_NORMAL, ())
+        .await?;
+    let _ = rows.next().await?;
+    let mut rows = conn.query(crate::constant::PRAGMA_BUSY_TIMEOUT, ()).await?;
+    let _ = rows.next().await?;
 
     conn.execute(crate::constant::SCHEMA_CREATE_TOPICS, ())
         .await?;

@@ -4,6 +4,9 @@ pub const ENV_OBSERVATION_LIMIT: &str = "ASOBI_OBSERVATION_LIMIT";
 
 // Pragmas
 pub const PRAGMA_FOREIGN_KEYS_ON: &str = "PRAGMA foreign_keys = ON";
+pub const PRAGMA_JOURNAL_MODE_WAL: &str = "PRAGMA journal_mode = WAL";
+pub const PRAGMA_SYNCHRONOUS_NORMAL: &str = "PRAGMA synchronous = NORMAL";
+pub const PRAGMA_BUSY_TIMEOUT: &str = "PRAGMA busy_timeout = 5000";
 
 // Table schema statements
 pub const SCHEMA_CREATE_TOPICS: &str = "CREATE TABLE IF NOT EXISTS topics (
