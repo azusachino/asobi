@@ -50,6 +50,9 @@ enum Commands {
         /// Flat list of `NAME TYPE` pairs (count must be a multiple of 2)
         #[arg(num_args = 2.., value_names = ["NAME", "TYPE"])]
         pairs: Vec<String>,
+        /// Seed observations at creation: `--obs VALUE` (repeatable)
+        #[arg(long = "obs", value_name = "OBSERVATION")]
+        observations: Vec<String>,
     },
     /// Create relations between entities.
     ///
@@ -428,7 +431,10 @@ async fn main() -> Result<()> {
 
     let json = cli.json;
     match cli.command {
-        Commands::New { pairs } => {
+        Commands::New {
+            pairs,
+            observations,
+        } => {
             if pairs.is_empty() || pairs.len() % 2 != 0 {
                 anyhow::bail!(
                     "new expects one or more `NAME TYPE` pairs (got {} arguments)",
@@ -440,7 +446,7 @@ async fn main() -> Result<()> {
                 .map(|c| asobi::model::EntityInput {
                     name: c[0].clone(),
                     entity_type: c[1].clone(),
-                    observations: vec![],
+                    observations: observations.clone(),
                 })
                 .collect();
             let names: Vec<String> = entities.iter().map(|e| e.name.clone()).collect();

@@ -65,11 +65,10 @@ Add `.asobi/` to `.gitignore`; the `asobi.toml` itself can be checked in.
 asobi search "session"
 asobi show "my-project:session"
 ```
-**Store a decision (supports hierarchical naming):**
+**Store a decision (supports hierarchical naming and seeded observations):**
 
 ```bash
-asobi new "project-x:architecture" "project"
-asobi obs "project-x:architecture" "Switched from serde_yaml to toml crate — better error messages"
+asobi new "project-x:architecture" "project" --obs "Switched from serde_yaml to toml crate — better error messages"
 ```
 
 **Link related concepts (preserves case and dots):**

@@ -39,10 +39,12 @@ Pass the global `--json` flag to any mutating command to also print the affected
 ### Create
 
 ```
-asobi new <NAME> <ENTITY_TYPE> [<NAME> <ENTITY_TYPE> ...]
+asobi new <NAME> <ENTITY_TYPE> [<NAME> <ENTITY_TYPE> ...] [--obs <OBSERVATION> ...]
 ```
 
 Creates one or more entities in a single call — pass repeated `NAME TYPE` pairs (`new A task B concept` creates two). The argument count must be a multiple of 2. Silently no-ops on names that already exist (`INSERT OR IGNORE`). Prefer one batched call over many invocations.
+
+Supports seeding observations at creation via repeatable `--obs <OBSERVATION>` options (e.g. `asobi new my-node task --obs "initial observation"`). If multiple entities are created in a single call, the specified observations are seeded to all of them.
 
 ```
 asobi obs <NAME> <CONTENT> [<CONTENT> ...]
