@@ -15,7 +15,7 @@ Rust (edition 2024) on `tokio`; `clap` CLI, `tracing` logs (stderr, `RUST_LOG`).
 
 ## CLI
 
-Graph: `new`, `obs`, `link`, `rm`, `rm-obs`, `unlink`, `graph`, `search`, `show`. Truths: `truth`, `rm-truth`. Plus `skills`, `ingest`, `query`, `compact`, `init`, `backup`, `restore`. Full reference: [`SKILL.md`](SKILL.md), [`docs/usage.md`](docs/usage.md).
+Graph: `new` (`--obs` seeds at creation), `obs`, `link`, `rm`, `rm-obs`, `unlink`, `graph`, `search` (`--where key=value` truth filters; query term optional), `show`. Truths: `truth`, `rm-truth`. Plus `skills`, `ingest`, `query` (`--json`/`--limit`), `compact`, `init`, `backup`, `restore`, `stats`, `export`, `import`, `reset`. Full reference: [`SKILL.md`](SKILL.md), [`docs/usage.md`](docs/usage.md).
 
 ## Make
 
@@ -24,6 +24,8 @@ Graph: `new`, `obs`, `link`, `rm`, `rm-obs`, `unlink`, `graph`, `search`, `show`
 ## Conventions
 
 Standard Rust naming; `anyhow` at boundaries, `thiserror` in core. Tests single-threaded (shared `ASOBI_DATABASE_URL`), embedded in modules. Formatters: `rustfmt`, `prettier` (JSON/YAML), `ruff`. No clippy warnings, no skipped formatters.
+
+DB schema is `asobi_*` (migrated in place from the legacy `mcp_*` on open). The connection opens with WAL + `synchronous=NORMAL` + `busy_timeout` so a lead and dispatched sub-agents can write concurrently. **Status-as-truth**: an entity's `status` lives in a truth (current state), observations hold transition notes — so a board is a single `search --where status=…`.
 
 ## Bash hygiene (HARD RULE)
 
