@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.2.1 — Compact fixes
+
+### Fixed
+
+- **`compact` now persists truths.** `sync_graph_to_markdown` only emitted observations and relations, silently dropping every truth — so the compacted Markdown / FTS / vector index lost all current-state facts (`status`, `next`, `title`, `objective`, …). The recall tier was archiving the trail but never the state.
+
+### Changed
+
+- **`compact` syncs durable knowledge only.** Volatile state (`session`, `task`/epic) and self-indexing `skill` entities are no longer written to the recall tier — they were churning the vector index and polluting semantic `query` results, and are already cheaply readable from the graph via `search` / `show`. Knowledge entities (`project`, `concept`, `reference`, `preference`, `standard`) still sync. Use `export` / `backup` for full archival. Previously `skill` entities were re-synced as body-less duplicate topics under a mismatched slug.
+
 ## v0.2.0 — Full de-MCP
 
 ### Changed (breaking)

@@ -1,10 +1,12 @@
 use crate::db;
 use crate::ingest::ingest_file;
+use crate::model::EntityOutput;
 use crate::normalize::slugify;
 use crate::vector::VectorStore;
 use anyhow::Result;
 use libsql::{Connection, params};
-use std::io::Write;
+use std::fmt::Write as _;
+use std::io::Write as _;
 use std::path::PathBuf;
 use std::time::{Duration, SystemTime};
 
@@ -22,59 +24,16 @@ pub async fn sync_graph_to_markdown(
     let graph = db::read_graph_eager(conn).await?;
     let mut count = 0;
 
-    for entity in graph.entities {
+    for entity in &graph.entities {
+        if !should_sync(&entity.entity_type) {
+            continue;
+        }
+
         let slug = slugify(&entity.name);
         let file_path = topics_dir.join(format!("{}.md", slug));
+        let content = render_entity_markdown(entity, &slug, &graph.relations);
 
-        let mut content = String::new();
-        content.push_str("---\n");
-        content.push_str(&format!("title: {}\n", entity.name));
-        content.push_str(&format!("type: {}\n", entity.entity_type));
-        content.push_str(&format!("slug: {}\n", slug));
-        content.push_str("---\n\n");
-
-        if !entity.observations.is_empty() {
-            content.push_str("## Observations\n\n");
-            let mut unique_obs: Vec<String> = entity
-                .observations
-                .into_iter()
-                .collect::<std::collections::HashSet<_>>()
-                .into_iter()
-                .collect();
-            unique_obs.sort();
-            for obs in unique_obs {
-                content.push_str(&format!("* {}\n", obs));
-            }
-            content.push('\n');
-        }
-
-        let relations: Vec<_> = graph
-            .relations
-            .iter()
-            .filter(|r| r.from == entity.name || r.to == entity.name)
-            .collect();
-
-        if !relations.is_empty() {
-            content.push_str("## Relations\n\n");
-            for rel in relations {
-                if rel.from == entity.name {
-                    content.push_str(&format!(
-                        "* {} [[{}]]\n",
-                        rel.relation_type,
-                        slugify(&rel.to)
-                    ));
-                } else {
-                    content.push_str(&format!(
-                        "* [[{}]] is {} of this\n",
-                        slugify(&rel.from),
-                        rel.relation_type
-                    ));
-                }
-            }
-        }
-
-        let mut file = std::fs::File::create(&file_path)?;
-        file.write_all(content.as_bytes())?;
+        std::fs::File::create(&file_path)?.write_all(content.as_bytes())?;
 
         // Re-ingest to update Vector/FTS tier
         ingest_file(&file_path, conn, store, embedder).await?;
@@ -82,6 +41,86 @@ pub async fn sync_graph_to_markdown(
     }
 
     Ok(count)
+}
+
+/// The recall tier (Markdown topics + FTS/vector index) holds durable
+/// *knowledge*, not volatile *state*. We skip:
+/// - `skill`: the installer already chunks the full body into the document
+///   tier under `topic_id = entity_name`; re-syncing here would emit a
+///   body-less file under a different (slugified) topic id — a duplicate,
+///   content-free topic.
+/// - `session` / `task` (epics are `task` too): operational state that flips
+///   constantly and is already cheaply queryable from the graph via
+///   `search --where status=…` / `show`. Embedding it only churns the index
+///   and pollutes semantic `query` results. Full archival lives in
+///   `export` / `backup`, not here.
+///
+/// Denylist (not allowlist) so new knowledge types persist by default.
+fn should_sync(entity_type: &str) -> bool {
+    !matches!(entity_type, "skill" | "session" | "task")
+}
+
+/// Render one entity to its Markdown topic: frontmatter plus Truths
+/// (current state), Observations (trail), and Relations sections.
+fn render_entity_markdown(
+    entity: &EntityOutput,
+    slug: &str,
+    relations: &[crate::model::RelationInput],
+) -> String {
+    let mut out = String::new();
+
+    let _ = writeln!(out, "---");
+    let _ = writeln!(out, "title: {}", entity.name);
+    let _ = writeln!(out, "type: {}", entity.entity_type);
+    let _ = writeln!(out, "slug: {}", slug);
+    let _ = writeln!(out, "---\n");
+
+    if !entity.truths.is_empty() {
+        let _ = writeln!(out, "## Truths\n");
+        // BTreeMap iterates in key order, so output is deterministic.
+        for (key, value) in &entity.truths {
+            let _ = writeln!(out, "* {}: {}", key, value);
+        }
+        out.push('\n');
+    }
+
+    if !entity.observations.is_empty() {
+        let _ = writeln!(out, "## Observations\n");
+        let mut unique_obs: Vec<&String> = entity
+            .observations
+            .iter()
+            .collect::<std::collections::HashSet<_>>()
+            .into_iter()
+            .collect();
+        unique_obs.sort();
+        for obs in unique_obs {
+            let _ = writeln!(out, "* {}", obs);
+        }
+        out.push('\n');
+    }
+
+    let related: Vec<_> = relations
+        .iter()
+        .filter(|r| r.from == entity.name || r.to == entity.name)
+        .collect();
+
+    if !related.is_empty() {
+        let _ = writeln!(out, "## Relations\n");
+        for rel in related {
+            if rel.from == entity.name {
+                let _ = writeln!(out, "* {} [[{}]]", rel.relation_type, slugify(&rel.to));
+            } else {
+                let _ = writeln!(
+                    out,
+                    "* [[{}]] is {} of this",
+                    slugify(&rel.from),
+                    rel.relation_type
+                );
+            }
+        }
+    }
+
+    out
 }
 
 pub fn prune_old_sessions(topics_root: &str, days: u32) -> Result<usize> {
@@ -190,5 +229,82 @@ mod tests {
         let count = prune_old_sessions(dir.path().to_str().unwrap(), 90).unwrap();
         assert_eq!(count, 1);
         assert!(!old_path.exists());
+    }
+
+    #[test]
+    fn test_should_sync_skips_volatile_and_skill_types() {
+        // Knowledge → persisted to the recall tier.
+        assert!(should_sync("project"));
+        assert!(should_sync("concept"));
+        assert!(should_sync("reference"));
+        assert!(should_sync("preference"));
+        assert!(should_sync("standard"));
+        // Volatile state + self-indexing skills → graph-only.
+        assert!(!should_sync("session"));
+        assert!(!should_sync("task"));
+        assert!(!should_sync("skill"));
+    }
+
+    fn entity(name: &str, entity_type: &str) -> EntityOutput {
+        EntityOutput {
+            name: name.to_string(),
+            entity_type: entity_type.to_string(),
+            observations: Vec::new(),
+            truths: std::collections::BTreeMap::new(),
+            observation_count: 0,
+            body: None,
+        }
+    }
+
+    #[test]
+    fn test_render_includes_truths_and_observations() {
+        let mut e = entity("ame:session", "session");
+        e.truths.insert("status".into(), "IN_PROGRESS".into());
+        e.truths.insert("next".into(), "ship 0.2.1".into());
+        e.observations
+            .push("completed 2026-06-23: fixed compact".into());
+
+        let md = render_entity_markdown(&e, "ame-session", &[]);
+
+        assert!(md.contains("## Truths"), "truths section missing:\n{md}");
+        // BTreeMap key order: next before status.
+        assert!(md.contains("* next: ship 0.2.1"));
+        assert!(md.contains("* status: IN_PROGRESS"));
+        assert!(md.contains("## Observations"));
+        assert!(md.contains("* completed 2026-06-23: fixed compact"));
+    }
+
+    #[test]
+    fn test_render_truths_only_omits_empty_sections() {
+        let mut e = entity("ame:task-1", "task");
+        e.truths.insert("status".into(), "DONE".into());
+
+        let md = render_entity_markdown(&e, "ame-task-1", &[]);
+
+        assert!(md.contains("## Truths"));
+        assert!(!md.contains("## Observations"));
+        assert!(!md.contains("## Relations"));
+    }
+
+    #[test]
+    fn test_render_relations_both_directions() {
+        let e = entity("ame:task-1", "task");
+        let rels = vec![
+            crate::model::RelationInput {
+                from: "ame:task-1".into(),
+                to: "ame:epic".into(),
+                relation_type: "part_of".into(),
+            },
+            crate::model::RelationInput {
+                from: "ame:task-2".into(),
+                to: "ame:task-1".into(),
+                relation_type: "depends_on".into(),
+            },
+        ];
+
+        let md = render_entity_markdown(&e, "ame-task-1", &rels);
+
+        assert!(md.contains("* part_of [[ame-epic]]"));
+        assert!(md.contains("* [[ame-task-2]] is depends_on of this"));
     }
 }

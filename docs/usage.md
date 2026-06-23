@@ -100,8 +100,13 @@ Use `graph` for full export. `search` is intentionally top-K by default so a bro
 asobi truth "my-project:session" "status" "DONE"
 asobi truth "my-project:session" "last-updated" "2026-05-21"
 asobi obs "my-project:session" "next: implement FTS5 index"
-asobi compact  # syncs graph → markdown files for durable backup
+asobi compact  # refreshes the recall index; session state already lives in the graph
 ```
+
+`compact` syncs only durable *knowledge* entities (project, decisions, references,
+preferences) to Markdown + the FTS/vector index. Volatile state (`session`, `task`)
+and self-indexing `skill` entities stay graph-only — query them with `search` / `show`,
+and use `export` / `backup` for full archival.
 
 **Inspect the full graph:**
 
