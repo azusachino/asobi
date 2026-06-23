@@ -1,4 +1,4 @@
-.PHONY: help build build-documents run test test-documents test-scripts fmt lint check check-documents bench clean init
+.PHONY: help build build-documents run test test-documents test-scripts fmt fmt-check lint check check-documents bench clean init
 
 # Default task: Show help
 help:
@@ -10,6 +10,7 @@ help:
 	@echo "  test-documents - Run tests with libSQL/fastembed document feature"
 	@echo "  test-scripts  - Run uv-managed CLI integration checks"
 	@echo "  fmt           - Format Rust, Python, JSON, and YAML code"
+	@echo "  fmt-check     - Verify formatting without writing (gate; run fmt to fix)"
 	@echo "  lint          - Run Rust clippy and Python ruff"
 	@echo "  check         - Run format check, lint, and tests (CI baseline)"
 	@echo "  check-documents - Run document feature build and tests"
@@ -37,14 +38,19 @@ test-scripts:
 
 fmt:
 	cargo fmt
-	bun x prettier --write "**/*.{json,yaml,yml}" || true
-	ruff format . || true
+	bun x prettier --write "**/*.{json,yaml,yml}"
+	ruff format .
+
+fmt-check:
+	cargo fmt --check
+	bun x prettier --check "**/*.{json,yaml,yml}"
+	ruff format --check .
 
 lint:
 	cargo clippy -- -D warnings
-	ruff check . || true
+	ruff check .
 
-check: fmt lint test test-scripts
+check: fmt-check lint test test-scripts
 
 check-documents: build-documents test-documents
 
