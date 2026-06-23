@@ -190,7 +190,7 @@ Three-step maintenance sweep:
 
 1. Prunes session Markdown files in `.asobi/topics/sessions/` older than `DAYS` (default: 90).
 2. Finds near-duplicate topic clusters in the vector store (cosine ≥ 0.85).
-3. Syncs every graph entity back to a Markdown file in `.asobi/topics/` and re-ingests for FTS/vector freshness.
+3. Syncs **durable knowledge** entities (`project`, `concept`, `reference`, `preference`, `standard`) back to a Markdown file in `.asobi/topics/` — including their truths — and re-ingests for FTS/vector freshness. Volatile state (`session`, `task`/epic) and self-indexing `skill` entities are skipped: they stay graph-only (read them with `search` / `show`), and `export` / `backup` cover full archival.
 
 ---
 
@@ -233,7 +233,9 @@ asobi truth "<project>:session" "status" "DONE"
 asobi truth "<project>:session" "last-updated" "YYYY-MM-DD"
 asobi obs "<project>:session" "next: <one sentence handoff>"
 
-# Archive to Markdown (durable backup + refreshes vector/FTS)
+# Session state already lives in the graph; compact only refreshes the
+# knowledge recall index (it skips session/task entities). Use export/backup
+# for full archival.
 asobi compact
 ```
 
