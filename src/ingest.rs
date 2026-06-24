@@ -93,17 +93,9 @@ pub async fn ingest_dir(
 /// Returns (title, body). Title comes from frontmatter `title:` if present,
 /// otherwise the filename stem.
 fn parse_frontmatter(raw: &str) -> (String, String) {
-    if let Some(rest) = raw.strip_prefix("---")
-        && let Some(end) = rest.find("\n---")
-    {
-        let fm = &rest[..end];
-        let body = rest[end + 4..].trim_start_matches('\n').to_string();
-        let title = fm
-            .lines()
-            .find(|l| l.starts_with("title:"))
-            .map(|l| l.trim_start_matches("title:").trim().to_string())
-            .unwrap_or_else(|| "Untitled".to_string());
-        return (title, body);
+    if let Some(fm) = crate::frontmatter::parse(raw) {
+        let title = fm.get("title").unwrap_or("Untitled").to_string();
+        return (title, fm.body);
     }
 
     // Try to find "title:" in the first few lines (legacy format)
@@ -137,6 +129,17 @@ mod tests {
         fn dim(&self) -> usize {
             self.0
         }
+    }
+
+    #[test]
+    fn test_parse_frontmatter_unquotes_title_and_falls_back() {
+        // Quoted title round-trips unquoted; a fenceless doc hits the legacy path.
+        let (title, body) = parse_frontmatter("---\ntitle: \"asobi:session\"\n---\n\nBody line.\n");
+        assert_eq!(title, "asobi:session");
+        assert_eq!(body, "Body line.\n");
+
+        let (legacy, _) = parse_frontmatter("title: Bare Title\nslug: x\n\nbody");
+        assert_eq!(legacy, "Bare Title");
     }
 
     #[tokio::test]

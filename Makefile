@@ -1,4 +1,4 @@
-.PHONY: help build build-documents run test test-documents test-scripts fmt fmt-check lint check check-documents bench clean init
+.PHONY: help build build-documents run test test-documents test-scripts test-documents-scripts fmt fmt-check lint check check-documents bench clean init
 
 # Default task: Show help
 help:
@@ -8,7 +8,8 @@ help:
 	@echo "  run           - Run the Asobi CLI via cargo"
 	@echo "  test          - Run all Rust tests"
 	@echo "  test-documents - Run tests with libSQL/fastembed document feature"
-	@echo "  test-scripts  - Run uv-managed CLI integration checks"
+	@echo "  test-scripts  - Run uv-managed graph-tier CLI integration checks"
+	@echo "  test-documents-scripts - Run uv-managed document-tier CLI checks"
 	@echo "  fmt           - Format Rust, Python, JSON, and YAML code"
 	@echo "  fmt-check     - Verify formatting without writing (gate; run fmt to fix)"
 	@echo "  lint          - Run Rust clippy and Python ruff"
@@ -36,6 +37,9 @@ test-documents:
 test-scripts:
 	uv run scripts/verify_cli.py
 
+test-documents-scripts:
+	uv run scripts/verify_documents_cli.py
+
 fmt:
 	cargo fmt
 	bun x prettier --write "**/*.{json,yaml,yml}"
@@ -52,7 +56,7 @@ lint:
 
 check: fmt-check lint test test-scripts
 
-check-documents: build-documents test-documents
+check-documents: build-documents test-documents test-documents-scripts
 
 bench:
 	cargo bench

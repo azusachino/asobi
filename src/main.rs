@@ -488,7 +488,11 @@ async fn main() -> Result<()> {
             let limit = std::env::var(asobi::constant::ENV_OBSERVATION_LIMIT)
                 .ok()
                 .and_then(|v| v.parse::<usize>().ok())
-                .unwrap_or(paths.observation_limit.unwrap_or(50));
+                .unwrap_or(
+                    paths
+                        .observation_limit
+                        .unwrap_or(asobi::constant::DEFAULT_OBSERVATION_LIMIT),
+                );
             asobi::db::add_observations(
                 &conn,
                 vec![asobi::model::ObservationInput {

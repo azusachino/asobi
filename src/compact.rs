@@ -22,6 +22,7 @@ pub async fn sync_graph_to_markdown(
     }
 
     let graph = db::read_graph_eager(conn).await?;
+    let today = chrono::Local::now().format("%Y-%m-%d %H:%M").to_string();
     let mut count = 0;
 
     for entity in &graph.entities {
@@ -31,33 +32,116 @@ pub async fn sync_graph_to_markdown(
 
         let slug = slugify(&entity.name);
         let file_path = topics_dir.join(format!("{}.md", slug));
-        let content = render_entity_markdown(entity, &slug, &graph.relations);
 
-        std::fs::File::create(&file_path)?.write_all(content.as_bytes())?;
+        let mut compacted_time = today.clone();
+        let mut should_write = true;
 
-        // Re-ingest to update Vector/FTS tier
-        ingest_file(&file_path, conn, store, embedder).await?;
-        count += 1;
+        if file_path.exists() {
+            if let Ok(existing) = std::fs::read_to_string(&file_path) {
+                if let Some(old_time) = crate::frontmatter::parse(&existing)
+                    .and_then(|fm| fm.get("compacted").map(|s| s.to_string()))
+                {
+                    let content_with_old_time =
+                        render_entity_markdown(entity, &slug, &graph.relations, &old_time);
+                    if existing == content_with_old_time {
+                        should_write = false;
+                        compacted_time = old_time;
+                    }
+                }
+            }
+        }
+
+        if should_write {
+            let content = render_entity_markdown(entity, &slug, &graph.relations, &compacted_time);
+            std::fs::File::create(&file_path)?.write_all(content.as_bytes())?;
+            // Refresh the Vector/FTS tier from the rendered file.
+            ingest_file(&file_path, conn, store, embedder).await?;
+            count += 1;
+        }
     }
 
     Ok(count)
 }
 
 /// The recall tier (Markdown topics + FTS/vector index) holds durable
-/// *knowledge*, not volatile *state*. We skip:
-/// - `skill`: the installer already chunks the full body into the document
-///   tier under `topic_id = entity_name`; re-syncing here would emit a
-///   body-less file under a different (slugified) topic id — a duplicate,
-///   content-free topic.
-/// - `session` / `task` (epics are `task` too): operational state that flips
-///   constantly and is already cheaply queryable from the graph via
-///   `search --where status=…` / `show`. Embedding it only churns the index
-///   and pollutes semantic `query` results. Full archival lives in
-///   `export` / `backup`, not here.
+/// *knowledge*, not volatile *state* or self-indexing content. We skip:
+///
+/// - `session` / `task` (epics are `task` too, so they skip with their tasks):
+///   operational state that flips constantly and is already cheaply queryable
+///   from the graph via `search --where status=…` / `show`. Embedding it only
+///   churns the index and pollutes semantic `query` results; full archival
+///   lives in `export` / `backup`, not here.
+/// - `skill`: the installer already chunks the full skill body into the
+///   document tier under `topic_id = entity_name`. Syncing it here would emit a
+///   second topic under the slug and double-index the same content, so a skill
+///   stays graph- and installer-owned — recall it via `query` or `skills show`.
 ///
 /// Denylist (not allowlist) so new knowledge types persist by default.
 fn should_sync(entity_type: &str) -> bool {
-    !matches!(entity_type, "skill" | "session" | "task")
+    !matches!(entity_type, "session" | "task" | "skill")
+}
+
+/// Write the YAML frontmatter block. Beyond the `title`/`type`/`slug` identity
+/// keys it promotes machine-readable metadata so strict consumers (Obsidian,
+/// Dataview) can query topics without reading the body:
+/// - `aliases`: the raw, un-slugified entity name so wikilinks resolve to it.
+/// - `observations` / `relations`: trail + edge counts for sorting/filtering.
+/// - `compacted`: the date this topic was last written.
+/// - `truth_<key>`: each truth as a property. Prefixed so a truth can never
+///   collide with a reserved identity key (`title`/`type`/`slug`/…).
+/// - one key per outgoing relation type, value a wikilink (or a list when the
+///   type repeats).
+///
+/// Every value is routed through [`crate::frontmatter::quote`] (counts stay
+/// bare integers) so it round-trips through [`crate::frontmatter::parse`].
+fn render_frontmatter(
+    out: &mut String,
+    entity: &EntityOutput,
+    slug: &str,
+    relations: &[crate::model::RelationInput],
+    compacted: &str,
+) {
+    use crate::frontmatter::quote;
+
+    // Outgoing edges grouped by type; BTreeMap keeps the output deterministic.
+    let mut outgoing: std::collections::BTreeMap<&str, Vec<String>> =
+        std::collections::BTreeMap::new();
+    for rel in relations.iter().filter(|r| r.from == entity.name) {
+        outgoing
+            .entry(rel.relation_type.as_str())
+            .or_default()
+            .push(format!("[[{}]]", slugify(&rel.to)));
+    }
+    let relation_count: usize = outgoing.values().map(Vec::len).sum();
+
+    let _ = writeln!(out, "---");
+    let _ = writeln!(out, "title: {}", quote(&entity.name));
+    let _ = writeln!(out, "type: {}", quote(&entity.entity_type));
+    let _ = writeln!(out, "slug: {}", quote(slug));
+    let _ = writeln!(out, "aliases: {}", quote(&entity.name));
+    let _ = writeln!(out, "observations: {}", entity.observations.len());
+    let _ = writeln!(out, "relations: {}", relation_count);
+    let _ = writeln!(out, "compacted: {}", quote(compacted));
+
+    // BTreeMap iterates in key order, so truth properties are deterministic.
+    for (key, value) in &entity.truths {
+        let _ = writeln!(out, "truth_{}: {}", key, quote(value));
+    }
+
+    for (rtype, targets) in &outgoing {
+        if let [single] = targets.as_slice() {
+            let _ = writeln!(out, "{}: {}", rtype, quote(single));
+        } else {
+            let list = targets
+                .iter()
+                .map(|t| quote(t))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let _ = writeln!(out, "{}: [{}]", rtype, list);
+        }
+    }
+
+    let _ = writeln!(out, "---\n");
 }
 
 /// Render one entity to its Markdown topic: frontmatter plus Truths
@@ -66,33 +150,34 @@ fn render_entity_markdown(
     entity: &EntityOutput,
     slug: &str,
     relations: &[crate::model::RelationInput],
+    compacted: &str,
 ) -> String {
     let mut out = String::new();
 
-    let _ = writeln!(out, "---");
-    let _ = writeln!(out, "title: {}", entity.name);
-    let _ = writeln!(out, "type: {}", entity.entity_type);
-    let _ = writeln!(out, "slug: {}", slug);
-    let _ = writeln!(out, "---\n");
+    render_frontmatter(&mut out, entity, slug, relations, compacted);
+
+    let _ = writeln!(out, "# {}\n", entity.name);
 
     if !entity.truths.is_empty() {
         let _ = writeln!(out, "## Truths\n");
+        let _ = writeln!(out, "| Property | Value |");
+        let _ = writeln!(out, "| :--- | :--- |");
         // BTreeMap iterates in key order, so output is deterministic.
         for (key, value) in &entity.truths {
-            let _ = writeln!(out, "* {}: {}", key, value);
+            let _ = writeln!(out, "| **{}** | {} |", key, value);
         }
         out.push('\n');
     }
 
     if !entity.observations.is_empty() {
         let _ = writeln!(out, "## Observations\n");
-        let mut unique_obs: Vec<&String> = entity
-            .observations
-            .iter()
-            .collect::<std::collections::HashSet<_>>()
-            .into_iter()
-            .collect();
-        unique_obs.sort();
+        let mut unique_obs = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        for obs in &entity.observations {
+            if seen.insert(obs) {
+                unique_obs.push(obs);
+            }
+        }
         for obs in unique_obs {
             let _ = writeln!(out, "* {}", obs);
         }
@@ -106,18 +191,26 @@ fn render_entity_markdown(
 
     if !related.is_empty() {
         let _ = writeln!(out, "## Relations\n");
+        let _ = writeln!(out, "| Direction | Relation | Entity |");
+        let _ = writeln!(out, "| :--- | :--- | :--- |");
         for rel in related {
             if rel.from == entity.name {
-                let _ = writeln!(out, "* {} [[{}]]", rel.relation_type, slugify(&rel.to));
+                let _ = writeln!(
+                    out,
+                    "| Outgoing | `{}` | [[{}]] |",
+                    rel.relation_type,
+                    slugify(&rel.to)
+                );
             } else {
                 let _ = writeln!(
                     out,
-                    "* [[{}]] is {} of this",
-                    slugify(&rel.from),
-                    rel.relation_type
+                    "| Incoming | `{}` | [[{}]] |",
+                    rel.relation_type,
+                    slugify(&rel.from)
                 );
             }
         }
+        out.push('\n');
     }
 
     out
@@ -239,9 +332,10 @@ mod tests {
         assert!(should_sync("reference"));
         assert!(should_sync("preference"));
         assert!(should_sync("standard"));
-        // Volatile state + self-indexing skills → graph-only.
+        // Volatile operational state stays graph-only.
         assert!(!should_sync("session"));
         assert!(!should_sync("task"));
+        // Skills are already indexed by the installer; syncing would duplicate.
         assert!(!should_sync("skill"));
     }
 
@@ -264,14 +358,76 @@ mod tests {
         e.observations
             .push("completed 2026-06-23: fixed compact".into());
 
-        let md = render_entity_markdown(&e, "ame-session", &[]);
+        let md = render_entity_markdown(&e, "ame-session", &[], "2026-06-23");
 
         assert!(md.contains("## Truths"), "truths section missing:\n{md}");
         // BTreeMap key order: next before status.
-        assert!(md.contains("* next: ship 0.2.1"));
-        assert!(md.contains("* status: IN_PROGRESS"));
+        assert!(md.contains("| **next** | ship 0.2.1 |"));
+        assert!(md.contains("| **status** | IN_PROGRESS |"));
         assert!(md.contains("## Observations"));
         assert!(md.contains("* completed 2026-06-23: fixed compact"));
+    }
+
+    #[test]
+    fn test_render_quotes_frontmatter_values() {
+        // A decision concept actually gets synced (should_sync is true) and its
+        // `:`-separated name is the real strict-YAML hazard quoting guards.
+        let e = entity("asobi:decision:no-pwa", "concept");
+        let md = render_entity_markdown(&e, "asobi-decision-no-pwa", &[], "2026-06-23");
+
+        assert!(
+            md.contains("title: \"asobi:decision:no-pwa\""),
+            "title not YAML-quoted:\n{md}"
+        );
+        assert!(md.contains("type: \"concept\""));
+        assert!(md.contains("slug: \"asobi-decision-no-pwa\""));
+    }
+
+    #[test]
+    fn test_frontmatter_promotes_truths_counts_and_relations() {
+        let mut e = entity("asobi:decision:no-pwa", "concept");
+        e.truths.insert("status".into(), "ACCEPTED".into());
+        e.observations.push("decision: ship native".into());
+        let rels = vec![crate::model::RelationInput {
+            from: "asobi:decision:no-pwa".into(),
+            to: "asobi".into(),
+            relation_type: "part_of".into(),
+        }];
+
+        let md = render_entity_markdown(&e, "asobi-decision-no-pwa", &rels, "2026-06-23");
+        let fm = crate::frontmatter::parse(&md).expect("frontmatter parses");
+
+        // Truths promoted as prefixed properties; counts + aliases + date present.
+        assert_eq!(fm.get("truth_status"), Some("ACCEPTED"));
+        assert_eq!(fm.get("aliases"), Some("asobi:decision:no-pwa"));
+        assert_eq!(fm.get("observations"), Some("1"));
+        assert_eq!(fm.get("relations"), Some("1"));
+        assert_eq!(fm.get("compacted"), Some("2026-06-23"));
+        // Outgoing relation as a wikilink property.
+        assert_eq!(fm.get("part_of"), Some("[[asobi]]"));
+    }
+
+    #[test]
+    fn test_frontmatter_repeated_relation_type_is_a_list() {
+        let e = entity("ame:task-3", "task");
+        let rels = vec![
+            crate::model::RelationInput {
+                from: "ame:task-3".into(),
+                to: "ame:task-1".into(),
+                relation_type: "depends_on".into(),
+            },
+            crate::model::RelationInput {
+                from: "ame:task-3".into(),
+                to: "ame:task-2".into(),
+                relation_type: "depends_on".into(),
+            },
+        ];
+
+        let md = render_entity_markdown(&e, "ame-task-3", &rels, "2026-06-23");
+        assert!(
+            md.contains("depends_on: [\"[[ame-task-1]]\", \"[[ame-task-2]]\"]"),
+            "repeated relation type not a list:\n{md}"
+        );
     }
 
     #[test]
@@ -279,7 +435,7 @@ mod tests {
         let mut e = entity("ame:task-1", "task");
         e.truths.insert("status".into(), "DONE".into());
 
-        let md = render_entity_markdown(&e, "ame-task-1", &[]);
+        let md = render_entity_markdown(&e, "ame-task-1", &[], "2026-06-23");
 
         assert!(md.contains("## Truths"));
         assert!(!md.contains("## Observations"));
@@ -302,9 +458,9 @@ mod tests {
             },
         ];
 
-        let md = render_entity_markdown(&e, "ame-task-1", &rels);
+        let md = render_entity_markdown(&e, "ame-task-1", &rels, "2026-06-23");
 
-        assert!(md.contains("* part_of [[ame-epic]]"));
-        assert!(md.contains("* [[ame-task-2]] is depends_on of this"));
+        assert!(md.contains("| Outgoing | `part_of` | [[ame-epic]] |"));
+        assert!(md.contains("| Incoming | `depends_on` | [[ame-task-2]] |"));
     }
 }
