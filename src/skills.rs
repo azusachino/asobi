@@ -12,37 +12,11 @@ pub enum SelectionMode {
 }
 
 pub fn parse_frontmatter(content: &str) -> Option<(Option<String>, Option<String>)> {
-    let mut lines = content.lines();
-    let first = lines.next()?.trim();
-    if first != "---" {
-        return None;
-    }
-
-    let mut name = None;
-    let mut description = None;
-    let mut found_end = false;
-
-    for line in lines {
-        let line = line.trim();
-        if line == "---" {
-            found_end = true;
-            break;
-        }
-        if let Some((k, v)) = line.split_once(':') {
-            let key = k.trim();
-            let val = v.trim().trim_matches('"').trim_matches('\'').to_string();
-            if key == "name" {
-                name = Some(val);
-            } else if key == "description" {
-                description = Some(val);
-            }
-        }
-    }
-
-    if found_end {
-        return Some((name, description));
-    }
-    None
+    let fm = crate::frontmatter::parse(content)?;
+    Some((
+        fm.get("name").map(str::to_string),
+        fm.get("description").map(str::to_string),
+    ))
 }
 
 pub fn derive_source_slug(url: &str) -> String {

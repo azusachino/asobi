@@ -50,7 +50,7 @@ Supports seeding observations at creation via repeatable `--obs <OBSERVATION>` o
 asobi obs <NAME> <CONTENT> [<CONTENT> ...]
 ```
 
-Appends one or more observation strings to an existing entity. The entity must already exist. Observations are subject to a rolling history cap (defaults to 50 oldest evicted per entity, customizable via `ASOBI_OBSERVATION_LIMIT` or `asobi.toml`'s `observation_limit`).
+Appends one or more observation strings to an existing entity. The entity must already exist. Observations are subject to a rolling history cap (defaults to 200, oldest evicted per entity, customizable via `ASOBI_OBSERVATION_LIMIT` or `asobi.toml`'s `observation_limit`).
 
 ```
 asobi link <FROM> <TO> <RELATION_TYPE> [<FROM> <TO> <RELATION_TYPE> ...]

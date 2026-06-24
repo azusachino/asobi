@@ -1,5 +1,18 @@
 # Changelog
 
+## v0.2.2 — Compact hardening
+
+### Fixed
+
+- **Topic frontmatter is strict-YAML safe.** Compacted topic frontmatter (`title`/`type`/`slug` and the new metadata keys) is YAML-quoted, so entity names containing `:` or a leading `#`/`@`/`[` no longer break strict consumers (Obsidian, Dataview). A shared `frontmatter` module now owns the quote-on-write / unquote-on-read contract for `compact`, `ingest`, and `skills` so they can't drift.
+- **Re-ingest no longer truncates on a body `---`.** The frontmatter parser matches a whole-line `---` fence instead of the first `\n---` substring, so a thematic break or dash-rule inside a topic body can't cut the document short.
+
+### Changed
+
+- **`compact` is idempotent.** An unchanged entity is left byte-for-byte (its `compacted` timestamp is preserved, not bumped) and is not re-embedded; only entities whose graph state actually changed are rewritten. Stops repeated `compact` runs from churning the vector index.
+- **Richer, machine-readable topic output.** Frontmatter now promotes `aliases`, observation/relation counts, each truth as a `truth_<key>` property, outgoing relations as wikilinks, and a `compacted` date; Truths and Relations render as Markdown tables under a `# <name>` heading.
+- **Default observation cap raised from 50 to 200.** Still overridable via `ASOBI_OBSERVATION_LIMIT` or `asobi.toml`'s `observation_limit`; truths remain exempt.
+
 ## v0.2.1 — Compact fixes
 
 ### Fixed

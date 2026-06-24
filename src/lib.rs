@@ -19,6 +19,7 @@ pub mod recall;
 pub mod vector;
 
 // Shared Utilities
+pub mod frontmatter;
 pub mod model;
 pub mod normalize;
 pub mod paths;
