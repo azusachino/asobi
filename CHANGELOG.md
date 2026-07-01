@@ -4,7 +4,7 @@
 
 ### Added
 - **Sequential Observation IDs**: Transitioned the database schema of `asobi_observations.id` from random UUID strings to an `AUTOINCREMENT INTEGER`. Existing databases are automatically migrated in-place upon initialization.
-- **Detailed Traversal with IDs (`show --with-timestamps`)**: The detailed output now includes unique integer `id` values alongside creation timestamps for all observations.
+- **Detailed Traversal with IDs (`show --with-ids`)**: The detailed output now includes unique integer `id` values for all observations.
 - **Subtree Relation Expansion (`show --expand <type>`)**: Added a repeatable `--expand` flag to `show` (e.g. `--expand part_of`), which recursively traverses and resolves related entities in a single JSON payload.
 - **Atomic updates by ID (`update-obs <name> <id> <content> --id`)**: Added support for updating observations by their sequential ID in a single step.
 - **ID-Based Deletions (`rm-obs <name> <id> --id`)**: Added support for deleting observations by their sequential ID, removing string-matching ambiguity and avoiding long argument payload overhead.
