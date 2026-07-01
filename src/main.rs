@@ -80,7 +80,22 @@ enum Commands {
     /// Delete entities and their relations
     Rm { names: Vec<String> },
     /// Delete specific observations
-    RmObs { name: String, content: String },
+    RmObs {
+        name: String,
+        content: String,
+        /// Match by observation ID instead of content
+        #[arg(long)]
+        id: bool,
+    },
+    /// Update an existing observation atomically (replaces old content with new content)
+    UpdateObs {
+        name: String,
+        old_content: String,
+        new_content: String,
+        /// Match by observation ID instead of content
+        #[arg(long)]
+        id: bool,
+    },
     /// Delete specific relations
     Unlink {
         from: String,
@@ -101,7 +116,15 @@ enum Commands {
         filters: Vec<String>,
     },
     /// Retrieve specific nodes by name
-    Show { names: Vec<String> },
+    Show {
+        names: Vec<String>,
+        /// Expand relations of specified type(s) to include linked entities
+        #[arg(long, value_name = "RELATION_TYPE")]
+        expand: Vec<String>,
+        /// Include observation IDs in detailed list
+        #[arg(long)]
+        with_ids: bool,
+    },
     /// Merge near-duplicate topics, prune sessions, and sync Graph to MD
     #[cfg(feature = "documents")]
     Compact {
@@ -117,7 +140,12 @@ enum Commands {
         local: bool,
     },
     /// Show statistics about the knowledge graph
-    Stats,
+    Stats {
+        /// Show observation counts and limits per entity
+        #[arg(long)]
+        per_entity: bool,
+    },
+
     /// Export the knowledge graph to a JSON file
     Export {
         /// Path to the output JSON file
@@ -338,10 +366,26 @@ fn get_or_update_cached_repo(
 }
 
 #[tokio::main]
-async fn main() -> Result<()> {
+async fn main() {
     init_tracing();
     let cli = Cli::parse();
+    let json = cli.json;
 
+    if let Err(e) = run_cli(cli).await {
+        if json {
+            let error_json = serde_json::json!({
+                "status": "failed",
+                "error": e.to_string()
+            });
+            println!("{}", serde_json::to_string_pretty(&error_json).unwrap());
+        } else {
+            eprintln!("Error: {:?}", e);
+        }
+        std::process::exit(1);
+    }
+}
+
+async fn run_cli(cli: Cli) -> Result<()> {
     // `init` is special: it runs before any DB or config resolution, since
     // its job is to create the workspace those subsystems need.
     if let Commands::Init { local } = cli.command {
@@ -414,6 +458,9 @@ async fn main() -> Result<()> {
                     let clusters =
                         asobi::compact::find_duplicate_clusters(&store, store.conn(), 0.85).await?;
                     info!("Found {} near-duplicate topic clusters.", clusters.len());
+                    for (i, cluster) in clusters.iter().enumerate() {
+                        info!("  Cluster {}: {}", i + 1, cluster.join(", "));
+                    }
 
                     info!("Syncing Graph to Markdown...");
                     let synced = asobi::compact::sync_graph_to_markdown(
@@ -532,16 +579,48 @@ async fn main() -> Result<()> {
                 );
             }
         }
-        Commands::RmObs { name, content } => {
-            asobi::db::delete_observations(
-                &conn,
-                vec![asobi::model::ObservationDeletion {
-                    entity_name: name.clone(),
-                    observations: vec![content],
-                }],
-            )
-            .await?;
+        Commands::RmObs { name, content, id } => {
+            if id {
+                let parsed_id = content.parse::<i64>().map_err(|_| {
+                    anyhow::anyhow!(
+                        "Invalid observation ID: '{}'. Expected an integer.",
+                        content
+                    )
+                })?;
+                asobi::db::delete_observation_by_id(&conn, parsed_id).await?;
+            } else {
+                asobi::db::delete_observations(
+                    &conn,
+                    vec![asobi::model::ObservationDeletion {
+                        entity_name: name.clone(),
+                        observations: vec![content],
+                    }],
+                )
+                .await?;
+            }
             info!("Observations deleted.");
+            if json {
+                emit_nodes(&conn, vec![name]).await?;
+            }
+        }
+        Commands::UpdateObs {
+            name,
+            old_content,
+            new_content,
+            id,
+        } => {
+            if id {
+                let parsed_id = old_content.parse::<i64>().map_err(|_| {
+                    anyhow::anyhow!(
+                        "Invalid observation ID: '{}'. Expected an integer.",
+                        old_content
+                    )
+                })?;
+                asobi::db::update_observation_by_id(&conn, parsed_id, &new_content).await?;
+            } else {
+                asobi::db::update_observation(&conn, &name, &old_content, &new_content).await?;
+            }
+            info!("Observation updated.");
             if json {
                 emit_nodes(&conn, vec![name]).await?;
             }
@@ -588,17 +667,96 @@ async fn main() -> Result<()> {
                     .await?;
             println!("{}", serde_json::to_string_pretty(&graph)?);
         }
-        Commands::Show { names } => {
-            let graph = asobi::db::open_nodes(&conn, names).await?;
+        Commands::Show {
+            names,
+            expand,
+            with_ids,
+        } => {
+            let graph = asobi::db::open_nodes_detailed(&conn, names, with_ids, &expand).await?;
             println!("{}", serde_json::to_string_pretty(&graph)?);
         }
-        Commands::Stats => {
+        Commands::Stats { per_entity } => {
             let (entities, relations, observations) = asobi::db::stats(&conn).await?;
-            println!("Knowledge Graph Statistics:");
-            println!("  Entities:     {}", entities);
-            println!("  Relations:    {}", relations);
-            println!("  Observations: {}", observations);
+            if json {
+                let mut stats_json = serde_json::json!({
+                    "entities": entities,
+                    "relations": relations,
+                    "observations": observations
+                });
+
+                if per_entity {
+                    let paths = asobi::paths::AsobiPaths::resolve();
+                    let limit = std::env::var(asobi::constant::ENV_OBSERVATION_LIMIT)
+                        .ok()
+                        .and_then(|v| v.parse::<usize>().ok())
+                        .unwrap_or(
+                            paths
+                                .observation_limit
+                                .unwrap_or(asobi::constant::DEFAULT_OBSERVATION_LIMIT),
+                        );
+
+                    let list = asobi::db::stats_per_entity(&conn).await?;
+                    let detailed: Vec<serde_json::Value> = list
+                        .iter()
+                        .map(|(name, count)| {
+                            let pct = if limit > 0 {
+                                (*count as f64 / limit as f64) * 100.0
+                            } else {
+                                0.0
+                            };
+                            serde_json::json!({
+                                "name": name,
+                                "observationCount": count,
+                                "limit": limit,
+                                "percentage": pct,
+                                "critical": limit > 0 && *count >= (limit * 80 / 100)
+                            })
+                        })
+                        .collect();
+                    stats_json["entitiesDetailed"] = serde_json::json!(detailed);
+                }
+
+                println!("{}", serde_json::to_string_pretty(&stats_json)?);
+            } else {
+                println!("Knowledge Graph Statistics:");
+                println!("  Entities:     {}", entities);
+                println!("  Relations:    {}", relations);
+                println!("  Observations: {}", observations);
+
+                if per_entity {
+                    let paths = asobi::paths::AsobiPaths::resolve();
+                    let limit = std::env::var(asobi::constant::ENV_OBSERVATION_LIMIT)
+                        .ok()
+                        .and_then(|v| v.parse::<usize>().ok())
+                        .unwrap_or(
+                            paths
+                                .observation_limit
+                                .unwrap_or(asobi::constant::DEFAULT_OBSERVATION_LIMIT),
+                        );
+
+                    let list = asobi::db::stats_per_entity(&conn).await?;
+                    if !list.is_empty() {
+                        println!("\nEntities by Observation Count:");
+                        for (name, count) in &list {
+                            let pct = if limit > 0 {
+                                (*count as f64 / limit as f64) * 100.0
+                            } else {
+                                0.0
+                            };
+                            if limit > 0 && *count >= (limit * 80 / 100) {
+                                println!(
+                                    "  {:_<40} {} / {} (CRITICAL: {:.1}%)",
+                                    name, count, limit, pct
+                                );
+                            } else {
+                                println!("  {:_<40} {}", name, count);
+                            }
+                        }
+                    }
+                }
+            }
         }
+
         Commands::Export { output } => {
             let graph = asobi::db::read_graph_eager(&conn).await?;
             let json = serde_json::to_string_pretty(&graph)?;

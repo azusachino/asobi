@@ -46,8 +46,46 @@ pub async fn init_db() -> Result<(Database, Connection)> {
     conn.execute(crate::constant::SCHEMA_CREATE_ASOBI_ENTITIES, ())
         .await?;
 
-    conn.execute(crate::constant::SCHEMA_CREATE_ASOBI_OBSERVATIONS, ())
+    let mut needs_migration = false;
+    {
+        let mut rows = conn
+            .query("PRAGMA table_info(asobi_observations)", ())
+            .await?;
+        while let Some(row) = rows.next().await? {
+            let col_name: String = row.get(1)?;
+            let col_type: String = row.get(2)?;
+            if col_name == "id" && col_type.to_uppercase() == "TEXT" {
+                needs_migration = true;
+                break;
+            }
+        }
+    }
+
+    if needs_migration {
+        tracing::info!(
+            "Migrating asobi_observations 'id' column from TEXT (UUID) to AUTOINCREMENT INTEGER..."
+        );
+        conn.execute("PRAGMA foreign_keys = OFF;", ()).await?;
+        let tx = conn.transaction().await?;
+        tx.execute(
+            "ALTER TABLE asobi_observations RENAME TO asobi_observations_old",
+            (),
+        )
         .await?;
+        tx.execute(crate::constant::SCHEMA_CREATE_ASOBI_OBSERVATIONS, ())
+            .await?;
+        tx.execute(
+            "INSERT INTO asobi_observations (entity_name, content, created_at) \
+             SELECT entity_name, content, created_at FROM asobi_observations_old ORDER BY created_at, rowid",
+            ()
+        ).await?;
+        tx.execute("DROP TABLE asobi_observations_old", ()).await?;
+        tx.commit().await?;
+        conn.execute("PRAGMA foreign_keys = ON;", ()).await?;
+    } else {
+        conn.execute(crate::constant::SCHEMA_CREATE_ASOBI_OBSERVATIONS, ())
+            .await?;
+    }
 
     conn.execute(crate::constant::SCHEMA_CREATE_IDX_ASOBI_OBSERVATIONS, ())
         .await?;
@@ -155,7 +193,7 @@ pub async fn create_entities(
         for obs in ent.observations {
             tx.execute(
                 crate::constant::SQL_INSERT_OBSERVATION,
-                libsql::params![uuid::Uuid::new_v4().to_string(), ent.name.clone(), obs],
+                libsql::params![ent.name.clone(), obs],
             )
             .await?;
         }
@@ -175,11 +213,7 @@ pub async fn add_observations(
         for content in obs_batch.contents {
             tx.execute(
                 crate::constant::SQL_INSERT_OBSERVATION,
-                libsql::params![
-                    uuid::Uuid::new_v4().to_string(),
-                    obs_batch.entity_name.clone(),
-                    content
-                ],
+                libsql::params![obs_batch.entity_name.clone(), content],
             )
             .await?;
         }
@@ -253,6 +287,39 @@ pub async fn delete_observations(
         }
     }
     tx.commit().await?;
+    Ok(())
+}
+
+pub async fn delete_observation_by_id(conn: &Connection, id: i64) -> Result<()> {
+    conn.execute(
+        crate::constant::SQL_DELETE_OBSERVATION_BY_ID,
+        libsql::params![id],
+    )
+    .await?;
+    Ok(())
+}
+
+pub async fn update_observation_by_id(conn: &Connection, id: i64, new_content: &str) -> Result<()> {
+    conn.execute(
+        crate::constant::SQL_UPDATE_OBSERVATION_BY_ID,
+        libsql::params![id, new_content],
+    )
+    .await?;
+    Ok(())
+}
+
+pub async fn update_observation(
+    conn: &Connection,
+    entity_name: &str,
+    old_content: &str,
+    new_content: &str,
+) -> Result<()> {
+    let norm_name = crate::normalize::normalize_key(entity_name);
+    conn.execute(
+        crate::constant::SQL_UPDATE_OBSERVATION,
+        libsql::params![norm_name, old_content, new_content],
+    )
+    .await?;
     Ok(())
 }
 
@@ -412,11 +479,12 @@ pub async fn search_nodes_with_limit(
         .await
         .unwrap_or_default();
 
+        let mut seen_names = std::collections::HashSet::new();
         for name in fts_hits {
             if !filters.is_empty() && !filtered_names.contains(&name) {
                 continue;
             }
-            if !entity_names.contains(&name) {
+            if seen_names.insert(name.clone()) {
                 entity_names.push(name);
                 if entity_names.len() >= limit {
                     break;
@@ -443,7 +511,7 @@ pub async fn search_nodes_with_limit(
                 if !filters.is_empty() && !filtered_names.contains(&name) {
                     continue;
                 }
-                if !entity_names.contains(&name) {
+                if seen_names.insert(name.clone()) {
                     entity_names.push(name);
                     if entity_names.len() >= limit {
                         break;
@@ -456,11 +524,14 @@ pub async fn search_nodes_with_limit(
     // Expand neighbors (1-hop)
     let relations = load_relations(conn, &entity_names).await?;
     let mut all_entity_names = entity_names.clone();
+    let mut seen_all = entity_names
+        .into_iter()
+        .collect::<std::collections::HashSet<_>>();
     for rel in &relations {
-        if !all_entity_names.contains(&rel.from) {
+        if seen_all.insert(rel.from.clone()) {
             all_entity_names.push(rel.from.clone());
         }
-        if !all_entity_names.contains(&rel.to) {
+        if seen_all.insert(rel.to.clone()) {
             all_entity_names.push(rel.to.clone());
         }
     }
@@ -474,12 +545,42 @@ pub async fn search_nodes_with_limit(
 }
 
 pub async fn open_nodes(conn: &Connection, names: Vec<String>) -> Result<crate::model::Graph> {
-    let normalized_names: Vec<String> = names
+    open_nodes_detailed(conn, names, false, &[]).await
+}
+
+pub async fn open_nodes_detailed(
+    conn: &Connection,
+    names: Vec<String>,
+    with_ids: bool,
+    expand_relations: &[String],
+) -> Result<crate::model::Graph> {
+    let mut normalized_names: Vec<String> = names
         .into_iter()
         .map(|n| crate::normalize::normalize_key(&n))
         .collect();
-    let entities = load_entities_eager(conn, &normalized_names).await?;
-    let relations = load_relations(conn, &normalized_names).await?;
+
+    let mut relations = load_relations(conn, &normalized_names).await?;
+    if !expand_relations.is_empty() {
+        let mut extra_names = std::collections::HashSet::new();
+        for rel in &relations {
+            if expand_relations.contains(&rel.relation_type) {
+                if normalized_names.contains(&rel.from) {
+                    extra_names.insert(rel.to.clone());
+                }
+                if normalized_names.contains(&rel.to) {
+                    extra_names.insert(rel.from.clone());
+                }
+            }
+        }
+        for name in extra_names {
+            if !normalized_names.contains(&name) {
+                normalized_names.push(name);
+            }
+        }
+        relations = load_relations(conn, &normalized_names).await?;
+    }
+
+    let entities = load_entities_eager_detailed(conn, &normalized_names, with_ids).await?;
 
     Ok(crate::model::Graph {
         entities,
@@ -577,6 +678,7 @@ async fn load_entities_lazy(
                 truths: entity_truths,
                 observation_count: count,
                 body: None,
+                observations_detailed: None,
             });
         }
     }
@@ -587,12 +689,21 @@ async fn load_entities_eager(
     conn: &Connection,
     names: &[String],
 ) -> Result<Vec<crate::model::EntityOutput>> {
+    load_entities_eager_detailed(conn, names, false).await
+}
+
+async fn load_entities_eager_detailed(
+    conn: &Connection,
+    names: &[String],
+    with_ids: bool,
+) -> Result<Vec<crate::model::EntityOutput>> {
     if names.is_empty() {
         return Ok(Vec::new());
     }
 
     let mut entity_types = HashMap::new();
     let mut observations: HashMap<String, Vec<String>> = HashMap::new();
+    let mut detailed_obs: HashMap<String, Vec<crate::model::DetailedObservation>> = HashMap::new();
     let mut skill_bodies: HashMap<String, String> = HashMap::new();
     let truths = select_truths(conn, names).await?;
 
@@ -613,16 +724,25 @@ async fn load_entities_eager(
             entity_types.insert(row.get::<String>(0)?, row.get::<String>(1)?);
         }
 
-        // Load observations
         let obs_sql =
             crate::constant::SQL_SELECT_OBSERVATIONS_IN_TEMPLATE.replace("{}", &placeholders);
-
         let mut rows = conn.query(&obs_sql, params.clone()).await?;
         while let Some(row) = rows.next().await? {
+            let id = row.get::<i64>(0)?;
+            let entity_name = row.get::<String>(1)?;
+            let content = row.get::<String>(2)?;
+
             observations
-                .entry(row.get::<String>(0)?)
+                .entry(entity_name.clone())
                 .or_default()
-                .push(row.get::<String>(1)?);
+                .push(content.clone());
+
+            if with_ids {
+                detailed_obs
+                    .entry(entity_name)
+                    .or_default()
+                    .push(crate::model::DetailedObservation { id, content });
+            }
         }
 
         // Load skill bodies
@@ -641,6 +761,11 @@ async fn load_entities_eager(
             let entity_obs = observations.remove(name).unwrap_or_default();
             let count = entity_obs.len();
             let body = skill_bodies.get(name).cloned();
+            let observations_detailed = if with_ids {
+                Some(detailed_obs.remove(name).unwrap_or_default())
+            } else {
+                None
+            };
             entities.push(crate::model::EntityOutput {
                 name: name.clone(),
                 entity_type: entity_type.clone(),
@@ -648,6 +773,7 @@ async fn load_entities_eager(
                 truths: entity_truths,
                 observation_count: count,
                 body,
+                observations_detailed,
             });
         }
     }
@@ -683,6 +809,20 @@ pub async fn stats(conn: &Connection) -> Result<(usize, usize, usize)> {
         relations_count as usize,
         observations_count as usize,
     ))
+}
+
+pub async fn stats_per_entity(conn: &Connection) -> Result<Vec<(String, usize)>> {
+    let mut results = Vec::new();
+    let mut rows = conn
+        .query(
+            "SELECT entity_name, COUNT(*) as c FROM asobi_observations GROUP BY entity_name ORDER BY c DESC",
+            (),
+        )
+        .await?;
+    while let Some(row) = rows.next().await? {
+        results.push((row.get::<String>(0)?, row.get::<i64>(1)? as usize));
+    }
+    Ok(results)
 }
 
 pub async fn reset(conn: &Connection) -> Result<()> {

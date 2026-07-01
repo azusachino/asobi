@@ -1,5 +1,20 @@
 # Changelog
 
+## v0.3.0 — Agent-Centric Performance & Precision
+
+### Added
+- **Sequential Observation IDs**: Transitioned the database schema of `asobi_observations.id` from random UUID strings to an `AUTOINCREMENT INTEGER`. Existing databases are automatically migrated in-place upon initialization.
+- **Detailed Traversal with IDs (`show --with-timestamps`)**: The detailed output now includes unique integer `id` values alongside creation timestamps for all observations.
+- **Subtree Relation Expansion (`show --expand <type>`)**: Added a repeatable `--expand` flag to `show` (e.g. `--expand part_of`), which recursively traverses and resolves related entities in a single JSON payload.
+- **Atomic updates by ID (`update-obs <name> <id> <content> --id`)**: Added support for updating observations by their sequential ID in a single step.
+- **ID-Based Deletions (`rm-obs <name> <id> --id`)**: Added support for deleting observations by their sequential ID, removing string-matching ambiguity and avoiding long argument payload overhead.
+- **JSON output for stats (`stats --json`)**: Added structured JSON serialization to `asobi stats` for machine readability.
+- **Consistent JSON receipts**: Global `--json` flag now outputs structured receipts for `backup`, `restore`, `import`, and `reset` commands.
+
+### Changed
+- **$O(1)$ Search Deduplication**: Refactored `search_nodes_with_limit` duplicate resolution to use `HashSet` instead of $O(n)$ `Vec::contains` lookups.
+- **Dropped Prefix Deletion**: Replaced the short-lived `rm-obs --prefix` flag with ID-based deletions to prevent concurrency issues and ensure strict matching logic.
+
 ## v0.2.2 — Compact hardening
 
 ### Fixed

@@ -37,6 +37,13 @@ pub struct ObservationDeletion {
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
+pub struct DetailedObservation {
+    pub id: i64,
+    pub content: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
 pub struct EntityOutput {
     pub name: String,
     pub entity_type: String,
@@ -46,6 +53,8 @@ pub struct EntityOutput {
     pub observation_count: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub body: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub observations_detailed: Option<Vec<DetailedObservation>>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

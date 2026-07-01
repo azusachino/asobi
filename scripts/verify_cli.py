@@ -226,6 +226,7 @@ def main() -> None:
 
     batch_and_json_checks()
     skills_checks()
+    agent_feature_checks()
 
     print("CLI graph integration checks passed")
 
@@ -377,6 +378,70 @@ def skills_checks() -> None:
             no_git_env,
         )
         assert "git" in no_git.stderr.lower()
+
+
+def agent_feature_checks() -> None:
+    """Coverage for the new agent-centric features:
+
+    - rm-obs --prefix
+    - update-obs
+    - show --expand and --with-timestamps
+    - stats --per-entity
+    - JSON error formatting
+    """
+    with tempfile.TemporaryDirectory(prefix="asobi-agent-") as tmp:
+        env = os.environ.copy()
+        env["ASOBI_DATABASE_URL"] = str(Path(tmp) / "asobi.db")
+
+        # 1. new and obs
+        run(["new", "alice", "person", "bob", "person"], env)
+        run(
+            ["obs", "alice", "status: active", "next: code", "old info"],
+            env,
+        )
+        run(["link", "alice", "bob", "follows"], env)
+
+        # 2. show --with-ids to get IDs
+        shown = graph(["show", "alice", "--with-ids"], env)
+        detailed = shown["entities"][0]["observationsDetailed"]
+        assert detailed[0]["id"] == 1
+        assert detailed[0]["content"] == "status: active"
+        assert detailed[2]["id"] == 3
+        assert detailed[2]["content"] == "old info"
+
+        # 3. rm-obs with --id
+        run(["rm-obs", "alice", "1", "--id"], env)
+
+        # 4. update-obs with --id
+        run(["update-obs", "alice", "3", "new info", "--id"], env)
+
+        # 4b. verify changes with show --with-ids
+        shown = graph(["show", "alice", "--with-ids"], env)
+        detailed = shown["entities"][0]["observationsDetailed"]
+        contents = {o["content"] for o in detailed}
+        assert contents == {"next: code", "new info"}
+
+        # 5. show --expand
+        expanded = graph(["show", "alice", "--expand", "follows"], env)
+        names = {e["name"] for e in expanded["entities"]}
+        assert names == {"alice", "bob"}
+
+        # 6. stats --per-entity
+        stats_out = run(["stats", "--per-entity"], env).stdout
+        assert "Entities by Observation Count:" in stats_out
+        assert "alice" in stats_out
+
+        # 6b. stats --json --per-entity
+        stats_json = json.loads(run(["--json", "stats", "--per-entity"], env).stdout)
+        assert stats_json["entities"] == 2
+        assert stats_json["relations"] == 1
+        assert stats_json["entitiesDetailed"][0]["name"] == "alice"
+
+        # 7. JSON error formatting
+        failed = run_expect_failure(["--json", "import", "nonexistent_abc.json"], env)
+        err_json = json.loads(failed.stdout)
+        assert err_json["status"] == "failed"
+        assert "No such file or directory" in err_json["error"]
 
 
 if __name__ == "__main__":
