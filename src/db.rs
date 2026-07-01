@@ -551,7 +551,7 @@ pub async fn open_nodes(conn: &Connection, names: Vec<String>) -> Result<crate::
 pub async fn open_nodes_detailed(
     conn: &Connection,
     names: Vec<String>,
-    with_timestamps: bool,
+    with_ids: bool,
     expand_relations: &[String],
 ) -> Result<crate::model::Graph> {
     let mut normalized_names: Vec<String> = names
@@ -580,7 +580,7 @@ pub async fn open_nodes_detailed(
         relations = load_relations(conn, &normalized_names).await?;
     }
 
-    let entities = load_entities_eager_detailed(conn, &normalized_names, with_timestamps).await?;
+    let entities = load_entities_eager_detailed(conn, &normalized_names, with_ids).await?;
 
     Ok(crate::model::Graph {
         entities,
@@ -695,7 +695,7 @@ async fn load_entities_eager(
 async fn load_entities_eager_detailed(
     conn: &Connection,
     names: &[String],
-    with_timestamps: bool,
+    with_ids: bool,
 ) -> Result<Vec<crate::model::EntityOutput>> {
     if names.is_empty() {
         return Ok(Vec::new());
@@ -731,21 +731,17 @@ async fn load_entities_eager_detailed(
             let id = row.get::<i64>(0)?;
             let entity_name = row.get::<String>(1)?;
             let content = row.get::<String>(2)?;
-            let created_at = row.get::<String>(3)?;
 
             observations
                 .entry(entity_name.clone())
                 .or_default()
                 .push(content.clone());
 
-            if with_timestamps {
-                detailed_obs.entry(entity_name).or_default().push(
-                    crate::model::DetailedObservation {
-                        id,
-                        content,
-                        created_at,
-                    },
-                );
+            if with_ids {
+                detailed_obs
+                    .entry(entity_name)
+                    .or_default()
+                    .push(crate::model::DetailedObservation { id, content });
             }
         }
 
@@ -765,7 +761,7 @@ async fn load_entities_eager_detailed(
             let entity_obs = observations.remove(name).unwrap_or_default();
             let count = entity_obs.len();
             let body = skill_bodies.get(name).cloned();
-            let observations_detailed = if with_timestamps {
+            let observations_detailed = if with_ids {
                 Some(detailed_obs.remove(name).unwrap_or_default())
             } else {
                 None

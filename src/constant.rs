@@ -197,7 +197,7 @@ pub const SQL_SELECT_RELATIONS_IN_TEMPLATE: &str = "SELECT from_entity, to_entit
 pub const SQL_SELECT_ENTITIES_IN_TEMPLATE: &str =
     "SELECT name, entity_type FROM asobi_entities WHERE name IN ({})";
 
-pub const SQL_SELECT_OBSERVATIONS_IN_TEMPLATE: &str = "SELECT id, entity_name, content, created_at FROM asobi_observations \
+pub const SQL_SELECT_OBSERVATIONS_IN_TEMPLATE: &str = "SELECT id, entity_name, content FROM asobi_observations \
              WHERE entity_name IN ({}) \
              ORDER BY id";
 

@@ -401,8 +401,8 @@ def agent_feature_checks() -> None:
         )
         run(["link", "alice", "bob", "follows"], env)
 
-        # 2. show --with-timestamps to get IDs
-        shown = graph(["show", "alice", "--with-timestamps"], env)
+        # 2. show --with-ids to get IDs
+        shown = graph(["show", "alice", "--with-ids"], env)
         detailed = shown["entities"][0]["observationsDetailed"]
         assert detailed[0]["id"] == 1
         assert detailed[0]["content"] == "status: active"
@@ -415,12 +415,11 @@ def agent_feature_checks() -> None:
         # 4. update-obs with --id
         run(["update-obs", "alice", "3", "new info", "--id"], env)
 
-        # 4b. verify changes with show --with-timestamps
-        shown = graph(["show", "alice", "--with-timestamps"], env)
+        # 4b. verify changes with show --with-ids
+        shown = graph(["show", "alice", "--with-ids"], env)
         detailed = shown["entities"][0]["observationsDetailed"]
         contents = {o["content"] for o in detailed}
         assert contents == {"next: code", "new info"}
-        assert all("createdAt" in o for o in detailed)
 
         # 5. show --expand
         expanded = graph(["show", "alice", "--expand", "follows"], env)

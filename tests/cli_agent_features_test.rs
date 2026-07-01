@@ -57,11 +57,11 @@ fn test_cli_agent_features() {
         .expect("failed to execute asobi");
     assert!(status.success());
 
-    // 6. Test show --with-timestamps first to retrieve IDs
+    // 6. Test show --with-ids first to retrieve IDs
     let output = Command::new(&bin_path)
         .arg("show")
         .arg("alice")
-        .arg("--with-timestamps")
+        .arg("--with-ids")
         .env("ASOBI_DATABASE_URL", db_path_str)
         .output()
         .expect("failed to execute asobi");
@@ -105,11 +105,11 @@ fn test_cli_agent_features() {
         .expect("failed to execute asobi");
     assert!(status.success());
 
-    // 8b. Test show --with-timestamps again to verify changes
+    // 8b. Test show --with-ids again to verify changes
     let output = Command::new(&bin_path)
         .arg("show")
         .arg("alice")
-        .arg("--with-timestamps")
+        .arg("--with-ids")
         .env("ASOBI_DATABASE_URL", db_path_str)
         .output()
         .expect("failed to execute asobi");
@@ -129,8 +129,6 @@ fn test_cli_agent_features() {
         .collect();
     contents.sort();
     assert_eq!(contents, vec!["new details here", "next: write tests"]);
-    // Verify created_at is present
-    assert!(detailed_obs[0]["createdAt"].is_string());
 
     // 9. Test show --expand
     // By showing alice and expanding 'follows', bob should also be loaded!

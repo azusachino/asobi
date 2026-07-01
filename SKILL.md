@@ -83,12 +83,12 @@ Use `graph` when the caller needs the full graph; do not use a broad
 `search` query as an implicit export.
 
 ```
-asobi show <NAME> [<NAME> ...] [--expand <RELATION_TYPE> ...] [--with-timestamps]
+asobi show <NAME> [<NAME> ...] [--expand <RELATION_TYPE> ...] [--with-ids]
 ```
 
 Returns a subgraph for the named entities plus relations between them. Takes one or more names as positional args.
 * `--expand <RELATION_TYPE>`: repeatably expand relations of a given type. Useful for loading subtrees (e.g. `--expand part_of` to eagerly load related epic tasks).
-* `--with-timestamps`: include `observationsDetailed` list showing exact creation timestamps (`createdAt`) for each observation.
+* `--with-ids`: include `observationsDetailed` list showing exact unique integer IDs (`id`) for each observation.
 
 
 ### Truths
@@ -315,8 +315,8 @@ asobi truth "<project>:session" "status" "IN_PROGRESS"
       "body": "string",
       "observationsDetailed": [
         {
-          "content": "string",
-          "createdAt": "string"
+          "id": 123,
+          "content": "string"
         }
       ]
     }

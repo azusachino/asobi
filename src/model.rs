@@ -40,7 +40,6 @@ pub struct ObservationDeletion {
 pub struct DetailedObservation {
     pub id: i64,
     pub content: String,
-    pub created_at: String,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]

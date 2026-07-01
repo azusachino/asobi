@@ -40,7 +40,7 @@ CREATE TABLE asobi_observations (
 Since the `id` column is an alias for SQLite's 64-bit integer `rowid`, FTS5 triggers that reference `new.rowid` and `old.rowid` remain perfectly functional without schema logic changes.
 
 ### 2.2 Eager detailed representation
-When an agent or user requests detailed entity views via `asobi show --with-timestamps`, observations are serialized inside an `observationsDetailed` JSON field. Each observation item contains its unique integer `id`:
+When an agent or user requests detailed entity views via `asobi show --with-ids`, observations are serialized inside an `observationsDetailed` JSON field. Each observation item contains its unique integer `id`:
 
 ```json
 {
@@ -53,8 +53,8 @@ When an agent or user requests detailed entity views via `asobi show --with-time
         "next: code"
       ],
       "observationsDetailed": [
-        { "id": 1, "content": "status: active", "createdAt": "2026-07-01 23:00:00" },
-        { "id": 2, "content": "next: code", "createdAt": "2026-07-01 23:05:00" }
+        { "id": 1, "content": "status: active" },
+        { "id": 2, "content": "next: code" }
       ],
       "truths": {},
       "observationCount": 2

@@ -121,9 +121,9 @@ enum Commands {
         /// Expand relations of specified type(s) to include linked entities
         #[arg(long, value_name = "RELATION_TYPE")]
         expand: Vec<String>,
-        /// Include timestamps for observations
+        /// Include observation IDs in detailed list
         #[arg(long)]
-        with_timestamps: bool,
+        with_ids: bool,
     },
     /// Merge near-duplicate topics, prune sessions, and sync Graph to MD
     #[cfg(feature = "documents")]
@@ -670,10 +670,9 @@ async fn run_cli(cli: Cli) -> Result<()> {
         Commands::Show {
             names,
             expand,
-            with_timestamps,
+            with_ids,
         } => {
-            let graph =
-                asobi::db::open_nodes_detailed(&conn, names, with_timestamps, &expand).await?;
+            let graph = asobi::db::open_nodes_detailed(&conn, names, with_ids, &expand).await?;
             println!("{}", serde_json::to_string_pretty(&graph)?);
         }
         Commands::Stats { per_entity } => {
