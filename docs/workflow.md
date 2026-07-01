@@ -120,3 +120,66 @@ asobi compact
 ```
 * **Why it works**: Rewrites stable knowledge entities to project Markdown documents and refreshes the FTS5/vector indices.
 * **Token Efficiency**: Volatile entities (`session`, `task`) are excluded from compaction, preventing vector database churn and keeping search results focused on long-term knowledge.
+
+---
+
+## The Task Dispatcher Role (Cross-Agent Coordination)
+
+For multi-agent workflows (where a lead agent dispatches tasks to autonomous sub-agents), Asobi acts as a **durable task dispatcher** that replaces ephemeral in-conversation todo lists or local JSONL files.
+
+Agents coordinate state transitions directly through the graph:
+1. **Epic Entity**: Holds the overall objective and scope.
+2. **Task Entities**: Hold discrete dispatchable units, linked to the Epic via `part_of` relations.
+3. **Task Status (Truth)**: Current status is stored as a truth value (e.g. `status = READY_TO_DISPATCH`).
+4. **Task Audit Trail (Observations)**: Implementation notes, PRs, and reviews are appended as observations.
+
+```mermaid
+stateDiagram-v2
+    READY_TO_DISPATCH --> DISPATCHED: Dispatch Task
+    DISPATCHED --> REVIEW: Implementation Done
+    REVIEW --> AWAITING_VERIFY: Code Review / Adjustments
+    AWAITING_VERIFY --> DONE: Verify & Commit
+    DONE --> READY_TO_DISPATCH: Unblock Dependents
+```
+
+### Day-to-Day Task Dispatcher API Actions:
+
+* **Planning (`tasks plan <epic>`)**:
+  Creates the Epic task and its children, linking them via `part_of` relations.
+  ```bash
+  asobi new "project-x:epic-1" "task"
+  asobi truth "project-x:epic-1" objective "Implement FTS5 indexing"
+  
+  asobi new "project-x:epic-1:task-1" "task"
+  asobi truth "project-x:epic-1:task-1" title "Create FTS5 trigger migrations"
+  asobi truth "project-x:epic-1:task-1" status "READY_TO_DISPATCH"
+  asobi link "project-x:epic-1:task-1" "project-x:epic-1" "part_of"
+  ```
+  *Efficiency*: Because task statuses are stored as truths, a quick lazy search (`asobi search "epic-1"`) renders the entire task board instantly without loading raw observation bodies.
+
+* **Dispatching (`tasks dispatch <task>`)**:
+  Marks the task as `DISPATCHED` and assigns it to a sub-agent.
+  ```bash
+  asobi truth "project-x:epic-1:task-1" status "DISPATCHED"
+  asobi obs "project-x:epic-1:task-1" "dispatched to haiku-developer on 2026-07-01"
+  ```
+  *Efficiency*: The sub-agent is briefed using `asobi show "project-x:epic-1:task-1" --with-ids` to receive the exact task specs, plans, and warnings in a single read.
+
+* **Reviewing (`tasks sync <task>`)**:
+  When the sub-agent completes work, they write their implementation notes into the task's observations and flip status to `REVIEW`:
+  ```bash
+  asobi obs "project-x:epic-1:task-1" "impl: added FTS5 migration to db.rs; make check passes"
+  asobi truth "project-x:epic-1:task-1" status "REVIEW"
+  ```
+  The lead reviews the diff, leaves a review comment, and marks the task `DONE`:
+  ```bash
+  asobi obs "project-x:epic-1:task-1" "TL-review: verified migration logic; merged"
+  asobi truth "project-x:epic-1:task-1" status "DONE"
+  ```
+
+* **Closing (`tasks close <epic>`)**:
+  Once all tasks are `DONE`, durable lessons are promoted to the main project entity, and the epic is marked `DONE`:
+  ```bash
+  asobi obs "project-x" "Convention: Always use sequential IDs for observation tables"
+  asobi truth "project-x:epic-1" status "DONE"
+  ```

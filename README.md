@@ -64,4 +64,4 @@ asobi rm-obs "my-project" 1 --id
 ## Development
 
 - **Task runner**: `make` (Nix-wrapped). Run `make check` for fmt + lint + tests.
-- See [`docs/usage.md`](docs/usage.md) for the full CLI reference and [`docs/architecture.md`](docs/architecture.md) for design.
+- See [`docs/usage.md`](docs/usage.md) for the full CLI reference, [`docs/workflow.md`](docs/workflow.md) for the day-to-day and task dispatcher workflow, and [`docs/architecture.md`](docs/architecture.md) for design.
