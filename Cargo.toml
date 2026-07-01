@@ -1,6 +1,6 @@
 [package]
 name = "asobi"
-version = "0.2.2"
+version = "0.3.0"
 edition = "2024"
 authors = ["haru <azusachino@proton.me>"]
 description = "A persistent, project-local knowledge graph CLI for AI agents."

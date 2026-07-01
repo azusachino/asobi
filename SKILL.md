@@ -83,10 +83,13 @@ Use `graph` when the caller needs the full graph; do not use a broad
 `search` query as an implicit export.
 
 ```
-asobi show <NAME> [<NAME> ...]
+asobi show <NAME> [<NAME> ...] [--expand <RELATION_TYPE> ...] [--with-timestamps]
 ```
 
 Returns a subgraph for the named entities plus relations between them. Takes one or more names as positional args.
+* `--expand <RELATION_TYPE>`: repeatably expand relations of a given type. Useful for loading subtrees (e.g. `--expand part_of` to eagerly load related epic tasks).
+* `--with-timestamps`: include `observationsDetailed` list showing exact creation timestamps (`createdAt`) for each observation.
+
 
 ### Truths
 
@@ -143,10 +146,18 @@ asobi rm <NAME> [<NAME> ...]
 Deletes one or more entities and all their observations and relations (cascades).
 
 ```
-asobi rm-obs <NAME> <CONTENT>
+asobi update-obs <NAME> <OLD_CONTENT> <NEW_CONTENT>
 ```
 
-Removes a single observation (exact content match) from the named entity.
+Atomically replaces an existing observation `<OLD_CONTENT>` under the entity with `<NEW_CONTENT>`.
+
+```
+asobi rm-obs <NAME> <CONTENT> [--prefix]
+```
+
+Removes matching observations from the named entity.
+* `--prefix`: deletes all observations under the entity matching the content string as a prefix, rather than requiring an exact match.
+
 
 ```
 asobi unlink <FROM> <TO> <RELATION_TYPE>
@@ -301,7 +312,13 @@ asobi truth "<project>:session" "status" "IN_PROGRESS"
         "key": "value"
       },
       "observationCount": 12,
-      "body": "string"
+      "body": "string",
+      "observationsDetailed": [
+        {
+          "content": "string",
+          "createdAt": "string"
+        }
+      ]
     }
   ],
   "relations": [
@@ -361,8 +378,7 @@ asobi link "my-project" "UserPreferences" "follows"
 asobi show "my-project" "UserPreferences"
 
 # Correct a stale observation
-asobi rm-obs "my-project" "Uses libSQL for storage — chosen for embedded + remote parity"
-asobi obs "my-project" "Uses libSQL (libsql crate v0.6) — embedded SQLite with Turso remote sync option"
+asobi update-obs "my-project" "Uses libSQL for storage — chosen for embedded + remote parity" "Uses libSQL (libsql crate v0.6) — embedded SQLite with Turso remote sync option"
 
 # Search by keyword
 asobi search "libSQL"
