@@ -47,13 +47,16 @@ asobi init                  # one-time setup (XDG); use --local for a project-sc
 asobi obs "my-project" "Decided to use WAL mode for concurrency"
 asobi truth "my-project" "status" "in-progress"
 asobi search "WAL"
-asobi show "my-project"
+asobi show "my-project" --with-timestamps
+asobi update-obs "my-project" 1 "Decided to use WAL mode + busy_timeout for concurrency" --id
+asobi rm-obs "my-project" 1 --id
+
 ```
 
 ## Common Commands
 
-- `asobi graph` / `search <q>` / `search --where status=READY` / `show <name>...` — read the graph.
-- `asobi new <name> <type> --obs "..."` / `obs <name> "..."` — create entities (optionally seeded) and append observations.
+- `asobi graph` / `search <q>` / `search --where status=READY` / `show <name>... --expand part_of --with-timestamps` — read the graph (supports subtree expansions and sequential observation IDs/timestamps).
+- `asobi new <name> <type> --obs "..."` / `obs <name> "..."` / `update-obs <name> <old/id> <new> [--id]` / `rm-obs <name> <content/id> [--id]` — manage observations (supports updates and deletions by unique sequential IDs).
 - `asobi truth <name> <key> <value>` / `rm-truth <name> <key>` — manage truths.
 - `asobi skills install <src> --all` / `update` / `skills` / `skills show <name>` — manage skills (`--all` and `update` sync, pruning skills dropped upstream; `--select` is additive).
 - `asobi stats` / `export -o graph.json` / `import graph.json` / `reset` — inspect & manage.
