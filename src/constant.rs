@@ -147,6 +147,10 @@ pub const SQL_INSERT_RELATION: &str = "INSERT OR REPLACE INTO asobi_relations (f
 pub const SQL_DELETE_ENTITY: &str = "DELETE FROM asobi_entities WHERE name = ?1";
 pub const SQL_DELETE_OBSERVATION: &str =
     "DELETE FROM asobi_observations WHERE entity_name = ?1 AND content = ?2";
+pub const SQL_DELETE_OBSERVATION_PREFIX: &str =
+    "DELETE FROM asobi_observations WHERE entity_name = ?1 AND content LIKE ?2 || '%'";
+pub const SQL_UPDATE_OBSERVATION: &str =
+    "UPDATE asobi_observations SET content = ?3 WHERE entity_name = ?1 AND content = ?2";
 pub const SQL_DELETE_RELATION: &str =
     "DELETE FROM asobi_relations WHERE from_entity = ?1 AND to_entity = ?2 AND relation_type = ?3";
 pub const SQL_EVICT_OBSERVATIONS: &str = "DELETE FROM asobi_observations WHERE entity_name = ?1 AND rowid NOT IN \
@@ -187,12 +191,12 @@ pub const SQL_SEARCH_ENTITIES_LIKE: &str = "SELECT name FROM asobi_entities
               LIMIT ?2";
 
 pub const SQL_SELECT_RELATIONS_IN_TEMPLATE: &str = "SELECT from_entity, to_entity, relation_type FROM asobi_relations \
-             WHERE from_entity IN ({0}) OR to_entity IN ({0})";
+              WHERE from_entity IN ({0}) OR to_entity IN ({0})";
 
 pub const SQL_SELECT_ENTITIES_IN_TEMPLATE: &str =
     "SELECT name, entity_type FROM asobi_entities WHERE name IN ({})";
 
-pub const SQL_SELECT_OBSERVATIONS_IN_TEMPLATE: &str = "SELECT entity_name, content FROM asobi_observations \
+pub const SQL_SELECT_OBSERVATIONS_IN_TEMPLATE: &str = "SELECT entity_name, content, created_at FROM asobi_observations \
              WHERE entity_name IN ({}) \
              ORDER BY created_at, id";
 
