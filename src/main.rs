@@ -83,15 +83,18 @@ enum Commands {
     RmObs {
         name: String,
         content: String,
-        /// Match by prefix instead of exact match
+        /// Match by observation ID instead of content
         #[arg(long)]
-        prefix: bool,
+        id: bool,
     },
     /// Update an existing observation atomically (replaces old content with new content)
     UpdateObs {
         name: String,
         old_content: String,
         new_content: String,
+        /// Match by observation ID instead of content
+        #[arg(long)]
+        id: bool,
     },
     /// Delete specific relations
     Unlink {
@@ -576,13 +579,15 @@ async fn run_cli(cli: Cli) -> Result<()> {
                 );
             }
         }
-        Commands::RmObs {
-            name,
-            content,
-            prefix,
-        } => {
-            if prefix {
-                asobi::db::delete_observations_with_prefix(&conn, &name, &content).await?;
+        Commands::RmObs { name, content, id } => {
+            if id {
+                let parsed_id = content.parse::<i64>().map_err(|_| {
+                    anyhow::anyhow!(
+                        "Invalid observation ID: '{}'. Expected an integer.",
+                        content
+                    )
+                })?;
+                asobi::db::delete_observation_by_id(&conn, parsed_id).await?;
             } else {
                 asobi::db::delete_observations(
                     &conn,
@@ -602,8 +607,19 @@ async fn run_cli(cli: Cli) -> Result<()> {
             name,
             old_content,
             new_content,
+            id,
         } => {
-            asobi::db::update_observation(&conn, &name, &old_content, &new_content).await?;
+            if id {
+                let parsed_id = old_content.parse::<i64>().map_err(|_| {
+                    anyhow::anyhow!(
+                        "Invalid observation ID: '{}'. Expected an integer.",
+                        old_content
+                    )
+                })?;
+                asobi::db::update_observation_by_id(&conn, parsed_id, &new_content).await?;
+            } else {
+                asobi::db::update_observation(&conn, &name, &old_content, &new_content).await?;
+            }
             info!("Observation updated.");
             if json {
                 emit_nodes(&conn, vec![name]).await?;
