@@ -57,29 +57,7 @@ fn test_cli_agent_features() {
         .expect("failed to execute asobi");
     assert!(status.success());
 
-    // 6. Test rm-obs with --prefix
-    let status = Command::new(&bin_path)
-        .arg("rm-obs")
-        .arg("alice")
-        .arg("status:")
-        .arg("--prefix")
-        .env("ASOBI_DATABASE_URL", db_path_str)
-        .status()
-        .expect("failed to execute asobi");
-    assert!(status.success());
-
-    // 7. Test update-obs
-    let status = Command::new(&bin_path)
-        .arg("update-obs")
-        .arg("alice")
-        .arg("old details here")
-        .arg("new details here")
-        .env("ASOBI_DATABASE_URL", db_path_str)
-        .status()
-        .expect("failed to execute asobi");
-    assert!(status.success());
-
-    // 8. Test show --with-timestamps
+    // 6. Test show --with-timestamps first to retrieve IDs
     let output = Command::new(&bin_path)
         .arg("show")
         .arg("alice")
@@ -91,13 +69,60 @@ fn test_cli_agent_features() {
     let stdout_str = String::from_utf8(output.stdout).unwrap();
     let graph: serde_json::Value = serde_json::from_str(&stdout_str).unwrap();
     let alice = &graph["entities"][0];
-    assert_eq!(alice["name"], "alice");
     let detailed_obs = alice["observationsDetailed"]
         .as_array()
         .expect("detailed observations missing");
 
-    // We deleted "status: active" via prefix, and updated "old details here" to "new details here".
-    // So observations should be "next: write tests" and "new details here".
+    // The IDs must be 1, 2, 3
+    assert_eq!(detailed_obs[0]["id"].as_i64(), Some(1));
+    assert_eq!(detailed_obs[0]["content"].as_str(), Some("status: active"));
+    assert_eq!(detailed_obs[2]["id"].as_i64(), Some(3));
+    assert_eq!(
+        detailed_obs[2]["content"].as_str(),
+        Some("old details here")
+    );
+
+    // 7. Test rm-obs with --id
+    let status = Command::new(&bin_path)
+        .arg("rm-obs")
+        .arg("alice")
+        .arg("1") // ID 1
+        .arg("--id")
+        .env("ASOBI_DATABASE_URL", db_path_str)
+        .status()
+        .expect("failed to execute asobi");
+    assert!(status.success());
+
+    // 8. Test update-obs with --id
+    let status = Command::new(&bin_path)
+        .arg("update-obs")
+        .arg("alice")
+        .arg("3") // ID 3
+        .arg("new details here")
+        .arg("--id")
+        .env("ASOBI_DATABASE_URL", db_path_str)
+        .status()
+        .expect("failed to execute asobi");
+    assert!(status.success());
+
+    // 8b. Test show --with-timestamps again to verify changes
+    let output = Command::new(&bin_path)
+        .arg("show")
+        .arg("alice")
+        .arg("--with-timestamps")
+        .env("ASOBI_DATABASE_URL", db_path_str)
+        .output()
+        .expect("failed to execute asobi");
+    assert!(output.status.success());
+    let stdout_str = String::from_utf8(output.stdout).unwrap();
+    let graph: serde_json::Value = serde_json::from_str(&stdout_str).unwrap();
+    let alice = &graph["entities"][0];
+    let detailed_obs = alice["observationsDetailed"]
+        .as_array()
+        .expect("detailed observations missing");
+
+    // We deleted "status: active" (ID 1), and updated ID 3 to "new details here".
+    // So observations should be "next: write tests" (ID 2) and "new details here" (ID 3).
     let mut contents: Vec<&str> = detailed_obs
         .iter()
         .map(|v| v["content"].as_str().unwrap())

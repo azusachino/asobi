@@ -401,13 +401,21 @@ def agent_feature_checks() -> None:
         )
         run(["link", "alice", "bob", "follows"], env)
 
-        # 2. rm-obs with --prefix
-        run(["rm-obs", "alice", "status:", "--prefix"], env)
+        # 2. show --with-timestamps to get IDs
+        shown = graph(["show", "alice", "--with-timestamps"], env)
+        detailed = shown["entities"][0]["observationsDetailed"]
+        assert detailed[0]["id"] == 1
+        assert detailed[0]["content"] == "status: active"
+        assert detailed[2]["id"] == 3
+        assert detailed[2]["content"] == "old info"
 
-        # 3. update-obs
-        run(["update-obs", "alice", "old info", "new info"], env)
+        # 3. rm-obs with --id
+        run(["rm-obs", "alice", "1", "--id"], env)
 
-        # 4. show --with-timestamps
+        # 4. update-obs with --id
+        run(["update-obs", "alice", "3", "new info", "--id"], env)
+
+        # 4b. verify changes with show --with-timestamps
         shown = graph(["show", "alice", "--with-timestamps"], env)
         detailed = shown["entities"][0]["observationsDetailed"]
         contents = {o["content"] for o in detailed}
