@@ -38,6 +38,7 @@ pub struct ObservationDeletion {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct DetailedObservation {
+    pub id: i64,
     pub content: String,
     pub created_at: String,
 }

@@ -46,8 +46,46 @@ pub async fn init_db() -> Result<(Database, Connection)> {
     conn.execute(crate::constant::SCHEMA_CREATE_ASOBI_ENTITIES, ())
         .await?;
 
-    conn.execute(crate::constant::SCHEMA_CREATE_ASOBI_OBSERVATIONS, ())
+    let mut needs_migration = false;
+    {
+        let mut rows = conn
+            .query("PRAGMA table_info(asobi_observations)", ())
+            .await?;
+        while let Some(row) = rows.next().await? {
+            let col_name: String = row.get(1)?;
+            let col_type: String = row.get(2)?;
+            if col_name == "id" && col_type.to_uppercase() == "TEXT" {
+                needs_migration = true;
+                break;
+            }
+        }
+    }
+
+    if needs_migration {
+        tracing::info!(
+            "Migrating asobi_observations 'id' column from TEXT (UUID) to AUTOINCREMENT INTEGER..."
+        );
+        conn.execute("PRAGMA foreign_keys = OFF;", ()).await?;
+        let tx = conn.transaction().await?;
+        tx.execute(
+            "ALTER TABLE asobi_observations RENAME TO asobi_observations_old",
+            (),
+        )
         .await?;
+        tx.execute(crate::constant::SCHEMA_CREATE_ASOBI_OBSERVATIONS, ())
+            .await?;
+        tx.execute(
+            "INSERT INTO asobi_observations (entity_name, content, created_at) \
+             SELECT entity_name, content, created_at FROM asobi_observations_old ORDER BY created_at, rowid",
+            ()
+        ).await?;
+        tx.execute("DROP TABLE asobi_observations_old", ()).await?;
+        tx.commit().await?;
+        conn.execute("PRAGMA foreign_keys = ON;", ()).await?;
+    } else {
+        conn.execute(crate::constant::SCHEMA_CREATE_ASOBI_OBSERVATIONS, ())
+            .await?;
+    }
 
     conn.execute(crate::constant::SCHEMA_CREATE_IDX_ASOBI_OBSERVATIONS, ())
         .await?;
@@ -155,7 +193,7 @@ pub async fn create_entities(
         for obs in ent.observations {
             tx.execute(
                 crate::constant::SQL_INSERT_OBSERVATION,
-                libsql::params![uuid::Uuid::new_v4().to_string(), ent.name.clone(), obs],
+                libsql::params![ent.name.clone(), obs],
             )
             .await?;
         }
@@ -175,11 +213,7 @@ pub async fn add_observations(
         for content in obs_batch.contents {
             tx.execute(
                 crate::constant::SQL_INSERT_OBSERVATION,
-                libsql::params![
-                    uuid::Uuid::new_v4().to_string(),
-                    obs_batch.entity_name.clone(),
-                    content
-                ],
+                libsql::params![obs_batch.entity_name.clone(), content],
             )
             .await?;
         }
@@ -256,15 +290,19 @@ pub async fn delete_observations(
     Ok(())
 }
 
-pub async fn delete_observations_with_prefix(
-    conn: &Connection,
-    entity_name: &str,
-    content_prefix: &str,
-) -> Result<()> {
-    let norm_name = crate::normalize::normalize_key(entity_name);
+pub async fn delete_observation_by_id(conn: &Connection, id: i64) -> Result<()> {
     conn.execute(
-        crate::constant::SQL_DELETE_OBSERVATION_PREFIX,
-        libsql::params![norm_name, content_prefix],
+        crate::constant::SQL_DELETE_OBSERVATION_BY_ID,
+        libsql::params![id],
+    )
+    .await?;
+    Ok(())
+}
+
+pub async fn update_observation_by_id(conn: &Connection, id: i64, new_content: &str) -> Result<()> {
+    conn.execute(
+        crate::constant::SQL_UPDATE_OBSERVATION_BY_ID,
+        libsql::params![id, new_content],
     )
     .await?;
     Ok(())
@@ -686,15 +724,14 @@ async fn load_entities_eager_detailed(
             entity_types.insert(row.get::<String>(0)?, row.get::<String>(1)?);
         }
 
-        // Load observations
         let obs_sql =
             crate::constant::SQL_SELECT_OBSERVATIONS_IN_TEMPLATE.replace("{}", &placeholders);
-
         let mut rows = conn.query(&obs_sql, params.clone()).await?;
         while let Some(row) = rows.next().await? {
-            let entity_name = row.get::<String>(0)?;
-            let content = row.get::<String>(1)?;
-            let created_at = row.get::<String>(2)?;
+            let id = row.get::<i64>(0)?;
+            let entity_name = row.get::<String>(1)?;
+            let content = row.get::<String>(2)?;
+            let created_at = row.get::<String>(3)?;
 
             observations
                 .entry(entity_name.clone())
@@ -704,6 +741,7 @@ async fn load_entities_eager_detailed(
             if with_timestamps {
                 detailed_obs.entry(entity_name).or_default().push(
                     crate::model::DetailedObservation {
+                        id,
                         content,
                         created_at,
                     },
