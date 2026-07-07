@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use libsql::{Builder, Connection, Database};
 use std::collections::HashMap;
 use std::env;
@@ -9,12 +9,22 @@ pub use crate::constant::{ENV_BUSY_TIMEOUT, ENV_DATABASE_URL};
 pub async fn init_db() -> Result<(Database, Connection)> {
     let paths = crate::paths::AsobiPaths::resolve();
     if !paths.data_dir.exists() {
-        std::fs::create_dir_all(&paths.data_dir)?;
+        std::fs::create_dir_all(&paths.data_dir)
+            .with_context(|| format!(
+                "failed to create database directory at '{}'. Hint: run 'asobi init --local' or set ASOBI_HOME to a writable directory.",
+                paths.data_dir.display()
+            ))?;
     }
 
     let db_path = env::var(ENV_DATABASE_URL)
         .unwrap_or_else(|_| paths.db_path().to_str().unwrap().to_string());
-    let db = Builder::new_local(&db_path).build().await?;
+    let db = Builder::new_local(&db_path)
+        .build()
+        .await
+        .with_context(|| format!(
+            "failed to build/open database file at '{}'. Hint: run 'asobi init --local' or set ASOBI_HOME to a writable directory.",
+            db_path
+        ))?;
     let conn = db.connect()?;
 
     let timeout_ms = env::var(ENV_BUSY_TIMEOUT)
