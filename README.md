@@ -61,7 +61,14 @@ asobi rm-obs "my-project" 1 --id
 - `asobi skills install <src> --all` / `update` / `skills` / `skills show <name>` — manage skills (`--all` and `update` sync, pruning skills dropped upstream; `--select` is additive).
 - `asobi stats` / `export -o graph.json` / `import graph.json` / `reset` — inspect & manage.
 
+## Sandboxed Environments
+
+When running in sandboxed or restricted environments (such as Codex, Nix build sandboxes, or containerized runners), you might need to use a project-local workspace (`asobi init --local`), configure custom database paths (`ASOBI_HOME`, `ASOBI_DATABASE_URL`), adjust busy lock timeouts (`ASOBI_BUSY_TIMEOUT`), or force rollback journal mode (`ASOBI_JOURNAL_MODE=DELETE`) if shared memory (`-shm`) creation is unsupported on the underlying filesystem.
+
+See the [Running in Sandboxed Environments](docs/usage.md#running-in-sandboxed-environments-codex-etc) section in the Usage Guide for more details.
+
 ## Development
 
 - **Task runner**: `make` (Nix-wrapped). Run `make check` for fmt + lint + tests.
 - See [`docs/usage.md`](docs/usage.md) for the full CLI reference, [`docs/workflow.md`](docs/workflow.md) for the day-to-day and task dispatcher workflow, and [`docs/architecture.md`](docs/architecture.md) for design.
+
