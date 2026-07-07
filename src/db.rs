@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::env;
 
 pub const DEFAULT_SEARCH_LIMIT: usize = 100;
-pub use crate::constant::ENV_DATABASE_URL;
+pub use crate::constant::{ENV_BUSY_TIMEOUT, ENV_DATABASE_URL};
 
 pub async fn init_db() -> Result<(Database, Connection)> {
     let paths = crate::paths::AsobiPaths::resolve();
@@ -17,6 +17,12 @@ pub async fn init_db() -> Result<(Database, Connection)> {
     let db = Builder::new_local(&db_path).build().await?;
     let conn = db.connect()?;
 
+    let timeout_ms = env::var(ENV_BUSY_TIMEOUT)
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(15000);
+    let busy_timeout_pragma = format!("PRAGMA busy_timeout = {}", timeout_ms);
+
     conn.execute(crate::constant::PRAGMA_FOREIGN_KEYS_ON, ())
         .await?;
     // Enable WAL mode for concurrent write support. These pragmas can return a
@@ -26,7 +32,7 @@ pub async fn init_db() -> Result<(Database, Connection)> {
     for pragma in [
         crate::constant::PRAGMA_JOURNAL_MODE_WAL,
         crate::constant::PRAGMA_SYNCHRONOUS_NORMAL,
-        crate::constant::PRAGMA_BUSY_TIMEOUT,
+        &busy_timeout_pragma,
     ] {
         let mut rows = conn.query(pragma, ()).await?;
         let _ = rows.next().await?;
