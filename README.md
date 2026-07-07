@@ -1,8 +1,25 @@
-# Asobi
+<div align="center">
 
-Asobi is a persistent, project-local knowledge graph CLI for AI agents. Agents use it to keep memory, track session state, and share context across conversations — stored in a local libSQL/SQLite file, no server required.
+# 🎮 asobi
 
-## Features
+**A persistent, project-local knowledge graph CLI for LLM agents.**
+
+Keep memory, track session state, and share context across conversations — stored in a local, single-file libSQL/SQLite database.
+
+[![CI](https://github.com/azusachino/asobi/actions/workflows/ci.yml/badge.svg)](https://github.com/azusachino/asobi/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/tag/azusachino/asobi?label=release&sort=semver)](https://github.com/azusachino/asobi/releases)
+[![License: MIT](https://img.shields.io/github/license/azusachino/asobi)](LICENSE)
+[![Built with Nix](https://img.shields.io/badge/built%20with-nix-5277C3?logo=nixos&logoColor=white)](https://nixos.org)
+[![Rust](https://img.shields.io/badge/rust-2024-orange?logo=rust&logoColor=white)](https://www.rust-lang.org)
+
+[![Last commit](https://img.shields.io/github/last-commit/azusachino/asobi)](https://github.com/azusachino/asobi/commits/main)
+[![Stars](https://img.shields.io/github/stars/azusachino/asobi?style=social)](https://github.com/azusachino/asobi/stargazers)
+
+</div>
+
+---
+
+## ✨ Features
 
 - **Knowledge graph** — entities, append-only (capped) observations, and directed relations.
 - **Truths** — durable `key→value` facts per entity for current state (`status`, `version`); status-as-truth makes a board a single `search --where status=…`.
@@ -12,7 +29,7 @@ Asobi is a persistent, project-local knowledge graph CLI for AI agents. Agents u
 - **Skills** — install reusable agent instructions from a git repo or local path.
 - **Document tier** (optional, `--features documents`) — `ingest` + semantic `query` over Markdown.
 
-## Installation
+## 📦 Installation
 
 ### From crates.io (recommended)
 
@@ -38,7 +55,7 @@ cargo install --git https://github.com/azusachino/asobi
 
 Or build locally with `make build` (graph CLI) or `make build-documents` (adds `ingest`/`query`/`compact`). Requires Rust 1.85+, Edition 2024.
 
-## Quick Start
+## 🚀 Quick Start
 
 ```bash
 asobi init                  # one-time setup (XDG); use --local for a project-scoped graph
@@ -53,7 +70,7 @@ asobi rm-obs "my-project" 1 --id
 
 ```
 
-## Common Commands
+## 💻 Common Commands
 
 - `asobi graph` / `search <q>` / `search --where status=READY` / `show <name>... --expand part_of --with-ids` — read the graph (supports subtree expansions and sequential observation IDs).
 - `asobi new <name> <type> --obs "..."` / `obs <name> "..."` / `update-obs <name> <old/id> <new> [--id]` / `rm-obs <name> <content/id> [--id]` — manage observations (supports updates and deletions by unique sequential IDs).
@@ -61,7 +78,13 @@ asobi rm-obs "my-project" 1 --id
 - `asobi skills install <src> --all` / `update` / `skills` / `skills show <name>` — manage skills (`--all` and `update` sync, pruning skills dropped upstream; `--select` is additive).
 - `asobi stats` / `export -o graph.json` / `import graph.json` / `reset` — inspect & manage.
 
-## Development
+## 🔒 Sandboxed Environments
+
+When running in sandboxed or restricted environments (such as Codex, Nix build sandboxes, or containerized runners), you might need to use a project-local workspace (`asobi init --local`), configure custom database paths (`ASOBI_HOME`, `ASOBI_DATABASE_URL`), adjust busy lock timeouts (`ASOBI_BUSY_TIMEOUT`), or force rollback journal mode (`ASOBI_JOURNAL_MODE=DELETE`) if shared memory (`-shm`) creation is unsupported on the underlying filesystem.
+
+See the [Running in Sandboxed Environments](docs/usage.md#running-in-sandboxed-environments-codex-etc) section in the Usage Guide for more details.
+
+## 🛠️ Development
 
 - **Task runner**: `make` (Nix-wrapped). Run `make check` for fmt + lint + tests.
 - See [`docs/usage.md`](docs/usage.md) for the full CLI reference, [`docs/workflow.md`](docs/workflow.md) for the day-to-day and task dispatcher workflow, and [`docs/architecture.md`](docs/architecture.md) for design.

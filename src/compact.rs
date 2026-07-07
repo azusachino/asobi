@@ -347,6 +347,7 @@ mod tests {
             truths: std::collections::BTreeMap::new(),
             observation_count: 0,
             body: None,
+            observations_detailed: None,
         }
     }
 

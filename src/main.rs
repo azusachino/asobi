@@ -676,12 +676,24 @@ async fn run_cli(cli: Cli) -> Result<()> {
             println!("{}", serde_json::to_string_pretty(&graph)?);
         }
         Commands::Stats { per_entity } => {
+            let paths = asobi::paths::AsobiPaths::resolve();
+            let db_path = std::env::var(asobi::constant::ENV_DATABASE_URL)
+                .unwrap_or_else(|_| paths.db_path().to_str().unwrap().to_string());
+            let mut rows = conn.query("PRAGMA journal_mode", ()).await?;
+            let journal_mode = if let Some(row) = rows.next().await? {
+                row.get::<String>(0)?
+            } else {
+                "unknown".to_string()
+            };
+
             let (entities, relations, observations) = asobi::db::stats(&conn).await?;
             if json {
                 let mut stats_json = serde_json::json!({
                     "entities": entities,
                     "relations": relations,
-                    "observations": observations
+                    "observations": observations,
+                    "databasePath": db_path,
+                    "journalMode": journal_mode
                 });
 
                 if per_entity {
@@ -718,6 +730,8 @@ async fn run_cli(cli: Cli) -> Result<()> {
 
                 println!("{}", serde_json::to_string_pretty(&stats_json)?);
             } else {
+                println!("Database Path:  {}", db_path);
+                println!("Journal Mode:   {}", journal_mode);
                 println!("Knowledge Graph Statistics:");
                 println!("  Entities:     {}", entities);
                 println!("  Relations:    {}", relations);

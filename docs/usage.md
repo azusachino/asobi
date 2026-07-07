@@ -311,3 +311,32 @@ asobi show "project-x:session" "UserPreferences"
 ```
 
 `search` accepts an optional `--limit` argument. Omit it for the default top 100 matches; set it explicitly for larger ranked exports.
+
+## Running in Sandboxed Environments (Codex, etc.)
+
+When running in sandboxed or highly restricted environments (such as Codex, Nix build sandboxes, or certain containerized runners), the environment might impose constraints on directory write access or shared-memory creation. Asobi can be configured to run smoothly in these environments using the following techniques:
+
+### Project-Local Workspace
+Use the project-local setup to avoid writing to the global `~/.local` (XDG) directory, which may be read-only or non-existent:
+```bash
+asobi init --local
+```
+This writes an `asobi.toml` file in the current working directory and places database and configurations within the `./.asobi/` subdirectory.
+
+### Custom Database Paths
+You can override Asobi's home or database locations using environment variables:
+- **`ASOBI_HOME`**: Changes the base directory under which Asobi looks for configuration, data, and topics (e.g. `ASOBI_HOME=/tmp/asobi`).
+- **`ASOBI_DATABASE_URL`**: Specifies the direct path to the database file itself (e.g. `ASOBI_DATABASE_URL=/tmp/asobi-custom.db`).
+
+### Custom Busy Timeout
+In slow or resource-constrained sandboxes, standard file locks might take longer to release. You can increase the busy timeout (default is `15000` milliseconds) using:
+- **`ASOBI_BUSY_TIMEOUT`**: The database lock busy timeout in milliseconds (e.g. `ASOBI_BUSY_TIMEOUT=30000`).
+
+### Custom Journal Mode (Shared Memory Fallback)
+By default, Asobi uses WAL (Write-Ahead Logging) mode for performance and concurrency. WAL mode requires creating `-shm` (shared memory) and `-wal` files alongside the `.db` file. 
+
+In some sandboxed environments (such as Codex or certain restricted Docker setups), the underlying filesystem does not support shared memory creation, leading to initialization failures (e.g. `disk I/O error` or `permission denied`).
+
+To run Asobi successfully in these environments, switch the journal mode to `DELETE`:
+- **`ASOBI_JOURNAL_MODE=DELETE`**: Falls back to rollback-journal mode, which does not require shared memory (`-shm`) files.
+

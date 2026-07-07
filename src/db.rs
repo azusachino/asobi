@@ -1,51 +1,95 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use libsql::{Builder, Connection, Database};
 use std::collections::HashMap;
 use std::env;
 
 pub const DEFAULT_SEARCH_LIMIT: usize = 100;
-pub use crate::constant::ENV_DATABASE_URL;
+pub use crate::constant::{ENV_BUSY_TIMEOUT, ENV_DATABASE_URL, ENV_JOURNAL_MODE};
+
+pub const SCHEMA_VERSION: i64 = 1;
 
 pub async fn init_db() -> Result<(Database, Connection)> {
     let paths = crate::paths::AsobiPaths::resolve();
     if !paths.data_dir.exists() {
-        std::fs::create_dir_all(&paths.data_dir)?;
+        std::fs::create_dir_all(&paths.data_dir)
+            .with_context(|| format!(
+                "failed to create database directory at '{}'. Hint: run 'asobi init --local' or set ASOBI_HOME to a writable directory.",
+                paths.data_dir.display()
+            ))?;
     }
 
     let db_path = env::var(ENV_DATABASE_URL)
         .unwrap_or_else(|_| paths.db_path().to_str().unwrap().to_string());
-    let db = Builder::new_local(&db_path).build().await?;
+    let db = Builder::new_local(&db_path)
+        .build()
+        .await
+        .with_context(|| format!(
+            "failed to build/open database file at '{}'. Hint: run 'asobi init --local' or set ASOBI_HOME to a writable directory.",
+            db_path
+        ))?;
     let conn = db.connect()?;
 
-    conn.execute(crate::constant::PRAGMA_FOREIGN_KEYS_ON, ())
-        .await?;
-    // Enable WAL mode for concurrent write support. These pragmas can return a
-    // row (e.g. journal_mode), so query + consume. Each cursor is scoped to one
-    // loop iteration and dropped before later DDL/migration runs — a lingering
-    // read statement would hold a schema lock ("database table is locked").
+    let timeout_ms = env::var(ENV_BUSY_TIMEOUT)
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(15000);
+    let busy_timeout_pragma = format!("PRAGMA busy_timeout = {}", timeout_ms);
+
+    // Apply basic connection pragmas needed for every connection.
+    // Set busy timeout FIRST so subsequent pragmas and queries respect it.
+    {
+        let mut rows = conn.query(&busy_timeout_pragma, ()).await?;
+        let _ = rows.next().await?;
+    }
+
     for pragma in [
-        crate::constant::PRAGMA_JOURNAL_MODE_WAL,
+        crate::constant::PRAGMA_FOREIGN_KEYS_ON,
         crate::constant::PRAGMA_SYNCHRONOUS_NORMAL,
-        crate::constant::PRAGMA_BUSY_TIMEOUT,
     ] {
         let mut rows = conn.query(pragma, ()).await?;
         let _ = rows.next().await?;
     }
 
-    conn.execute(crate::constant::SCHEMA_CREATE_TOPICS, ())
-        .await?;
+    // Query PRAGMA user_version and check if it equals SCHEMA_VERSION.
+    // If it matches, immediately return Ok((db, conn)), skipping all DDL and schema creation / migration logic!
+    let current_version = {
+        let mut rows = conn.query("PRAGMA user_version", ()).await?;
+        if let Some(row) = rows.next().await? {
+            row.get::<i64>(0)?
+        } else {
+            0
+        }
+    };
 
-    // FTS5 for full-text keyword search
-    conn.execute(crate::constant::SCHEMA_CREATE_TOPICS_FTS, ())
-        .await?;
+    if current_version == SCHEMA_VERSION {
+        return Ok((db, conn));
+    }
 
-    conn.execute(crate::constant::SCHEMA_CREATE_SESSIONS, ())
-        .await?;
+    // If it does NOT match, set up the journal mode since journal_mode cannot be changed inside a transaction.
+    let journal_mode = env::var(ENV_JOURNAL_MODE)
+        .unwrap_or_else(|_| "WAL".to_string())
+        .to_uppercase();
+    let journal_mode_pragma = format!("PRAGMA journal_mode = {}", journal_mode);
 
-    // Graph Tier (Hot) — CREATE IF NOT EXISTS is a no-op on migrated tables.
-    conn.execute(crate::constant::SCHEMA_CREATE_ASOBI_ENTITIES, ())
-        .await?;
+    let run_journal_mode = async {
+        {
+            let mut rows = conn.query(&journal_mode_pragma, ()).await?;
+            let _ = rows.next().await?;
+        }
+        Ok::<(), libsql::Error>(())
+    };
 
+    if let Err(e) = run_journal_mode.await {
+        tracing::warn!(
+            "Failed to set journal_mode to '{}': {:?}. Falling back to DELETE.",
+            journal_mode,
+            e
+        );
+        let mut rows = conn.query("PRAGMA journal_mode = DELETE", ()).await?;
+        let _ = rows.next().await?;
+    }
+
+    // Determine if migration is needed before starting transaction to allow setting foreign keys accordingly.
     let mut needs_migration = false;
     {
         let mut rows = conn
@@ -62,73 +106,130 @@ pub async fn init_db() -> Result<(Database, Connection)> {
     }
 
     if needs_migration {
-        tracing::info!(
-            "Migrating asobi_observations 'id' column from TEXT (UUID) to AUTOINCREMENT INTEGER..."
-        );
-        conn.execute("PRAGMA foreign_keys = OFF;", ()).await?;
-        let tx = conn.transaction().await?;
-        tx.execute(
-            "ALTER TABLE asobi_observations RENAME TO asobi_observations_old",
-            (),
-        )
-        .await?;
-        tx.execute(crate::constant::SCHEMA_CREATE_ASOBI_OBSERVATIONS, ())
-            .await?;
-        tx.execute(
-            "INSERT INTO asobi_observations (entity_name, content, created_at) \
-             SELECT entity_name, content, created_at FROM asobi_observations_old ORDER BY created_at, rowid",
-            ()
-        ).await?;
-        tx.execute("DROP TABLE asobi_observations_old", ()).await?;
-        tx.commit().await?;
-        conn.execute("PRAGMA foreign_keys = ON;", ()).await?;
-    } else {
-        conn.execute(crate::constant::SCHEMA_CREATE_ASOBI_OBSERVATIONS, ())
-            .await?;
+        let mut rows = conn.query("PRAGMA foreign_keys = OFF", ()).await?;
+        let _ = rows.next().await?;
     }
 
-    conn.execute(crate::constant::SCHEMA_CREATE_IDX_ASOBI_OBSERVATIONS, ())
-        .await?;
+    // Start an immediate transaction.
+    conn.execute("BEGIN IMMEDIATE", ()).await?;
 
-    conn.execute(crate::constant::SCHEMA_CREATE_ASOBI_RELATIONS, ())
-        .await?;
+    let run_setup = async {
+        let current_version = {
+            let mut rows = conn.query("PRAGMA user_version", ()).await?;
+            if let Some(row) = rows.next().await? {
+                row.get::<i64>(0)?
+            } else {
+                0
+            }
+        };
 
-    conn.execute(crate::constant::SCHEMA_CREATE_ASOBI_TRUTHS, ())
-        .await?;
+        if current_version == SCHEMA_VERSION {
+            return Ok(());
+        }
 
-    conn.execute(crate::constant::SCHEMA_CREATE_ASOBI_SKILLS, ())
-        .await?;
+        conn.execute(crate::constant::SCHEMA_CREATE_TOPICS, ())
+            .await?;
 
-    // Document Tier (Vectors)
-    conn.execute(crate::constant::SCHEMA_CREATE_CHUNKS, ())
-        .await?;
+        // FTS5 for full-text keyword search
+        conn.execute(crate::constant::SCHEMA_CREATE_TOPICS_FTS, ())
+            .await?;
 
-    conn.execute(crate::constant::SCHEMA_CREATE_IDX_CHUNKS_TOPIC_ID, ())
-        .await?;
+        conn.execute(crate::constant::SCHEMA_CREATE_SESSIONS, ())
+            .await?;
 
-    // Vector index - metric=cosine is default
-    conn.execute(crate::constant::SCHEMA_CREATE_IDX_CHUNKS_VECTOR, ())
-        .await?;
+        // Graph Tier (Hot) — CREATE IF NOT EXISTS is a no-op on migrated tables.
+        conn.execute(crate::constant::SCHEMA_CREATE_ASOBI_ENTITIES, ())
+            .await?;
 
-    // Triggers to keep FTS5 in sync with topics
-    conn.execute(crate::constant::SCHEMA_CREATE_TRIGGER_TOPICS_AI, ())
-        .await?;
-    conn.execute(crate::constant::SCHEMA_CREATE_TRIGGER_TOPICS_AD, ())
-        .await?;
-    conn.execute(crate::constant::SCHEMA_CREATE_TRIGGER_TOPICS_AU, ())
-        .await?;
+        if needs_migration {
+            tracing::info!(
+                "Migrating asobi_observations 'id' column from TEXT (UUID) to AUTOINCREMENT INTEGER..."
+            );
+            conn.execute(
+                "ALTER TABLE asobi_observations RENAME TO asobi_observations_old",
+                (),
+            )
+            .await?;
+            conn.execute(crate::constant::SCHEMA_CREATE_ASOBI_OBSERVATIONS, ())
+                .await?;
+            conn.execute(
+                "INSERT INTO asobi_observations (entity_name, content, created_at) \
+                 SELECT entity_name, content, created_at FROM asobi_observations_old ORDER BY created_at, rowid",
+                ()
+            ).await?;
+            conn.execute("DROP TABLE asobi_observations_old", ())
+                .await?;
+        } else {
+            conn.execute(crate::constant::SCHEMA_CREATE_ASOBI_OBSERVATIONS, ())
+                .await?;
+        }
 
-    // FTS5 for graph observation search (porter stemming, BM25 ranking)
-    conn.execute(crate::constant::SCHEMA_CREATE_ASOBI_OBS_FTS, ())
-        .await?;
+        conn.execute(crate::constant::SCHEMA_CREATE_IDX_ASOBI_OBSERVATIONS, ())
+            .await?;
 
-    // Triggers to keep asobi_obs_fts in sync with asobi_observations
-    conn.execute(crate::constant::SCHEMA_CREATE_TRIGGER_ASOBI_OBS_AI, ())
-        .await?;
-    conn.execute(crate::constant::SCHEMA_CREATE_TRIGGER_ASOBI_OBS_AD, ())
-        .await?;
-    conn.execute(crate::constant::SCHEMA_CREATE_TRIGGER_ASOBI_OBS_AU, ())
-        .await?;
+        conn.execute(crate::constant::SCHEMA_CREATE_ASOBI_RELATIONS, ())
+            .await?;
+
+        conn.execute(crate::constant::SCHEMA_CREATE_ASOBI_TRUTHS, ())
+            .await?;
+
+        conn.execute(crate::constant::SCHEMA_CREATE_ASOBI_SKILLS, ())
+            .await?;
+
+        // Document Tier (Vectors)
+        conn.execute(crate::constant::SCHEMA_CREATE_CHUNKS, ())
+            .await?;
+
+        conn.execute(crate::constant::SCHEMA_CREATE_IDX_CHUNKS_TOPIC_ID, ())
+            .await?;
+
+        // Vector index - metric=cosine is default
+        conn.execute(crate::constant::SCHEMA_CREATE_IDX_CHUNKS_VECTOR, ())
+            .await?;
+
+        // Triggers to keep FTS5 in sync with topics
+        conn.execute(crate::constant::SCHEMA_CREATE_TRIGGER_TOPICS_AI, ())
+            .await?;
+        conn.execute(crate::constant::SCHEMA_CREATE_TRIGGER_TOPICS_AD, ())
+            .await?;
+        conn.execute(crate::constant::SCHEMA_CREATE_TRIGGER_TOPICS_AU, ())
+            .await?;
+
+        // FTS5 for graph observation search (porter stemming, BM25 ranking)
+        conn.execute(crate::constant::SCHEMA_CREATE_ASOBI_OBS_FTS, ())
+            .await?;
+
+        // Triggers to keep asobi_obs_fts in sync with asobi_observations
+        conn.execute(crate::constant::SCHEMA_CREATE_TRIGGER_ASOBI_OBS_AI, ())
+            .await?;
+        conn.execute(crate::constant::SCHEMA_CREATE_TRIGGER_ASOBI_OBS_AD, ())
+            .await?;
+        conn.execute(crate::constant::SCHEMA_CREATE_TRIGGER_ASOBI_OBS_AU, ())
+            .await?;
+
+        let version_pragma = format!("PRAGMA user_version = {}", SCHEMA_VERSION);
+        conn.execute(&version_pragma, ()).await?;
+
+        Ok::<(), anyhow::Error>(())
+    };
+
+    match run_setup.await {
+        Ok(()) => {
+            conn.execute("COMMIT", ()).await?;
+            if needs_migration {
+                let mut rows = conn.query("PRAGMA foreign_keys = ON", ()).await?;
+                let _ = rows.next().await?;
+            }
+        }
+        Err(e) => {
+            let _ = conn.execute("ROLLBACK", ()).await;
+            if needs_migration {
+                let mut rows = conn.query("PRAGMA foreign_keys = ON", ()).await?;
+                let _ = rows.next().await?;
+            }
+            return Err(e);
+        }
+    }
 
     Ok((db, conn))
 }
@@ -182,7 +283,9 @@ pub async fn create_entities(
     conn: &Connection,
     entities: Vec<crate::model::EntityInput>,
 ) -> Result<()> {
-    let tx = conn.transaction().await?;
+    let tx = conn
+        .transaction_with_behavior(libsql::TransactionBehavior::Immediate)
+        .await?;
     for mut ent in entities {
         ent.name = crate::normalize::normalize_key(&ent.name);
         tx.execute(
@@ -207,7 +310,9 @@ pub async fn add_observations(
     observations: Vec<crate::model::ObservationInput>,
     limit: usize,
 ) -> Result<()> {
-    let tx = conn.transaction().await?;
+    let tx = conn
+        .transaction_with_behavior(libsql::TransactionBehavior::Immediate)
+        .await?;
     for mut obs_batch in observations {
         obs_batch.entity_name = crate::normalize::normalize_key(&obs_batch.entity_name);
         for content in obs_batch.contents {
@@ -233,7 +338,9 @@ pub async fn create_relations(
     conn: &Connection,
     relations: Vec<crate::model::RelationInput>,
 ) -> Result<()> {
-    let tx = conn.transaction().await?;
+    let tx = conn
+        .transaction_with_behavior(libsql::TransactionBehavior::Immediate)
+        .await?;
     for mut rel in relations {
         rel.from = crate::normalize::normalize_key(&rel.from);
         rel.to = crate::normalize::normalize_key(&rel.to);
@@ -248,7 +355,9 @@ pub async fn create_relations(
 }
 
 pub async fn delete_entities(conn: &Connection, names: Vec<String>) -> Result<()> {
-    let tx = conn.transaction().await?;
+    let tx = conn
+        .transaction_with_behavior(libsql::TransactionBehavior::Immediate)
+        .await?;
     for name in names {
         let norm_name = crate::normalize::normalize_key(&name);
         tx.execute(
@@ -275,7 +384,9 @@ pub async fn delete_observations(
     conn: &Connection,
     deletions: Vec<crate::model::ObservationDeletion>,
 ) -> Result<()> {
-    let tx = conn.transaction().await?;
+    let tx = conn
+        .transaction_with_behavior(libsql::TransactionBehavior::Immediate)
+        .await?;
     for mut del in deletions {
         del.entity_name = crate::normalize::normalize_key(&del.entity_name);
         for obs in del.observations {
@@ -327,7 +438,9 @@ pub async fn delete_relations(
     conn: &Connection,
     relations: Vec<crate::model::RelationInput>,
 ) -> Result<()> {
-    let tx = conn.transaction().await?;
+    let tx = conn
+        .transaction_with_behavior(libsql::TransactionBehavior::Immediate)
+        .await?;
     for mut rel in relations {
         rel.from = crate::normalize::normalize_key(&rel.from);
         rel.to = crate::normalize::normalize_key(&rel.to);
