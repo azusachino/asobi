@@ -1,6 +1,21 @@
 # Changelog
 
+## v0.4.0 — SQLite Concurrency & Sandbox Resiliency
+
+### Added
+- **Dynamic Busy Timeout**: Read and apply lock timeout dynamically from `ASOBI_BUSY_TIMEOUT` (defaulting to 15000ms).
+- **Actionable Open Errors**: Wrapped database directory creation and database building steps with detailed contexts including the resolved file path and workspace setup hints.
+- **Journal Mode Override & Fallback**: Support explicit `ASOBI_JOURNAL_MODE` configuration and fall back automatically to `DELETE` journal mode if WAL's shared memory (`-shm` / `-wal`) allocation fails.
+- **Database Stats Diagnostics**: `asobi stats` (in both plain-text and JSON outputs) now includes the resolved database file path and active journal mode.
+- **Concurrency regression test**: Added a multi-process concurrency integration test suite (`tests/concurrency_test.rs`) verifying execution under bursty lock contention.
+
+### Changed
+- **Schema-Version Gate**: Short-circuits connection setup (skipping setup DDLs) if `PRAGMA user_version` matches `SCHEMA_VERSION = 1`, making warm starts completely lock-free.
+- **Immediate Setup Lock**: Wrapped cold setup and migrations in `BEGIN IMMEDIATE` and re-check versioning to resolve concurrent initialization race conditions.
+- **Immediate Write Transactions**: Configured all graph write operations (`create_entities`, `add_observations`, `create_relations`, `delete_entities`, `delete_observations`, and `delete_relations`) to use `TransactionBehavior::Immediate` to prevent deadlocks under concurrency.
+
 ## v0.3.0 — Agent-Centric Performance & Precision
+
 
 ### Added
 - **Sequential Observation IDs**: Transitioned the database schema of `asobi_observations.id` from random UUID strings to an `AUTOINCREMENT INTEGER`. Existing databases are automatically migrated in-place upon initialization.
