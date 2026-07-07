@@ -54,7 +54,7 @@ lint:
 	cargo clippy -- -D warnings
 	ruff check .
 
-check: fmt-check lint test test-scripts
+check: fmt-check lint test test-scripts check-documents
 
 check-documents: build-documents test-documents test-documents-scripts
 
