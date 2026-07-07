@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::env;
 
 pub const DEFAULT_SEARCH_LIMIT: usize = 100;
-pub use crate::constant::{ENV_BUSY_TIMEOUT, ENV_DATABASE_URL};
+pub use crate::constant::{ENV_BUSY_TIMEOUT, ENV_DATABASE_URL, ENV_JOURNAL_MODE};
 
 pub async fn init_db() -> Result<(Database, Connection)> {
     let paths = crate::paths::AsobiPaths::resolve();
@@ -35,12 +35,36 @@ pub async fn init_db() -> Result<(Database, Connection)> {
 
     conn.execute(crate::constant::PRAGMA_FOREIGN_KEYS_ON, ())
         .await?;
-    // Enable WAL mode for concurrent write support. These pragmas can return a
-    // row (e.g. journal_mode), so query + consume. Each cursor is scoped to one
-    // loop iteration and dropped before later DDL/migration runs — a lingering
-    // read statement would hold a schema lock ("database table is locked").
+    let journal_mode = env::var(ENV_JOURNAL_MODE)
+        .unwrap_or_else(|_| "WAL".to_string())
+        .to_uppercase();
+    let journal_mode_pragma = format!("PRAGMA journal_mode = {}", journal_mode);
+
+    // Enable journal mode for concurrent write support (defaulting to WAL).
+    // These pragmas can return a row (e.g. journal_mode), so query + consume.
+    // Wrap the query and consumption in an error handling block. If it fails,
+    // log a warning using tracing::warn! and execute PRAGMA journal_mode = DELETE
+    // as a fallback, consuming its result as well.
+    let run_journal_mode = async {
+        let mut rows = conn.query(&journal_mode_pragma, ()).await?;
+        let _ = rows.next().await?;
+        Ok::<(), libsql::Error>(())
+    };
+
+    if let Err(e) = run_journal_mode.await {
+        tracing::warn!(
+            "Failed to set journal_mode to '{}': {:?}. Falling back to DELETE.",
+            journal_mode,
+            e
+        );
+        let mut rows = conn.query("PRAGMA journal_mode = DELETE", ()).await?;
+        let _ = rows.next().await?;
+    }
+
+    // Run the pragma loop for the remaining pragmas.
+    // Each cursor is scoped to one loop iteration and dropped before later
+    // DDL/migration runs — a lingering read statement would hold a schema lock.
     for pragma in [
-        crate::constant::PRAGMA_JOURNAL_MODE_WAL,
         crate::constant::PRAGMA_SYNCHRONOUS_NORMAL,
         &busy_timeout_pragma,
     ] {

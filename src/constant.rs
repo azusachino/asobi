@@ -2,6 +2,7 @@
 pub const ENV_DATABASE_URL: &str = "ASOBI_DATABASE_URL";
 pub const ENV_OBSERVATION_LIMIT: &str = "ASOBI_OBSERVATION_LIMIT";
 pub const ENV_BUSY_TIMEOUT: &str = "ASOBI_BUSY_TIMEOUT";
+pub const ENV_JOURNAL_MODE: &str = "ASOBI_JOURNAL_MODE";
 
 /// Per-entity observation cap when neither `ASOBI_OBSERVATION_LIMIT` nor
 /// `asobi.toml` overrides it. Appending past it evicts the oldest rows. Truths
