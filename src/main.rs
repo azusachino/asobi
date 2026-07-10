@@ -807,22 +807,13 @@ async fn run_cli(cli: Cli) -> Result<()> {
             let content = std::fs::read_to_string(&file)?;
             let graph: asobi::model::Graph = serde_json::from_str(&content)?;
 
-            // Re-construct entity inputs
-            let mut entities = Vec::new();
-            for e in graph.entities {
-                entities.push(asobi::model::EntityInput {
-                    name: e.name,
-                    entity_type: e.entity_type,
-                    observations: e.observations,
-                });
+            let had_entities = !graph.entities.is_empty();
+            let had_relations = !graph.relations.is_empty();
+            import_graph(&conn, graph).await?;
+            if had_entities {
+                info!("Imported entities, observations, and truths.");
             }
-
-            if !entities.is_empty() {
-                asobi::db::create_entities(&conn, entities).await?;
-                info!("Imported entities and observations.");
-            }
-            if !graph.relations.is_empty() {
-                asobi::db::create_relations(&conn, graph.relations).await?;
+            if had_relations {
                 info!("Imported relations.");
             }
             info!("Import complete.");
@@ -1084,6 +1075,36 @@ async fn emit_nodes(conn: &libsql::Connection, names: Vec<String>) -> Result<()>
     Ok(())
 }
 
+async fn import_graph(conn: &libsql::Connection, graph: asobi::model::Graph) -> Result<()> {
+    let mut entities = Vec::with_capacity(graph.entities.len());
+    let mut truths = Vec::new();
+    for entity in graph.entities {
+        let name = entity.name;
+        truths.extend(
+            entity
+                .truths
+                .into_iter()
+                .map(|(key, value)| (name.clone(), key, value)),
+        );
+        entities.push(asobi::model::EntityInput {
+            name,
+            entity_type: entity.entity_type,
+            observations: entity.observations,
+        });
+    }
+
+    if !entities.is_empty() {
+        asobi::db::create_entities(conn, entities).await?;
+        for (name, key, value) in truths {
+            asobi::db::truth_upsert(conn, &name, &key, &value).await?;
+        }
+    }
+    if !graph.relations.is_empty() {
+        asobi::db::create_relations(conn, graph.relations).await?;
+    }
+    Ok(())
+}
+
 /// `""`/`"s"` suffix for count-based log lines.
 fn suffix(n: usize) -> &'static str {
     if n == 1 { "" } else { "s" }
@@ -1115,7 +1136,8 @@ fn print_init_report(report: &asobi::init::InitReport) {
 
 #[cfg(test)]
 mod tests {
-    use super::validate_git_url;
+    use super::{import_graph, validate_git_url};
+    use tempfile::tempdir;
 
     #[test]
     fn git_url_validator_rejects_option_and_command_urls() {
@@ -1134,5 +1156,40 @@ mod tests {
         ] {
             assert!(validate_git_url(url).is_ok(), "expected valid URL: {url}");
         }
+    }
+
+    #[tokio::test]
+    async fn import_graph_round_trips_truths() {
+        let dir = tempdir().unwrap();
+        unsafe {
+            std::env::set_var(
+                asobi::constant::ENV_DATABASE_URL,
+                dir.path().join("test.db").to_str().unwrap(),
+            );
+        }
+        let (_db, conn) = asobi::db::init_db().await.unwrap();
+        asobi::db::create_entities(
+            &conn,
+            vec![asobi::model::EntityInput {
+                name: "project".to_string(),
+                entity_type: "task".to_string(),
+                observations: vec!["ship it".to_string()],
+            }],
+        )
+        .await
+        .unwrap();
+        asobi::db::truth_upsert(&conn, "project", "status", "READY")
+            .await
+            .unwrap();
+
+        let exported = asobi::db::read_graph_eager(&conn).await.unwrap();
+        asobi::db::reset(&conn).await.unwrap();
+        import_graph(&conn, exported).await.unwrap();
+
+        let imported = asobi::db::read_graph_eager(&conn).await.unwrap();
+        assert_eq!(
+            imported.entities[0].truths.get("status"),
+            Some(&"READY".to_string())
+        );
     }
 }

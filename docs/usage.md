@@ -123,6 +123,8 @@ asobi import backup.json                   # Import entities and relations from 
 asobi reset                                # Interactively clear the entire graph (use --force to bypass)
 ```
 
+JSON export/import preserves graph entities, observations, truths, and relations. For a full-fidelity archive that also preserves installed skill bodies and database state, use `backup`/`restore`.
+
 **Manage truths (structured key-value attributes):**
 
 ```bash
