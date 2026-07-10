@@ -207,6 +207,14 @@ pub async fn init_db() -> Result<(Database, Connection)> {
         conn.execute(crate::constant::SCHEMA_CREATE_TRIGGER_ASOBI_OBS_AU, ())
             .await?;
 
+        if needs_migration {
+            conn.execute(
+                "INSERT INTO asobi_obs_fts(asobi_obs_fts) VALUES('rebuild')",
+                (),
+            )
+            .await?;
+        }
+
         let version_pragma = format!("PRAGMA user_version = {}", SCHEMA_VERSION);
         conn.execute(&version_pragma, ()).await?;
 
@@ -1111,6 +1119,93 @@ mod tests {
             .unwrap();
         let row = rows.next().await.unwrap();
         assert!(row.is_some(), "topics_fts table missing");
+    }
+
+    #[tokio::test]
+    async fn test_observation_fts_rebuilds_after_legacy_id_migration() {
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("legacy.db");
+        unsafe {
+            std::env::set_var(ENV_DATABASE_URL, db_path.to_str().unwrap());
+        }
+
+        let legacy_db = Builder::new_local(&db_path).build().await.unwrap();
+        let legacy_conn = legacy_db.connect().unwrap();
+        legacy_conn
+            .execute(
+                "CREATE TABLE asobi_entities (name TEXT PRIMARY KEY, entity_type TEXT NOT NULL)",
+                (),
+            )
+            .await
+            .unwrap();
+        legacy_conn
+            .execute(
+                "CREATE TABLE asobi_observations (id TEXT PRIMARY KEY, entity_name TEXT NOT NULL, content TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)",
+                (),
+            )
+            .await
+            .unwrap();
+        legacy_conn
+            .execute(
+                "CREATE VIRTUAL TABLE asobi_obs_fts USING fts5(content, content='asobi_observations', content_rowid='rowid', tokenize='porter unicode61')",
+                (),
+            )
+            .await
+            .unwrap();
+        legacy_conn
+            .execute(
+                "CREATE TRIGGER asobi_obs_ai AFTER INSERT ON asobi_observations BEGIN INSERT INTO asobi_obs_fts(rowid, content) VALUES (new.rowid, new.content); END",
+                (),
+            )
+            .await
+            .unwrap();
+        legacy_conn
+            .execute(
+                "CREATE TRIGGER asobi_obs_ad AFTER DELETE ON asobi_observations BEGIN INSERT INTO asobi_obs_fts(asobi_obs_fts, rowid, content) VALUES('delete', old.rowid, old.content); END",
+                (),
+            )
+            .await
+            .unwrap();
+        legacy_conn
+            .execute(
+                "CREATE TRIGGER asobi_obs_au AFTER UPDATE ON asobi_observations BEGIN INSERT INTO asobi_obs_fts(asobi_obs_fts, rowid, content) VALUES('delete', old.rowid, old.content); INSERT INTO asobi_obs_fts(rowid, content) VALUES (new.rowid, new.content); END",
+                (),
+            )
+            .await
+            .unwrap();
+        legacy_conn
+            .execute(
+                "INSERT INTO asobi_entities VALUES ('legacy', 'project')",
+                (),
+            )
+            .await
+            .unwrap();
+        legacy_conn
+            .execute(
+                "INSERT INTO asobi_observations (id, entity_name, content) VALUES ('old', 'legacy', 'to be deleted'), ('survivor', 'legacy', 'migration survivor')",
+                (),
+            )
+            .await
+            .unwrap();
+        legacy_conn
+            .execute("DROP TRIGGER asobi_obs_ad", ())
+            .await
+            .unwrap();
+        legacy_conn
+            .execute("DELETE FROM asobi_observations WHERE id = 'old'", ())
+            .await
+            .unwrap();
+        legacy_conn
+            .execute("PRAGMA user_version = 0", ())
+            .await
+            .unwrap();
+        drop(legacy_conn);
+        drop(legacy_db);
+
+        let (_db, conn) = init_db().await.unwrap();
+        let graph = search_nodes(&conn, "migration survivor").await.unwrap();
+        assert_eq!(graph.entities.len(), 1);
+        assert_eq!(graph.entities[0].name, "legacy");
     }
 
     #[tokio::test]
