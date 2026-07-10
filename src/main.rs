@@ -587,7 +587,7 @@ async fn run_cli(cli: Cli) -> Result<()> {
                         content
                     )
                 })?;
-                asobi::db::delete_observation_by_id(&conn, parsed_id).await?;
+                asobi::db::delete_observation_by_id(&conn, &name, parsed_id).await?;
             } else {
                 asobi::db::delete_observations(
                     &conn,
@@ -616,7 +616,7 @@ async fn run_cli(cli: Cli) -> Result<()> {
                         old_content
                     )
                 })?;
-                asobi::db::update_observation_by_id(&conn, parsed_id, &new_content).await?;
+                asobi::db::update_observation_by_id(&conn, &name, parsed_id, &new_content).await?;
             } else {
                 asobi::db::update_observation(&conn, &name, &old_content, &new_content).await?;
             }

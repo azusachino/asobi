@@ -213,7 +213,9 @@ pub async fn install_skills_from_dir<
 
         let entity_name = crate::normalize::normalize_key(&format!("skill:{}:{}", slug, name));
 
-        let tx = conn.transaction().await?;
+        let tx = conn
+            .transaction_with_behavior(libsql::TransactionBehavior::Immediate)
+            .await?;
 
         // 1. Create the entity
         tx.execute(

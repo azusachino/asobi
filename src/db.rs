@@ -401,21 +401,44 @@ pub async fn delete_observations(
     Ok(())
 }
 
-pub async fn delete_observation_by_id(conn: &Connection, id: i64) -> Result<()> {
-    conn.execute(
-        crate::constant::SQL_DELETE_OBSERVATION_BY_ID,
-        libsql::params![id],
-    )
-    .await?;
+pub async fn delete_observation_by_id(conn: &Connection, entity_name: &str, id: i64) -> Result<()> {
+    let norm_name = crate::normalize::normalize_key(entity_name);
+    let affected = conn
+        .execute(
+            crate::constant::SQL_DELETE_OBSERVATION_BY_ID,
+            libsql::params![id, norm_name],
+        )
+        .await?;
+    if affected == 0 {
+        anyhow::bail!(
+            "No observation with ID {} belongs to entity '{}'",
+            id,
+            entity_name
+        );
+    }
     Ok(())
 }
 
-pub async fn update_observation_by_id(conn: &Connection, id: i64, new_content: &str) -> Result<()> {
-    conn.execute(
-        crate::constant::SQL_UPDATE_OBSERVATION_BY_ID,
-        libsql::params![id, new_content],
-    )
-    .await?;
+pub async fn update_observation_by_id(
+    conn: &Connection,
+    entity_name: &str,
+    id: i64,
+    new_content: &str,
+) -> Result<()> {
+    let norm_name = crate::normalize::normalize_key(entity_name);
+    let affected = conn
+        .execute(
+            crate::constant::SQL_UPDATE_OBSERVATION_BY_ID,
+            libsql::params![id, new_content, norm_name],
+        )
+        .await?;
+    if affected == 0 {
+        anyhow::bail!(
+            "No observation with ID {} belongs to entity '{}'",
+            id,
+            entity_name
+        );
+    }
     Ok(())
 }
 
@@ -1542,6 +1565,35 @@ mod tests {
             obs,
             vec!["obs3".to_string(), "obs4".to_string(), "obs5".to_string(),]
         );
+    }
+
+    #[tokio::test]
+    async fn test_observation_id_mutations_are_scoped_to_entity() {
+        let dir = tempdir().unwrap();
+        unsafe {
+            std::env::set_var(
+                ENV_DATABASE_URL,
+                dir.path().join("test.db").to_str().unwrap(),
+            );
+        }
+        let (_db, conn) = init_db().await.unwrap();
+
+        seed_entity(&conn, "alice", "person", &["alice observation"]).await;
+        seed_entity(&conn, "bob", "person", &["bob observation"]).await;
+
+        let delete_err = delete_observation_by_id(&conn, "bob", 1).await.unwrap_err();
+        assert!(delete_err.to_string().contains("belongs to entity 'bob'"));
+
+        let update_err = update_observation_by_id(&conn, "bob", 1, "mutated")
+            .await
+            .unwrap_err();
+        assert!(update_err.to_string().contains("belongs to entity 'bob'"));
+
+        let graph = open_nodes(&conn, vec!["alice".to_string(), "bob".to_string()])
+            .await
+            .unwrap();
+        assert_eq!(graph.entities[0].observations, vec!["alice observation"]);
+        assert_eq!(graph.entities[1].observations, vec!["bob observation"]);
     }
 
     #[tokio::test]

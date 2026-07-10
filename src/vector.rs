@@ -44,7 +44,10 @@ impl VectorStore {
     }
 
     pub async fn insert_chunks(&self, chunks: Vec<Chunk>) -> Result<()> {
-        let tx = self.conn.transaction().await?;
+        let tx = self
+            .conn
+            .transaction_with_behavior(libsql::TransactionBehavior::Immediate)
+            .await?;
         for chunk in chunks {
             let vector_json = serde_json::to_string(&chunk.vector)?;
             tx.execute(
