@@ -284,11 +284,31 @@ fn ensure_git_available() -> Result<()> {
     }
 }
 
+fn validate_git_url(git_url: &str) -> Result<()> {
+    if git_url.starts_with('-') {
+        anyhow::bail!("Invalid git URL: URLs must not start with '-'");
+    }
+
+    let has_allowed_scheme = ["https://", "ssh://", "git://", "file://"]
+        .iter()
+        .any(|scheme| git_url.starts_with(scheme));
+    let is_scp_style = git_url.starts_with("git@") && git_url.contains(':');
+    if !has_allowed_scheme && !is_scp_style {
+        anyhow::bail!(
+            "Unsupported git URL '{}'; use https://, ssh://, git://, file://, or git@host:path",
+            git_url
+        );
+    }
+
+    Ok(())
+}
+
 fn get_or_update_cached_repo(
     git_url: &str,
     caches_dir: &std::path::Path,
 ) -> Result<(std::path::PathBuf, String)> {
     ensure_git_available()?;
+    validate_git_url(git_url)?;
     let slug = asobi::skills::derive_source_slug(git_url);
     let repo_cache_dir = caches_dir.join(&slug);
 
@@ -330,6 +350,7 @@ fn get_or_update_cached_repo(
                 .arg("clone")
                 .arg("--depth")
                 .arg("1")
+                .arg("--")
                 .arg(git_url)
                 .arg(&repo_cache_dir)
                 .status()?;
@@ -343,6 +364,7 @@ fn get_or_update_cached_repo(
             .arg("clone")
             .arg("--depth")
             .arg("1")
+            .arg("--")
             .arg(git_url)
             .arg(&repo_cache_dir)
             .status()?;
@@ -1088,5 +1110,29 @@ fn print_init_report(report: &asobi::init::InitReport) {
         println!("  wrote    {}", path.display());
     } else if let Some(path) = &report.config_existed {
         println!("  exists   {}", path.display());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::validate_git_url;
+
+    #[test]
+    fn git_url_validator_rejects_option_and_command_urls() {
+        assert!(validate_git_url("-upload-pack=x").is_err());
+        assert!(validate_git_url("ext::sh -c id").is_err());
+    }
+
+    #[test]
+    fn git_url_validator_accepts_supported_urls() {
+        for url in [
+            "https://example.com/repo.git",
+            "ssh://example.com/repo.git",
+            "git://example.com/repo.git",
+            "file:///tmp/repo",
+            "git@example.com:repo.git",
+        ] {
+            assert!(validate_git_url(url).is_ok(), "expected valid URL: {url}");
+        }
     }
 }
