@@ -1,12 +1,12 @@
 use anyhow::Result;
 use fastembed::{EmbeddingModel, InitOptions, TextEmbedding};
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use super::EmbeddingProvider;
 
 pub struct FastEmbedProvider {
-    model: Mutex<TextEmbedding>,
+    model: Arc<Mutex<TextEmbedding>>,
     dim: usize,
 }
 
@@ -20,7 +20,7 @@ impl FastEmbedProvider {
         let opts = InitOptions::new(EmbeddingModel::AllMiniLML6V2).with_cache_dir(cache_dir);
         let model = TextEmbedding::try_new(opts)?;
         Ok(Self {
-            model: Mutex::new(model),
+            model: Arc::new(Mutex::new(model)),
             dim: 384,
         })
     }
@@ -28,12 +28,15 @@ impl FastEmbedProvider {
 
 impl EmbeddingProvider for FastEmbedProvider {
     async fn embed(&self, texts: &[String]) -> Result<Vec<Vec<f32>>> {
-        let mut model = self
-            .model
-            .lock()
-            .map_err(|e| anyhow::anyhow!("mutex poisoned: {}", e))?;
-        let embeddings = model.embed(texts, None)?;
-        Ok(embeddings)
+        let model = Arc::clone(&self.model);
+        let texts = texts.to_vec();
+        tokio::task::spawn_blocking(move || -> Result<Vec<Vec<f32>>> {
+            let mut model = model
+                .lock()
+                .map_err(|e| anyhow::anyhow!("mutex poisoned: {}", e))?;
+            Ok(model.embed(&texts, None)?)
+        })
+        .await?
     }
 
     fn dim(&self) -> usize {

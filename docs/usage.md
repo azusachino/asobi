@@ -123,6 +123,8 @@ asobi import backup.json                   # Import entities and relations from 
 asobi reset                                # Interactively clear the entire graph (use --force to bypass)
 ```
 
+JSON export/import preserves graph entities, observations, truths, and relations. For a full-fidelity archive that also preserves installed skill bodies and database state, use `backup`/`restore`.
+
 **Manage truths (structured key-value attributes):**
 
 ```bash
@@ -217,7 +219,7 @@ asobi truth "<project>:session" "status" "IN_PROGRESS"
 | `<project>`         | `project`    | Stable project facts, architecture decisions |
 | `UserPreferences`   | `preference` | Cross-project user habits                    |
 | `CodingStyle`       | `standard`   | Commit format, indentation, etc.             |
-| `ToolPreferences`   | `preference` | Nix, make, rtk, etc.                          |
+| `ToolPreferences`   | `preference` | Nix, make, etc.                               |
 
 ### Output format
 
@@ -339,4 +341,3 @@ In some sandboxed environments (such as Codex or certain restricted Docker setup
 
 To run Asobi successfully in these environments, switch the journal mode to `DELETE`:
 - **`ASOBI_JOURNAL_MODE=DELETE`**: Falls back to rollback-journal mode, which does not require shared memory (`-shm`) files.
-

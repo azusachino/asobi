@@ -207,6 +207,14 @@ pub async fn init_db() -> Result<(Database, Connection)> {
         conn.execute(crate::constant::SCHEMA_CREATE_TRIGGER_ASOBI_OBS_AU, ())
             .await?;
 
+        if needs_migration {
+            conn.execute(
+                "INSERT INTO asobi_obs_fts(asobi_obs_fts) VALUES('rebuild')",
+                (),
+            )
+            .await?;
+        }
+
         let version_pragma = format!("PRAGMA user_version = {}", SCHEMA_VERSION);
         conn.execute(&version_pragma, ()).await?;
 
@@ -288,17 +296,20 @@ pub async fn create_entities(
         .await?;
     for mut ent in entities {
         ent.name = crate::normalize::normalize_key(&ent.name);
-        tx.execute(
-            crate::constant::SQL_INSERT_ENTITY,
-            libsql::params![ent.name.clone(), ent.entity_type],
-        )
-        .await?;
-        for obs in ent.observations {
-            tx.execute(
-                crate::constant::SQL_INSERT_OBSERVATION,
-                libsql::params![ent.name.clone(), obs],
+        let inserted = tx
+            .execute(
+                crate::constant::SQL_INSERT_ENTITY,
+                libsql::params![ent.name.clone(), ent.entity_type],
             )
             .await?;
+        if inserted == 1 {
+            for obs in ent.observations {
+                tx.execute(
+                    crate::constant::SQL_INSERT_OBSERVATION,
+                    libsql::params![ent.name.clone(), obs],
+                )
+                .await?;
+            }
         }
     }
     tx.commit().await?;
@@ -401,21 +412,44 @@ pub async fn delete_observations(
     Ok(())
 }
 
-pub async fn delete_observation_by_id(conn: &Connection, id: i64) -> Result<()> {
-    conn.execute(
-        crate::constant::SQL_DELETE_OBSERVATION_BY_ID,
-        libsql::params![id],
-    )
-    .await?;
+pub async fn delete_observation_by_id(conn: &Connection, entity_name: &str, id: i64) -> Result<()> {
+    let norm_name = crate::normalize::normalize_key(entity_name);
+    let affected = conn
+        .execute(
+            crate::constant::SQL_DELETE_OBSERVATION_BY_ID,
+            libsql::params![id, norm_name],
+        )
+        .await?;
+    if affected == 0 {
+        anyhow::bail!(
+            "No observation with ID {} belongs to entity '{}'",
+            id,
+            entity_name
+        );
+    }
     Ok(())
 }
 
-pub async fn update_observation_by_id(conn: &Connection, id: i64, new_content: &str) -> Result<()> {
-    conn.execute(
-        crate::constant::SQL_UPDATE_OBSERVATION_BY_ID,
-        libsql::params![id, new_content],
-    )
-    .await?;
+pub async fn update_observation_by_id(
+    conn: &Connection,
+    entity_name: &str,
+    id: i64,
+    new_content: &str,
+) -> Result<()> {
+    let norm_name = crate::normalize::normalize_key(entity_name);
+    let affected = conn
+        .execute(
+            crate::constant::SQL_UPDATE_OBSERVATION_BY_ID,
+            libsql::params![id, new_content, norm_name],
+        )
+        .await?;
+    if affected == 0 {
+        anyhow::bail!(
+            "No observation with ID {} belongs to entity '{}'",
+            id,
+            entity_name
+        );
+    }
     Ok(())
 }
 
@@ -939,6 +973,10 @@ pub async fn stats_per_entity(conn: &Connection) -> Result<Vec<(String, usize)>>
 }
 
 pub async fn reset(conn: &Connection) -> Result<()> {
+    conn.execute(crate::constant::SQL_DELETE_ALL_CHUNKS, ())
+        .await?;
+    conn.execute(crate::constant::SQL_DELETE_ALL_TOPICS, ())
+        .await?;
     conn.execute(crate::constant::SQL_DELETE_ALL_RELATIONS, ())
         .await?;
     conn.execute(crate::constant::SQL_DELETE_ALL_OBSERVATIONS, ())
@@ -1088,6 +1126,93 @@ mod tests {
             .unwrap();
         let row = rows.next().await.unwrap();
         assert!(row.is_some(), "topics_fts table missing");
+    }
+
+    #[tokio::test]
+    async fn test_observation_fts_rebuilds_after_legacy_id_migration() {
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("legacy.db");
+        unsafe {
+            std::env::set_var(ENV_DATABASE_URL, db_path.to_str().unwrap());
+        }
+
+        let legacy_db = Builder::new_local(&db_path).build().await.unwrap();
+        let legacy_conn = legacy_db.connect().unwrap();
+        legacy_conn
+            .execute(
+                "CREATE TABLE asobi_entities (name TEXT PRIMARY KEY, entity_type TEXT NOT NULL)",
+                (),
+            )
+            .await
+            .unwrap();
+        legacy_conn
+            .execute(
+                "CREATE TABLE asobi_observations (id TEXT PRIMARY KEY, entity_name TEXT NOT NULL, content TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)",
+                (),
+            )
+            .await
+            .unwrap();
+        legacy_conn
+            .execute(
+                "CREATE VIRTUAL TABLE asobi_obs_fts USING fts5(content, content='asobi_observations', content_rowid='rowid', tokenize='porter unicode61')",
+                (),
+            )
+            .await
+            .unwrap();
+        legacy_conn
+            .execute(
+                "CREATE TRIGGER asobi_obs_ai AFTER INSERT ON asobi_observations BEGIN INSERT INTO asobi_obs_fts(rowid, content) VALUES (new.rowid, new.content); END",
+                (),
+            )
+            .await
+            .unwrap();
+        legacy_conn
+            .execute(
+                "CREATE TRIGGER asobi_obs_ad AFTER DELETE ON asobi_observations BEGIN INSERT INTO asobi_obs_fts(asobi_obs_fts, rowid, content) VALUES('delete', old.rowid, old.content); END",
+                (),
+            )
+            .await
+            .unwrap();
+        legacy_conn
+            .execute(
+                "CREATE TRIGGER asobi_obs_au AFTER UPDATE ON asobi_observations BEGIN INSERT INTO asobi_obs_fts(asobi_obs_fts, rowid, content) VALUES('delete', old.rowid, old.content); INSERT INTO asobi_obs_fts(rowid, content) VALUES (new.rowid, new.content); END",
+                (),
+            )
+            .await
+            .unwrap();
+        legacy_conn
+            .execute(
+                "INSERT INTO asobi_entities VALUES ('legacy', 'project')",
+                (),
+            )
+            .await
+            .unwrap();
+        legacy_conn
+            .execute(
+                "INSERT INTO asobi_observations (id, entity_name, content) VALUES ('old', 'legacy', 'to be deleted'), ('survivor', 'legacy', 'migration survivor')",
+                (),
+            )
+            .await
+            .unwrap();
+        legacy_conn
+            .execute("DROP TRIGGER asobi_obs_ad", ())
+            .await
+            .unwrap();
+        legacy_conn
+            .execute("DELETE FROM asobi_observations WHERE id = 'old'", ())
+            .await
+            .unwrap();
+        legacy_conn
+            .execute("PRAGMA user_version = 0", ())
+            .await
+            .unwrap();
+        drop(legacy_conn);
+        drop(legacy_db);
+
+        let (_db, conn) = init_db().await.unwrap();
+        let graph = search_nodes(&conn, "migration survivor").await.unwrap();
+        assert_eq!(graph.entities.len(), 1);
+        assert_eq!(graph.entities[0].name, "legacy");
     }
 
     #[tokio::test]
@@ -1395,6 +1520,60 @@ mod tests {
         // Check empty stats again
         let s = stats(&conn).await.unwrap();
         assert_eq!(s, (0, 0, 0));
+
+        conn.execute(
+            "INSERT INTO topics (id, title, file_path) VALUES ('topic', 'Topic', 'topic.md')",
+            (),
+        )
+        .await
+        .unwrap();
+        conn.execute(
+            "INSERT INTO chunks (id, topic_id, chunk_idx, text, source, embedding) VALUES ('chunk', 'topic', 0, 'text', 'source', vector32(?1))",
+            libsql::params![serde_json::to_string(&vec![0.0f32; 384]).unwrap()],
+        )
+        .await
+        .unwrap();
+        reset(&conn).await.unwrap();
+        let mut rows = conn
+            .query(
+                "SELECT COUNT(*) FROM topics UNION ALL SELECT COUNT(*) FROM chunks",
+                (),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            rows.next().await.unwrap().unwrap().get::<i64>(0).unwrap(),
+            0
+        );
+        assert_eq!(
+            rows.next().await.unwrap().unwrap().get::<i64>(0).unwrap(),
+            0
+        );
+    }
+
+    #[tokio::test]
+    async fn test_create_entities_does_not_reseed_existing_observations() {
+        let dir = tempdir().unwrap();
+        unsafe {
+            std::env::set_var(
+                ENV_DATABASE_URL,
+                dir.path().join("test.db").to_str().unwrap(),
+            );
+        }
+        let (_db, conn) = init_db().await.unwrap();
+
+        let entity = crate::model::EntityInput {
+            name: "project".to_string(),
+            entity_type: "task".to_string(),
+            observations: vec!["initial".to_string()],
+        };
+        create_entities(&conn, vec![entity.clone()]).await.unwrap();
+        create_entities(&conn, vec![entity]).await.unwrap();
+
+        let graph = open_nodes(&conn, vec!["project".to_string()])
+            .await
+            .unwrap();
+        assert_eq!(graph.entities[0].observations, vec!["initial"]);
     }
 
     #[tokio::test]
@@ -1542,6 +1721,35 @@ mod tests {
             obs,
             vec!["obs3".to_string(), "obs4".to_string(), "obs5".to_string(),]
         );
+    }
+
+    #[tokio::test]
+    async fn test_observation_id_mutations_are_scoped_to_entity() {
+        let dir = tempdir().unwrap();
+        unsafe {
+            std::env::set_var(
+                ENV_DATABASE_URL,
+                dir.path().join("test.db").to_str().unwrap(),
+            );
+        }
+        let (_db, conn) = init_db().await.unwrap();
+
+        seed_entity(&conn, "alice", "person", &["alice observation"]).await;
+        seed_entity(&conn, "bob", "person", &["bob observation"]).await;
+
+        let delete_err = delete_observation_by_id(&conn, "bob", 1).await.unwrap_err();
+        assert!(delete_err.to_string().contains("belongs to entity 'bob'"));
+
+        let update_err = update_observation_by_id(&conn, "bob", 1, "mutated")
+            .await
+            .unwrap_err();
+        assert!(update_err.to_string().contains("belongs to entity 'bob'"));
+
+        let graph = open_nodes(&conn, vec!["alice".to_string(), "bob".to_string()])
+            .await
+            .unwrap();
+        assert_eq!(graph.entities[0].observations, vec!["alice observation"]);
+        assert_eq!(graph.entities[1].observations, vec!["bob observation"]);
     }
 
     #[tokio::test]

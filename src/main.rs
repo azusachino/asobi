@@ -125,7 +125,7 @@ enum Commands {
         #[arg(long)]
         with_ids: bool,
     },
-    /// Merge near-duplicate topics, prune sessions, and sync Graph to MD
+    /// Report near-duplicate topics, prune sessions, and sync Graph to MD
     #[cfg(feature = "documents")]
     Compact {
         /// Prune sessions older than N days
@@ -284,11 +284,31 @@ fn ensure_git_available() -> Result<()> {
     }
 }
 
+fn validate_git_url(git_url: &str) -> Result<()> {
+    if git_url.starts_with('-') {
+        anyhow::bail!("Invalid git URL: URLs must not start with '-'");
+    }
+
+    let has_allowed_scheme = ["https://", "ssh://", "git://", "file://"]
+        .iter()
+        .any(|scheme| git_url.starts_with(scheme));
+    let is_scp_style = git_url.starts_with("git@") && git_url.contains(':');
+    if !has_allowed_scheme && !is_scp_style {
+        anyhow::bail!(
+            "Unsupported git URL '{}'; use https://, ssh://, git://, file://, or git@host:path",
+            git_url
+        );
+    }
+
+    Ok(())
+}
+
 fn get_or_update_cached_repo(
     git_url: &str,
     caches_dir: &std::path::Path,
 ) -> Result<(std::path::PathBuf, String)> {
     ensure_git_available()?;
+    validate_git_url(git_url)?;
     let slug = asobi::skills::derive_source_slug(git_url);
     let repo_cache_dir = caches_dir.join(&slug);
 
@@ -330,6 +350,7 @@ fn get_or_update_cached_repo(
                 .arg("clone")
                 .arg("--depth")
                 .arg("1")
+                .arg("--")
                 .arg(git_url)
                 .arg(&repo_cache_dir)
                 .status()?;
@@ -343,6 +364,7 @@ fn get_or_update_cached_repo(
             .arg("clone")
             .arg("--depth")
             .arg("1")
+            .arg("--")
             .arg(git_url)
             .arg(&repo_cache_dir)
             .status()?;
@@ -587,7 +609,7 @@ async fn run_cli(cli: Cli) -> Result<()> {
                         content
                     )
                 })?;
-                asobi::db::delete_observation_by_id(&conn, parsed_id).await?;
+                asobi::db::delete_observation_by_id(&conn, &name, parsed_id).await?;
             } else {
                 asobi::db::delete_observations(
                     &conn,
@@ -616,7 +638,7 @@ async fn run_cli(cli: Cli) -> Result<()> {
                         old_content
                     )
                 })?;
-                asobi::db::update_observation_by_id(&conn, parsed_id, &new_content).await?;
+                asobi::db::update_observation_by_id(&conn, &name, parsed_id, &new_content).await?;
             } else {
                 asobi::db::update_observation(&conn, &name, &old_content, &new_content).await?;
             }
@@ -776,6 +798,7 @@ async fn run_cli(cli: Cli) -> Result<()> {
             let json = serde_json::to_string_pretty(&graph)?;
             if let Some(path) = output {
                 std::fs::write(&path, json)?;
+                asobi::backup::restrict_permissions(std::path::Path::new(&path), 0o600)?;
                 info!("Graph exported to {}", path);
             } else {
                 println!("{}", json);
@@ -785,22 +808,13 @@ async fn run_cli(cli: Cli) -> Result<()> {
             let content = std::fs::read_to_string(&file)?;
             let graph: asobi::model::Graph = serde_json::from_str(&content)?;
 
-            // Re-construct entity inputs
-            let mut entities = Vec::new();
-            for e in graph.entities {
-                entities.push(asobi::model::EntityInput {
-                    name: e.name,
-                    entity_type: e.entity_type,
-                    observations: e.observations,
-                });
+            let had_entities = !graph.entities.is_empty();
+            let had_relations = !graph.relations.is_empty();
+            import_graph(&conn, graph).await?;
+            if had_entities {
+                info!("Imported entities, observations, and truths.");
             }
-
-            if !entities.is_empty() {
-                asobi::db::create_entities(&conn, entities).await?;
-                info!("Imported entities and observations.");
-            }
-            if !graph.relations.is_empty() {
-                asobi::db::create_relations(&conn, graph.relations).await?;
+            if had_relations {
                 info!("Imported relations.");
             }
             info!("Import complete.");
@@ -1062,6 +1076,36 @@ async fn emit_nodes(conn: &libsql::Connection, names: Vec<String>) -> Result<()>
     Ok(())
 }
 
+async fn import_graph(conn: &libsql::Connection, graph: asobi::model::Graph) -> Result<()> {
+    let mut entities = Vec::with_capacity(graph.entities.len());
+    let mut truths = Vec::new();
+    for entity in graph.entities {
+        let name = entity.name;
+        truths.extend(
+            entity
+                .truths
+                .into_iter()
+                .map(|(key, value)| (name.clone(), key, value)),
+        );
+        entities.push(asobi::model::EntityInput {
+            name,
+            entity_type: entity.entity_type,
+            observations: entity.observations,
+        });
+    }
+
+    if !entities.is_empty() {
+        asobi::db::create_entities(conn, entities).await?;
+        for (name, key, value) in truths {
+            asobi::db::truth_upsert(conn, &name, &key, &value).await?;
+        }
+    }
+    if !graph.relations.is_empty() {
+        asobi::db::create_relations(conn, graph.relations).await?;
+    }
+    Ok(())
+}
+
 /// `""`/`"s"` suffix for count-based log lines.
 fn suffix(n: usize) -> &'static str {
     if n == 1 { "" } else { "s" }
@@ -1088,5 +1132,65 @@ fn print_init_report(report: &asobi::init::InitReport) {
         println!("  wrote    {}", path.display());
     } else if let Some(path) = &report.config_existed {
         println!("  exists   {}", path.display());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{import_graph, validate_git_url};
+    use tempfile::tempdir;
+
+    #[test]
+    fn git_url_validator_rejects_option_and_command_urls() {
+        assert!(validate_git_url("-upload-pack=x").is_err());
+        assert!(validate_git_url("ext::sh -c id").is_err());
+    }
+
+    #[test]
+    fn git_url_validator_accepts_supported_urls() {
+        for url in [
+            "https://example.com/repo.git",
+            "ssh://example.com/repo.git",
+            "git://example.com/repo.git",
+            "file:///tmp/repo",
+            "git@example.com:repo.git",
+        ] {
+            assert!(validate_git_url(url).is_ok(), "expected valid URL: {url}");
+        }
+    }
+
+    #[tokio::test]
+    async fn import_graph_round_trips_truths() {
+        let dir = tempdir().unwrap();
+        unsafe {
+            std::env::set_var(
+                asobi::constant::ENV_DATABASE_URL,
+                dir.path().join("test.db").to_str().unwrap(),
+            );
+        }
+        let (_db, conn) = asobi::db::init_db().await.unwrap();
+        asobi::db::create_entities(
+            &conn,
+            vec![asobi::model::EntityInput {
+                name: "project".to_string(),
+                entity_type: "task".to_string(),
+                observations: vec!["ship it".to_string()],
+            }],
+        )
+        .await
+        .unwrap();
+        asobi::db::truth_upsert(&conn, "project", "status", "READY")
+            .await
+            .unwrap();
+
+        let exported = asobi::db::read_graph_eager(&conn).await.unwrap();
+        asobi::db::reset(&conn).await.unwrap();
+        import_graph(&conn, exported).await.unwrap();
+
+        let imported = asobi::db::read_graph_eager(&conn).await.unwrap();
+        assert_eq!(
+            imported.entities[0].truths.get("status"),
+            Some(&"READY".to_string())
+        );
     }
 }

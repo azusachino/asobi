@@ -148,11 +148,12 @@ pub const SQL_INSERT_RELATION: &str = "INSERT OR REPLACE INTO asobi_relations (f
 pub const SQL_DELETE_ENTITY: &str = "DELETE FROM asobi_entities WHERE name = ?1";
 pub const SQL_DELETE_OBSERVATION: &str =
     "DELETE FROM asobi_observations WHERE entity_name = ?1 AND content = ?2";
-pub const SQL_DELETE_OBSERVATION_BY_ID: &str = "DELETE FROM asobi_observations WHERE id = ?1";
+pub const SQL_DELETE_OBSERVATION_BY_ID: &str =
+    "DELETE FROM asobi_observations WHERE id = ?1 AND entity_name = ?2";
 pub const SQL_UPDATE_OBSERVATION: &str =
     "UPDATE asobi_observations SET content = ?3 WHERE entity_name = ?1 AND content = ?2";
 pub const SQL_UPDATE_OBSERVATION_BY_ID: &str =
-    "UPDATE asobi_observations SET content = ?2 WHERE id = ?1";
+    "UPDATE asobi_observations SET content = ?2 WHERE id = ?1 AND entity_name = ?3";
 pub const SQL_DELETE_RELATION: &str =
     "DELETE FROM asobi_relations WHERE from_entity = ?1 AND to_entity = ?2 AND relation_type = ?3";
 pub const SQL_EVICT_OBSERVATIONS: &str = "DELETE FROM asobi_observations WHERE entity_name = ?1 AND rowid NOT IN \
@@ -213,6 +214,8 @@ pub const SQL_COUNT_OBSERVATIONS: &str = "SELECT COUNT(*) FROM asobi_observation
 pub const SQL_DELETE_ALL_RELATIONS: &str = "DELETE FROM asobi_relations";
 pub const SQL_DELETE_ALL_OBSERVATIONS: &str = "DELETE FROM asobi_observations";
 pub const SQL_DELETE_ALL_ENTITIES: &str = "DELETE FROM asobi_entities";
+pub const SQL_DELETE_ALL_CHUNKS: &str = "DELETE FROM chunks";
+pub const SQL_DELETE_ALL_TOPICS: &str = "DELETE FROM topics";
 
 // Chunks
 pub const SQL_INSERT_CHUNK: &str = "INSERT INTO chunks (id, topic_id, chunk_idx, text, source, embedding) \
