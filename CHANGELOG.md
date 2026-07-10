@@ -1,5 +1,18 @@
 # Changelog
 
+## v0.4.1 — Review Hardening & Performance
+
+### Fixed
+- Scoped `rm-obs --id` and `update-obs --id` mutations to the named entity.
+- Preserved truths across JSON export/import and rebuilt observation FTS after legacy ID migration.
+- Hardened skill repository cloning against option and extended-transport injection.
+- Made reset clear topics and vector chunks, exports use `0600` permissions, and duplicate `new --obs` calls idempotent.
+
+### Changed
+- Standardized skill installation and vector insertion on immediate transactions.
+- Batched recall topic metadata lookups and moved fastembed inference to blocking worker threads.
+- Corrected Compact help text to describe duplicate-topic reporting.
+
 ## v0.4.0 — SQLite Concurrency & Sandbox Resiliency
 
 ### Added

@@ -1,6 +1,6 @@
 [package]
 name = "asobi"
-version = "0.4.0"
+version = "0.4.1"
 edition = "2024"
 authors = ["haru <azusachino@proton.me>"]
 description = "A persistent, project-local knowledge graph CLI for AI agents."
@@ -59,11 +59,11 @@ fastembed = { version = "5", optional = true }
 
 # Database & Vector Store
 libsql = "0.6"
-tempfile = "3"
 
 
 [dev-dependencies]
 filetime = "0.2"
+tempfile = "3"
 
 [[bench]]
 name = "graph"
