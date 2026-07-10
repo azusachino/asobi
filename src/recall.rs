@@ -79,18 +79,26 @@ pub async fn recall(
         }
     }
 
-    // Fill in title/path for ANN-only hits from DB
-    for (topic_id, (_, _, _, title, path)) in scores.iter_mut() {
-        if title.is_empty() {
-            let mut rows = conn
-                .query(
-                    "SELECT title, file_path FROM topics WHERE id=?1",
-                    libsql::params![topic_id.clone()],
-                )
-                .await?;
-            if let Some(row) = rows.next().await? {
-                *title = row.get(0)?;
-                *path = row.get(1)?;
+    // Fill in title/path for ANN-only hits from DB in batched queries.
+    let missing_ids: Vec<String> = scores
+        .iter()
+        .filter(|(_, (_, _, _, title, _))| title.is_empty())
+        .map(|(topic_id, _)| topic_id.clone())
+        .collect();
+    for chunk in missing_ids.chunks(500) {
+        let placeholders = chunk.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+        let sql = format!("SELECT id, title, file_path FROM topics WHERE id IN ({placeholders})");
+        let params = chunk
+            .iter()
+            .cloned()
+            .map(libsql::Value::from)
+            .collect::<Vec<_>>();
+        let mut rows = conn.query(&sql, params).await?;
+        while let Some(row) = rows.next().await? {
+            let topic_id: String = row.get(0)?;
+            if let Some((_, _, _, title, path)) = scores.get_mut(&topic_id) {
+                *title = row.get(1)?;
+                *path = row.get(2)?;
             }
         }
     }
