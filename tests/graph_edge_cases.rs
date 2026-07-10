@@ -104,7 +104,7 @@ async fn graph_accepts_irregular_text_without_sql_injection() {
     .await
     .unwrap();
 
-    // Duplicate create is an entity no-op, but supplied observations are still appended.
+    // Duplicate create is a complete no-op, including supplied observations.
     db::create_entities(
         &conn,
         vec![model::EntityInput {
@@ -124,7 +124,7 @@ async fn graph_accepts_irregular_text_without_sql_injection() {
         opened.entities[0].entity_type,
         "project'; DROP TABLE mcp_observations; --"
     );
-    assert_eq!(opened.entities[0].observations.len(), 3);
+    assert_eq!(opened.entities[0].observations.len(), 2);
     assert!(opened.entities[0].observations.contains(&large_observation));
 
     let unicode_hits = db::search_nodes(&conn, "日本語").await.unwrap();

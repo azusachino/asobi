@@ -243,14 +243,14 @@ fn remove_sidecars(db_path: &Path) -> Result<()> {
 
 /// Tighten file/dir permissions on Unix; a no-op elsewhere.
 #[cfg(unix)]
-fn restrict_permissions(path: &Path, mode: u32) -> Result<()> {
+pub fn restrict_permissions(path: &Path, mode: u32) -> Result<()> {
     use std::os::unix::fs::PermissionsExt;
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode))
         .with_context(|| format!("setting permissions on {}", path.display()))
 }
 
 #[cfg(not(unix))]
-fn restrict_permissions(_path: &Path, _mode: u32) -> Result<()> {
+pub fn restrict_permissions(_path: &Path, _mode: u32) -> Result<()> {
     Ok(())
 }
 

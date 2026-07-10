@@ -214,6 +214,8 @@ pub const SQL_COUNT_OBSERVATIONS: &str = "SELECT COUNT(*) FROM asobi_observation
 pub const SQL_DELETE_ALL_RELATIONS: &str = "DELETE FROM asobi_relations";
 pub const SQL_DELETE_ALL_OBSERVATIONS: &str = "DELETE FROM asobi_observations";
 pub const SQL_DELETE_ALL_ENTITIES: &str = "DELETE FROM asobi_entities";
+pub const SQL_DELETE_ALL_CHUNKS: &str = "DELETE FROM chunks";
+pub const SQL_DELETE_ALL_TOPICS: &str = "DELETE FROM topics";
 
 // Chunks
 pub const SQL_INSERT_CHUNK: &str = "INSERT INTO chunks (id, topic_id, chunk_idx, text, source, embedding) \

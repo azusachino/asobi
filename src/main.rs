@@ -125,7 +125,7 @@ enum Commands {
         #[arg(long)]
         with_ids: bool,
     },
-    /// Merge near-duplicate topics, prune sessions, and sync Graph to MD
+    /// Report near-duplicate topics, prune sessions, and sync Graph to MD
     #[cfg(feature = "documents")]
     Compact {
         /// Prune sessions older than N days
@@ -798,6 +798,7 @@ async fn run_cli(cli: Cli) -> Result<()> {
             let json = serde_json::to_string_pretty(&graph)?;
             if let Some(path) = output {
                 std::fs::write(&path, json)?;
+                asobi::backup::restrict_permissions(std::path::Path::new(&path), 0o600)?;
                 info!("Graph exported to {}", path);
             } else {
                 println!("{}", json);

@@ -296,17 +296,20 @@ pub async fn create_entities(
         .await?;
     for mut ent in entities {
         ent.name = crate::normalize::normalize_key(&ent.name);
-        tx.execute(
-            crate::constant::SQL_INSERT_ENTITY,
-            libsql::params![ent.name.clone(), ent.entity_type],
-        )
-        .await?;
-        for obs in ent.observations {
-            tx.execute(
-                crate::constant::SQL_INSERT_OBSERVATION,
-                libsql::params![ent.name.clone(), obs],
+        let inserted = tx
+            .execute(
+                crate::constant::SQL_INSERT_ENTITY,
+                libsql::params![ent.name.clone(), ent.entity_type],
             )
             .await?;
+        if inserted == 1 {
+            for obs in ent.observations {
+                tx.execute(
+                    crate::constant::SQL_INSERT_OBSERVATION,
+                    libsql::params![ent.name.clone(), obs],
+                )
+                .await?;
+            }
         }
     }
     tx.commit().await?;
@@ -970,6 +973,10 @@ pub async fn stats_per_entity(conn: &Connection) -> Result<Vec<(String, usize)>>
 }
 
 pub async fn reset(conn: &Connection) -> Result<()> {
+    conn.execute(crate::constant::SQL_DELETE_ALL_CHUNKS, ())
+        .await?;
+    conn.execute(crate::constant::SQL_DELETE_ALL_TOPICS, ())
+        .await?;
     conn.execute(crate::constant::SQL_DELETE_ALL_RELATIONS, ())
         .await?;
     conn.execute(crate::constant::SQL_DELETE_ALL_OBSERVATIONS, ())
@@ -1513,6 +1520,60 @@ mod tests {
         // Check empty stats again
         let s = stats(&conn).await.unwrap();
         assert_eq!(s, (0, 0, 0));
+
+        conn.execute(
+            "INSERT INTO topics (id, title, file_path) VALUES ('topic', 'Topic', 'topic.md')",
+            (),
+        )
+        .await
+        .unwrap();
+        conn.execute(
+            "INSERT INTO chunks (id, topic_id, chunk_idx, text, source, embedding) VALUES ('chunk', 'topic', 0, 'text', 'source', vector32(?1))",
+            libsql::params![serde_json::to_string(&vec![0.0f32; 384]).unwrap()],
+        )
+        .await
+        .unwrap();
+        reset(&conn).await.unwrap();
+        let mut rows = conn
+            .query(
+                "SELECT COUNT(*) FROM topics UNION ALL SELECT COUNT(*) FROM chunks",
+                (),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            rows.next().await.unwrap().unwrap().get::<i64>(0).unwrap(),
+            0
+        );
+        assert_eq!(
+            rows.next().await.unwrap().unwrap().get::<i64>(0).unwrap(),
+            0
+        );
+    }
+
+    #[tokio::test]
+    async fn test_create_entities_does_not_reseed_existing_observations() {
+        let dir = tempdir().unwrap();
+        unsafe {
+            std::env::set_var(
+                ENV_DATABASE_URL,
+                dir.path().join("test.db").to_str().unwrap(),
+            );
+        }
+        let (_db, conn) = init_db().await.unwrap();
+
+        let entity = crate::model::EntityInput {
+            name: "project".to_string(),
+            entity_type: "task".to_string(),
+            observations: vec!["initial".to_string()],
+        };
+        create_entities(&conn, vec![entity.clone()]).await.unwrap();
+        create_entities(&conn, vec![entity]).await.unwrap();
+
+        let graph = open_nodes(&conn, vec!["project".to_string()])
+            .await
+            .unwrap();
+        assert_eq!(graph.entities[0].observations, vec!["initial"]);
     }
 
     #[tokio::test]
