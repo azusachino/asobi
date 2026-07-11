@@ -52,6 +52,16 @@ def main() -> None:
         search = json.loads(run(["search", "Turso"], env).stdout)
         assert {entity["name"] for entity in search["entities"]} == {"turso-project"}
 
+        fresh_home = root / "fresh-home"
+        fresh_home.mkdir()
+        (fresh_home / "asobi.db").write_bytes(b"legacy placeholder")
+        fresh_env = os.environ.copy()
+        fresh_env.pop("ASOBI_DATABASE_URL", None)
+        fresh_env["ASOBI_HOME"] = str(fresh_home)
+        initialized = run(["capabilities"], fresh_env)
+        assert (fresh_home / "asobi.turso.db").exists()
+        assert "found an older Asobi database" in initialized.stderr
+
     print("Turso API/CLI integration checks passed")
 
 

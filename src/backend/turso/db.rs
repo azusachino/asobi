@@ -18,8 +18,20 @@ pub async fn init_db() -> Result<(Database, Connection)> {
             ))?;
     }
 
-    let db_path = env::var(ENV_DATABASE_URL)
-        .unwrap_or_else(|_| paths.db_path().to_str().unwrap().to_string());
+    let explicit_db_path = env::var(ENV_DATABASE_URL).ok();
+    let db_path = explicit_db_path
+        .clone()
+        .unwrap_or_else(|| paths.db_path().to_str().unwrap().to_string());
+    if explicit_db_path.is_none() && !std::path::Path::new(&db_path).exists() {
+        let legacy_path = paths.data_dir.join("asobi.db");
+        if legacy_path.exists() {
+            tracing::warn!(
+                legacy = %legacy_path.display(),
+                fresh = %db_path,
+                "found an older Asobi database; Turso starts with a fresh database. Export it with the v0.4 binary and import it into this v0.5 session"
+            );
+        }
+    }
     let (db, conn) = crate::backend::turso::tx::open_local(std::path::Path::new(&db_path))
         .await
         .with_context(|| format!(

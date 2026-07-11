@@ -51,10 +51,11 @@ Legacy journal-mode and busy-timeout environment overrides are not supported.
 
 ## Database initialization
 
-v0.5 initializes a fresh Turso database with the current schema, native FTS
-indexes, and optional vector tables. The private v0.5 rollout assumes a new
-Asobi session; future compatibility or migration policy can be added when an
-older on-disk database becomes a supported input.
+v0.5 initializes `data/asobi.turso.db` with the current schema, native FTS
+indexes, and optional vector tables. A future file-backed backend should use a
+backend-qualified filename of its own; remote backends do not need a local DB
+file. If an old `asobi.db` is present while the Turso file is absent, startup
+warns and still creates a fresh Turso database.
 
 ## Verification
 

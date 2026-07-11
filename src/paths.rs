@@ -143,7 +143,7 @@ impl AsobiPaths {
     }
 
     pub fn db_path(&self) -> PathBuf {
-        self.data_dir.join("asobi.db")
+        self.data_dir.join("asobi.turso.db")
     }
 
     pub fn caches_dir(&self) -> PathBuf {
@@ -242,6 +242,19 @@ mod tests {
         }
 
         assert_eq!(paths.data_dir, home);
+    }
+
+    #[test]
+    fn db_path_is_backend_qualified_for_turso() {
+        let dir = tempdir().unwrap();
+        let paths = AsobiPaths {
+            data_dir: dir.path().join("data"),
+            config_dir: dir.path().join("config"),
+            topics_dir: dir.path().join("topics"),
+            cache_dir: dir.path().join("caches"),
+            observation_limit: None,
+        };
+        assert_eq!(paths.db_path(), dir.path().join("data/asobi.turso.db"));
     }
 
     #[test]
