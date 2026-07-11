@@ -203,6 +203,18 @@ Three-step maintenance sweep:
 2. Finds near-duplicate topic clusters in the vector store (cosine ≥ 0.85).
 3. Syncs **durable knowledge** entities (`project`, `concept`, `reference`, `preference`, `standard`) back to a Markdown file in `.asobi/topics/` — including their truths — and re-ingests for FTS/vector freshness. Volatile state (`session`, `task`/epic) and self-indexing `skill` entities are skipped: they stay graph-only (read them with `search` / `show`), and `export` / `backup` cover full archival.
 
+### Physical backup and restore
+
+```bash
+asobi backup                              # default timestamped snapshot; keeps newest 3
+asobi backup --keep 5                     # retention applies to the default backup directory
+asobi backup -o /secure/path/asobi.db     # explicit destination; refuses to overwrite
+asobi restore /secure/path/asobi.db       # validates, then asks before replacing live data
+asobi restore /secure/path/asobi.db --force
+```
+
+Physical backup/restore is a full-fidelity archive of the selected libSQL database, including graph state, installed skill bodies, and document data. Snapshots are integrity-checked and owner-only on Unix. Before restore, Asobi creates a timestamped `pre-restore-*.db` safety snapshot, closes the live database handles, atomically replaces the database, and clears stale WAL sidecars. The experimental Turso backend does not support this capability. Use JSON `export`/`import` instead for portable cross-backend or teammate handoff.
+
 ---
 
 ## Entity Type Conventions

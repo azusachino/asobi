@@ -121,10 +121,17 @@ asobi graph | jq '.entities[] | select(.entityType == "session")'
 asobi export -o backup.json                # Export the entire graph to JSON
 asobi export --scope "proj:epic" -o epic.json   # Export only one epic's subgraph
 asobi import backup.json                   # Import entities and relations from a JSON backup
+asobi backup                               # Full libSQL snapshot; default keeps newest 3
+asobi backup --keep 5                      # Change default-directory retention
+asobi backup -o /secure/path/asobi.db      # Explicit path; never overwrites an existing file
+asobi restore /secure/path/asobi.db        # Validate and ask before replacing live data
+asobi restore /secure/path/asobi.db --force  # Skip the confirmation prompt
 asobi reset                                # Interactively clear the entire graph (use --force to bypass)
 ```
 
-JSON export/import preserves graph entities, observations, truths, and relations. For a full-fidelity archive that also preserves installed skill bodies and database state, use `backup`/`restore`.
+JSON export/import preserves graph entities, observations, truths, and relations and is the portable format for teammate or cross-backend handoff. Physical `backup`/`restore` preserves the complete selected libSQL database, including installed skill bodies and document data. A default backup is written beside the live database under `backups/asobi-<timestamp>.db`; `--keep` retention applies only to that managed directory.
+
+Backup uses `VACUUM INTO`, verifies database integrity, writes owner-only files on Unix, and refuses to overwrite an existing destination. Restore validates the source before destructive work, creates a timestamped `backups/pre-restore-*.db` safety snapshot of the current database, closes live handles, atomically replaces the database, and removes stale `-wal`/`-shm` sidecars. The experimental Turso backend reports physical backup/restore as unsupported.
 
 **Scoped export (hand one epic to a teammate):** `export --scope <entity>` restricts the
 export to the subgraph rooted at the named entities — each root, its `part_of` children
