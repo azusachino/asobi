@@ -35,11 +35,11 @@ documents = [
 [dependencies]
 # Core
 anyhow = "1"
-async-trait = "0.1"
 serde = { version = "1", features = ["derive"] }
+thiserror = "2"
 serde_json = "1"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync", "signal"] }
-uuid = { version = "1", features = ["v4"] }
+uuid = { version = "1", features = ["v7"] }
 
 
 # CLI

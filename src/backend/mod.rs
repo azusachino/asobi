@@ -1,5 +1,5 @@
 //! Concrete database backends.
 
-mod turso;
+pub mod turso;
 
 pub use turso::TursoBackend;

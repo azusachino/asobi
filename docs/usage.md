@@ -79,10 +79,10 @@ asobi new "CLAUDE.md" "reference"
 asobi link "project-x" "UserPreferences" "follows"
 ```
 
-**Search (supports FTS5, segment matching, and truth filters):**
+**Search (supports Turso FTS, segment matching, and truth filters):**
 
 ```bash
-asobi search "tokio"           # finds "tokio", "tokio-util", stemmed variants
+asobi search "tokio"           # finds "tokio" and "tokio-util"
 asobi search "mobile"          # finds "ame:mobile-support:task-1" (segment match)
 asobi search "auth*"           # prefix: matches "auth", "authentication", "authorize"
 asobi search "async AND error" # both words must appear
@@ -311,13 +311,14 @@ No files to pass, no state to reconstruct. The graph is the handoff.
 
 ### Search tips
 
-`search` uses FTS5 with porter stemming. Practical implications:
+`search` uses Turso's native full-text index. Queries match indexed terms; there is no
+SQLite FTS5 porter stemming. Practical implications:
 
-- `search "run"` → finds entities with "running", "runner", "ran"
-- `search "implement"` → finds "implementation", "implementing"
+- `search "run"` → matches the indexed term "run" (use the exact term when needed)
+- `search "implement"` → matches the indexed term "implement"
 - `search "tokio async"` → finds entities with both words (ranked higher) or either word
 - `search "UserPreferences"` → exact name match via LIKE fallback (entity has no observations)
-- `search "AND AND"` → invalid FTS5 syntax, silently falls back to LIKE, returns empty
+- `search "AND AND"` → invalid full-text syntax, silently falls back to LIKE, returns empty
 - `search "auth" --limit 500` → return more than the default top 100 matches
 - `search --where KEY=VALUE` → filters matching entities by truth values (e.g. `--where status=READY`). Can be repeated; multiple filters perform an intersection (AND condition). If a query term is also provided, it matches the intersection of the filters and the FTS/LIKE results.
 

@@ -8,24 +8,18 @@ pub mod backup;
 pub mod chunk;
 #[cfg(feature = "documents")]
 pub mod compact;
-pub mod constant;
-pub mod db;
 #[cfg(feature = "documents")]
 pub mod embed;
+// Shared Utilities
+pub mod frontmatter;
 #[cfg(feature = "documents")]
 pub mod ingest;
 pub mod init;
-#[cfg(feature = "documents")]
-pub mod recall;
-#[cfg(feature = "documents")]
-pub mod vector;
-
-// Shared Utilities
-pub mod frontmatter;
 pub mod model;
 pub mod normalize;
 pub mod paths;
+#[cfg(feature = "documents")]
+pub mod recall;
 pub mod skills;
-pub mod turso;
 pub use anyhow::{Result, anyhow, bail};
 pub use tokio::task::JoinHandle;

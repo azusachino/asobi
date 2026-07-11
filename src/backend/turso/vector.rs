@@ -44,14 +44,14 @@ impl VectorStore {
     }
 
     pub async fn insert_chunks(&self, chunks: Vec<Chunk>) -> Result<()> {
-        crate::turso::immediate_transaction(&self.conn, |tx| {
+        crate::backend::turso::tx::immediate_transaction(&self.conn, |tx| {
             let chunks = chunks.clone();
             Box::pin(async move {
                 for chunk in chunks {
                     let vector_json = serde_json::to_string(&chunk.vector)
                         .map_err(|error| turso::Error::Error(error.to_string()))?;
                     tx.execute(
-                        crate::constant::SQL_INSERT_CHUNK,
+                        crate::backend::turso::constant::SQL_INSERT_CHUNK,
                         params![
                             chunk.id,
                             chunk.topic_id,
@@ -75,7 +75,7 @@ impl VectorStore {
         let mut rows = self
             .conn
             .query(
-                crate::constant::SQL_SEARCH_CHUNKS,
+                crate::backend::turso::constant::SQL_SEARCH_CHUNKS,
                 params![vector_json, limit as i64],
             )
             .await?;
@@ -96,7 +96,7 @@ impl VectorStore {
     pub async fn delete_by_topic(&self, topic_id: &str) -> Result<()> {
         self.conn
             .execute(
-                crate::constant::SQL_DELETE_CHUNKS_BY_TOPIC,
+                crate::backend::turso::constant::SQL_DELETE_CHUNKS_BY_TOPIC,
                 params![topic_id],
             )
             .await?;

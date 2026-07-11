@@ -1,4 +1,4 @@
-use asobi::{db, model};
+use asobi::{backend::turso::db, model};
 use std::fs;
 use tempfile::tempdir;
 

@@ -123,7 +123,10 @@ pub async fn install_skills_from_dir<
     mode: SelectionMode,
     is_tty: bool,
     prune: bool,
-    #[cfg(feature = "documents")] vector_ctx: Option<(&crate::vector::VectorStore, &E)>,
+    #[cfg(feature = "documents")] vector_ctx: Option<(
+        &crate::backend::turso::vector::VectorStore,
+        &E,
+    )>,
 ) -> Result<()> {
     let mut parsed_skills = Vec::new();
     let mut skill_contents = HashMap::new();
@@ -185,7 +188,7 @@ pub async fn install_skills_from_dir<
             .iter()
             .map(|n| crate::normalize::normalize_key(&format!("skill:{}:{}", slug, n)))
             .collect();
-        let orphans: Vec<String> = crate::db::list_skills(conn)
+        let orphans: Vec<String> = crate::backend::turso::db::list_skills(conn)
             .await?
             .into_iter()
             .filter(|s| derive_source_slug(&s.source) == slug && !fresh.contains(&s.entity_name))
@@ -197,7 +200,7 @@ pub async fn install_skills_from_dir<
                 orphans.len(),
                 source
             );
-            crate::db::delete_entities(conn, orphans).await?;
+            crate::backend::turso::db::delete_entities(conn, orphans).await?;
         }
     }
 
@@ -213,7 +216,7 @@ pub async fn install_skills_from_dir<
 
         let entity_name = crate::normalize::normalize_key(&format!("skill:{}:{}", slug, name));
 
-        crate::turso::immediate_transaction(conn, |tx| {
+        crate::backend::turso::tx::immediate_transaction(conn, |tx| {
             let entity_name = entity_name.clone();
             let description = description.to_string();
             let source = source.to_string();
@@ -222,29 +225,29 @@ pub async fn install_skills_from_dir<
             Box::pin(async move {
                 // 1. Create the entity
                 tx.execute(
-                    crate::constant::SQL_INSERT_ENTITY,
+                    crate::backend::turso::constant::SQL_INSERT_ENTITY,
                     turso::params![entity_name.clone(), "skill".to_string()],
                 )
                 .await?;
 
                 // 2. Set truths
                 tx.execute(
-                    crate::constant::SQL_UPSERT_TRUTH,
+                    crate::backend::turso::constant::SQL_UPSERT_TRUTH,
                     turso::params![entity_name.clone(), "description".to_string(), description],
                 )
                 .await?;
                 tx.execute(
-                    crate::constant::SQL_UPSERT_TRUTH,
+                    crate::backend::turso::constant::SQL_UPSERT_TRUTH,
                     turso::params![entity_name.clone(), "source".to_string(), source.clone()],
                 )
                 .await?;
                 tx.execute(
-                    crate::constant::SQL_UPSERT_TRUTH,
+                    crate::backend::turso::constant::SQL_UPSERT_TRUTH,
                     turso::params![entity_name.clone(), "version".to_string(), version.clone()],
                 )
                 .await?;
                 tx.execute(
-                    crate::constant::SQL_UPSERT_TRUTH,
+                    crate::backend::turso::constant::SQL_UPSERT_TRUTH,
                     turso::params![
                         entity_name.clone(),
                         "installed".to_string(),
@@ -255,7 +258,7 @@ pub async fn install_skills_from_dir<
 
                 // 3. Upsert into asobi_skills
                 tx.execute(
-                    crate::constant::SQL_UPSERT_SKILL,
+                    crate::backend::turso::constant::SQL_UPSERT_SKILL,
                     turso::params![entity_name, body, source, version],
                 )
                 .await?;
@@ -269,17 +272,17 @@ pub async fn install_skills_from_dir<
         if let Some((store, embedder)) = vector_ctx {
             // Delete old chunks for this topic before re-indexing
             store.delete_by_topic(&entity_name).await?;
-            crate::db::delete_topic(conn, &entity_name).await?;
+            crate::backend::turso::db::delete_topic(conn, &entity_name).await?;
 
             let texts = crate::chunk::chunk_text(&body, 512, 64);
             if !texts.is_empty() {
                 let vectors = embedder.embed(&texts).await?;
-                let chunks: Vec<crate::vector::Chunk> = texts
+                let chunks: Vec<crate::backend::turso::vector::Chunk> = texts
                     .into_iter()
                     .zip(vectors)
                     .enumerate()
-                    .map(|(i, (text, vector))| crate::vector::Chunk {
-                        id: uuid::Uuid::new_v4().to_string(),
+                    .map(|(i, (text, vector))| crate::backend::turso::vector::Chunk {
+                        id: uuid::Uuid::now_v7().to_string(),
                         topic_id: entity_name.clone(),
                         chunk_idx: i as u32,
                         text,
@@ -289,7 +292,8 @@ pub async fn install_skills_from_dir<
                     .collect();
                 store.insert_chunks(chunks).await?;
             }
-            crate::db::upsert_topic(conn, &entity_name, &name, source, &body).await?;
+            crate::backend::turso::db::upsert_topic(conn, &entity_name, &name, source, &body)
+                .await?;
         }
     }
 
@@ -433,11 +437,11 @@ mod tests {
         let db_dir = tempdir().unwrap();
         unsafe {
             std::env::set_var(
-                crate::db::ENV_DATABASE_URL,
+                crate::backend::turso::db::ENV_DATABASE_URL,
                 db_dir.path().join("test.db").to_str().unwrap(),
             );
         }
-        let (_db, conn) = crate::db::init_db().await.unwrap();
+        let (_db, conn) = crate::backend::turso::db::init_db().await.unwrap();
 
         // 5. Clone and install
         let clone_temp_dir = tempdir().unwrap();
@@ -459,7 +463,7 @@ mod tests {
             true,
             #[cfg(feature = "documents")]
             None::<(
-                &crate::vector::VectorStore,
+                &crate::backend::turso::vector::VectorStore,
                 &crate::embed::fastembed_provider::FastEmbedProvider,
             )>,
         )
@@ -467,7 +471,7 @@ mod tests {
         .unwrap();
 
         // 6. Verify skill installed
-        let skills = crate::db::list_skills(&conn).await.unwrap();
+        let skills = crate::backend::turso::db::list_skills(&conn).await.unwrap();
         assert_eq!(skills.len(), 1);
         assert_eq!(
             skills[0].entity_name,
@@ -545,14 +549,15 @@ mod tests {
         let db_dir = tempdir().unwrap();
         unsafe {
             std::env::set_var(
-                crate::db::ENV_DATABASE_URL,
+                crate::backend::turso::db::ENV_DATABASE_URL,
                 db_dir.path().join("test.db").to_str().unwrap(),
             );
         }
-        let (_db, conn) = crate::db::init_db().await.unwrap();
+        let (db, conn) = crate::backend::turso::db::init_db().await.unwrap();
+        let backend = crate::backend::TursoBackend::from_parts(db, conn.clone());
 
         // Initialize VectorStore and FakeEmbedder
-        let store = crate::vector::VectorStore::new_with_dim(conn.clone(), 384);
+        let store = crate::backend::turso::vector::VectorStore::new_with_dim(conn.clone(), 384);
 
         struct FakeEmbedder(usize);
         impl crate::embed::EmbeddingProvider for FakeEmbedder {
@@ -589,7 +594,7 @@ mod tests {
         .unwrap();
 
         // 6. Verify skill is queryable via recall
-        let results = crate::recall::recall("cryptography", &conn, &store, &embedder, 5)
+        let results = crate::recall::recall("cryptography", &backend, &backend, &embedder, 5)
             .await
             .unwrap();
         assert!(!results.is_empty(), "expected skill to be queryable");
@@ -624,11 +629,11 @@ mod tests {
         let db_dir = tempdir().unwrap();
         unsafe {
             std::env::set_var(
-                crate::db::ENV_DATABASE_URL,
+                crate::backend::turso::db::ENV_DATABASE_URL,
                 db_dir.path().join("test.db").to_str().unwrap(),
             );
         }
-        let (_db, conn) = crate::db::init_db().await.unwrap();
+        let (_db, conn) = crate::backend::turso::db::init_db().await.unwrap();
 
         let source = src.to_str().unwrap();
         let slug = derive_source_slug(source);
@@ -643,13 +648,19 @@ mod tests {
             true,
             #[cfg(feature = "documents")]
             None::<(
-                &crate::vector::VectorStore,
+                &crate::backend::turso::vector::VectorStore,
                 &crate::embed::fastembed_provider::FastEmbedProvider,
             )>,
         )
         .await
         .unwrap();
-        assert_eq!(crate::db::list_skills(&conn).await.unwrap().len(), 2);
+        assert_eq!(
+            crate::backend::turso::db::list_skills(&conn)
+                .await
+                .unwrap()
+                .len(),
+            2
+        );
 
         // Upstream removes `beta`; a sync (install --all) must prune it.
         std::fs::remove_file(src.join("beta.md")).unwrap();
@@ -664,14 +675,14 @@ mod tests {
             true,
             #[cfg(feature = "documents")]
             None::<(
-                &crate::vector::VectorStore,
+                &crate::backend::turso::vector::VectorStore,
                 &crate::embed::fastembed_provider::FastEmbedProvider,
             )>,
         )
         .await
         .unwrap();
 
-        let skills = crate::db::list_skills(&conn).await.unwrap();
+        let skills = crate::backend::turso::db::list_skills(&conn).await.unwrap();
         assert_eq!(skills.len(), 1);
         let alpha = crate::normalize::normalize_key(&format!("skill:{}:alpha", slug));
         assert_eq!(skills[0].entity_name, alpha);
@@ -698,11 +709,11 @@ mod tests {
         let db_dir = tempdir().unwrap();
         unsafe {
             std::env::set_var(
-                crate::db::ENV_DATABASE_URL,
+                crate::backend::turso::db::ENV_DATABASE_URL,
                 db_dir.path().join("test.db").to_str().unwrap(),
             );
         }
-        let (_db, conn) = crate::db::init_db().await.unwrap();
+        let (_db, conn) = crate::backend::turso::db::init_db().await.unwrap();
         let source = src.to_str().unwrap();
 
         // Install only alpha, then only beta — both must survive (additive).
@@ -717,7 +728,7 @@ mod tests {
                 false,
                 #[cfg(feature = "documents")]
                 None::<(
-                    &crate::vector::VectorStore,
+                    &crate::backend::turso::vector::VectorStore,
                     &crate::embed::fastembed_provider::FastEmbedProvider,
                 )>,
             )
@@ -725,7 +736,13 @@ mod tests {
             .unwrap();
         }
 
-        assert_eq!(crate::db::list_skills(&conn).await.unwrap().len(), 2);
+        assert_eq!(
+            crate::backend::turso::db::list_skills(&conn)
+                .await
+                .unwrap()
+                .len(),
+            2
+        );
     }
 
     #[tokio::test]
@@ -803,11 +820,11 @@ mod tests {
         let db_dir = tempdir().unwrap();
         unsafe {
             std::env::set_var(
-                crate::db::ENV_DATABASE_URL,
+                crate::backend::turso::db::ENV_DATABASE_URL,
                 db_dir.path().join("test.db").to_str().unwrap(),
             );
         }
-        let (_db, conn) = crate::db::init_db().await.unwrap();
+        let (_db, conn) = crate::backend::turso::db::init_db().await.unwrap();
 
         // 5. Clone and install
         let clone_temp_dir = tempdir().unwrap();
@@ -829,7 +846,7 @@ mod tests {
             true,
             #[cfg(feature = "documents")]
             None::<(
-                &crate::vector::VectorStore,
+                &crate::backend::turso::vector::VectorStore,
                 &crate::embed::fastembed_provider::FastEmbedProvider,
             )>,
         )
@@ -837,7 +854,7 @@ mod tests {
         .unwrap();
 
         // 6. Verify skills installed correctly with fallbacks
-        let skills = crate::db::list_skills(&conn).await.unwrap();
+        let skills = crate::backend::turso::db::list_skills(&conn).await.unwrap();
         assert_eq!(skills.len(), 2);
 
         let slug = derive_source_slug(repo_path.to_str().unwrap());

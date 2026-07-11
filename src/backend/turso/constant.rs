@@ -24,8 +24,8 @@ pub const SCHEMA_CREATE_TOPICS: &str = "CREATE TABLE IF NOT EXISTS topics (
             updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
         )";
 
-pub const SCHEMA_CREATE_TOPICS_FTS: &str = "CREATE VIRTUAL TABLE IF NOT EXISTS topics_fts
-          USING fts5(title, body, content='topics', content_rowid='rowid', tokenize='porter unicode61')";
+pub const SCHEMA_CREATE_TOPICS_FTS: &str = "CREATE INDEX IF NOT EXISTS topics_fts
+          ON topics USING fts (title, body) WITH (weights = 'title=2.0,body=1.0')";
 
 pub const SCHEMA_CREATE_SESSIONS: &str = "CREATE TABLE IF NOT EXISTS sessions (
             id        TEXT PRIMARY KEY,
@@ -95,45 +95,15 @@ pub const SCHEMA_CREATE_IDX_CHUNKS_TOPIC_ID: &str =
 
 pub const SCHEMA_CREATE_IDX_CHUNKS_VECTOR: &str = "CREATE INDEX IF NOT EXISTS idx_chunks_vector ON chunks(libsql_vector_idx(embedding, 'metric=cosine'))";
 
-pub const SCHEMA_CREATE_TRIGGER_TOPICS_AI: &str =
-    "CREATE TRIGGER IF NOT EXISTS topics_ai AFTER INSERT ON topics BEGIN
-            INSERT INTO topics_fts(rowid, title, body) VALUES (new.rowid, new.title, new.body);
-        END";
-
-pub const SCHEMA_CREATE_TRIGGER_TOPICS_AD: &str = "CREATE TRIGGER IF NOT EXISTS topics_ad AFTER DELETE ON topics BEGIN
-            INSERT INTO topics_fts(topics_fts, rowid, title, body) VALUES('delete', old.rowid, old.title, old.body);
-        END";
-
-pub const SCHEMA_CREATE_TRIGGER_TOPICS_AU: &str = "CREATE TRIGGER IF NOT EXISTS topics_au AFTER UPDATE ON topics BEGIN
-            INSERT INTO topics_fts(topics_fts, rowid, title, body) VALUES('delete', old.rowid, old.title, old.body);
-            INSERT INTO topics_fts(rowid, title, body) VALUES (new.rowid, new.title, new.body);
-        END";
-
-// FTS5 external-content table for graph observation search (porter stemming, BM25 ranking).
-// content= must reference the current table name, so this is the asobi-native form.
-pub const SCHEMA_CREATE_ASOBI_OBS_FTS: &str = "CREATE VIRTUAL TABLE IF NOT EXISTS asobi_obs_fts
-          USING fts5(content, content='asobi_observations', content_rowid='rowid', tokenize='porter unicode61')";
-
-pub const SCHEMA_CREATE_TRIGGER_ASOBI_OBS_AI: &str =
-    "CREATE TRIGGER IF NOT EXISTS asobi_obs_ai AFTER INSERT ON asobi_observations BEGIN
-            INSERT INTO asobi_obs_fts(rowid, content) VALUES (new.rowid, new.content);
-        END";
-
-pub const SCHEMA_CREATE_TRIGGER_ASOBI_OBS_AD: &str = "CREATE TRIGGER IF NOT EXISTS asobi_obs_ad AFTER DELETE ON asobi_observations BEGIN
-            INSERT INTO asobi_obs_fts(asobi_obs_fts, rowid, content) VALUES('delete', old.rowid, old.content);
-        END";
-
-pub const SCHEMA_CREATE_TRIGGER_ASOBI_OBS_AU: &str = "CREATE TRIGGER IF NOT EXISTS asobi_obs_au AFTER UPDATE ON asobi_observations BEGIN
-            INSERT INTO asobi_obs_fts(asobi_obs_fts, rowid, content) VALUES('delete', old.rowid, old.content);
-            INSERT INTO asobi_obs_fts(rowid, content) VALUES (new.rowid, new.content);
-        END";
+pub const SCHEMA_CREATE_ASOBI_OBS_FTS: &str = "CREATE INDEX IF NOT EXISTS asobi_obs_fts
+          ON asobi_observations USING fts (content)";
 
 // Queries - Topics
-pub const SQL_SEARCH_FTS: &str = "SELECT t.id, t.title, t.file_path, bm25(topics_fts) AS score
-               FROM topics_fts
-               JOIN topics t ON topics_fts.rowid = t.rowid
-               WHERE topics_fts MATCH ?1
-               ORDER BY score
+pub const SQL_SEARCH_FTS: &str = "SELECT t.id, t.title, t.file_path,
+               fts_score(t.title, ?1) + fts_score(t.body, ?1) AS score
+               FROM topics t
+               WHERE fts_match(t.title, ?1) OR fts_match(t.body, ?1)
+               ORDER BY score DESC
                LIMIT ?2";
 
 pub const SQL_UPSERT_TOPIC: &str = "INSERT INTO topics (id, title, file_path, body) VALUES (?1, ?2, ?3, ?4) \
@@ -182,10 +152,9 @@ pub const SQL_SELECT_ALL_RELATIONS: &str =
 
 // Graph Search
 pub const SQL_SEARCH_OBSERVATIONS_FTS: &str = "SELECT o.entity_name
-                   FROM asobi_obs_fts
-                   JOIN asobi_observations o ON asobi_obs_fts.rowid = o.rowid
-                   WHERE asobi_obs_fts MATCH ?1
-                   ORDER BY bm25(asobi_obs_fts)
+                   FROM asobi_observations o
+                   WHERE fts_match(o.content, ?1)
+                   ORDER BY fts_score(o.content, ?1) DESC
                    LIMIT ?2";
 
 pub const SQL_SEARCH_ENTITIES_LIKE: &str = "SELECT name FROM asobi_entities

@@ -1,18 +1,17 @@
-use crate::db;
+use crate::api::v1::{DocumentStore, GraphStore};
 use crate::ingest::ingest_file;
 use crate::model::EntityOutput;
 use crate::normalize::slugify;
-use crate::vector::VectorStore;
 use anyhow::Result;
 use std::fmt::Write as _;
 use std::io::Write as _;
 use std::path::PathBuf;
 use std::time::{Duration, SystemTime};
-use turso::{Connection, params};
+use turso::params;
 
 pub async fn sync_graph_to_markdown(
-    conn: &Connection,
-    store: &VectorStore,
+    graph_store: &impl GraphStore,
+    document_store: &impl DocumentStore,
     embedder: &impl crate::embed::EmbeddingProvider,
 ) -> Result<usize> {
     let paths = crate::paths::AsobiPaths::resolve();
@@ -21,7 +20,7 @@ pub async fn sync_graph_to_markdown(
         std::fs::create_dir_all(&topics_dir)?;
     }
 
-    let graph = db::read_graph_eager(conn).await?;
+    let graph = graph_store.read_graph_full().await?;
     let today = chrono::Local::now().format("%Y-%m-%d %H:%M").to_string();
     let mut count = 0;
 
@@ -55,7 +54,7 @@ pub async fn sync_graph_to_markdown(
             let content = render_entity_markdown(entity, &slug, &graph.relations, &compacted_time);
             std::fs::File::create(&file_path)?.write_all(content.as_bytes())?;
             // Refresh the Vector/FTS tier from the rendered file.
-            ingest_file(&file_path, conn, store, embedder).await?;
+            ingest_file(&file_path, document_store, embedder).await?;
             count += 1;
         }
     }
@@ -240,13 +239,16 @@ pub fn prune_old_sessions(topics_root: &str, days: u32) -> Result<usize> {
 /// Fetch all topic title embeddings and cluster by similarity.
 /// Returns clusters of topic IDs with pairwise cosine similarity > threshold.
 pub async fn find_duplicate_clusters(
-    store: &crate::vector::VectorStore,
+    store: &crate::backend::turso::vector::VectorStore,
     conn: &turso::Connection,
     threshold: f32,
 ) -> anyhow::Result<Vec<Vec<String>>> {
     // Get all topic IDs
     let mut rows = conn
-        .query(crate::constant::SQL_SELECT_ALL_TOPIC_IDS, ())
+        .query(
+            crate::backend::turso::constant::SQL_SELECT_ALL_TOPIC_IDS,
+            (),
+        )
         .await?;
     let mut topic_ids = Vec::new();
     while let Some(row) = rows.next().await? {

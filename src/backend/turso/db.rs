@@ -4,7 +4,7 @@ use std::env;
 use turso::{Builder, Connection, Database};
 
 pub const DEFAULT_SEARCH_LIMIT: usize = 100;
-pub use crate::constant::{ENV_BUSY_TIMEOUT, ENV_DATABASE_URL, ENV_JOURNAL_MODE};
+pub use crate::backend::turso::constant::{ENV_BUSY_TIMEOUT, ENV_DATABASE_URL, ENV_JOURNAL_MODE};
 
 pub const SCHEMA_VERSION: i64 = 1;
 
@@ -21,6 +21,8 @@ pub async fn init_db() -> Result<(Database, Connection)> {
     let db_path = env::var(ENV_DATABASE_URL)
         .unwrap_or_else(|_| paths.db_path().to_str().unwrap().to_string());
     let db = Builder::new_local(&db_path)
+        .experimental_multiprocess_wal(true)
+        .experimental_index_method(true)
         .build()
         .await
         .with_context(|| format!(
@@ -43,8 +45,8 @@ pub async fn init_db() -> Result<(Database, Connection)> {
     }
 
     for pragma in [
-        crate::constant::PRAGMA_FOREIGN_KEYS_ON,
-        crate::constant::PRAGMA_SYNCHRONOUS_NORMAL,
+        crate::backend::turso::constant::PRAGMA_FOREIGN_KEYS_ON,
+        crate::backend::turso::constant::PRAGMA_SYNCHRONOUS_NORMAL,
     ] {
         let mut rows = conn.query(pragma, ()).await?;
         let _ = rows.next().await?;
@@ -127,15 +129,18 @@ pub async fn init_db() -> Result<(Database, Connection)> {
             return Ok(());
         }
 
-        conn.execute(crate::constant::SCHEMA_CREATE_TOPICS, ())
+        conn.execute(crate::backend::turso::constant::SCHEMA_CREATE_TOPICS, ())
             .await?;
 
-        conn.execute(crate::constant::SCHEMA_CREATE_SESSIONS, ())
+        conn.execute(crate::backend::turso::constant::SCHEMA_CREATE_SESSIONS, ())
             .await?;
 
         // Graph Tier (Hot) — CREATE IF NOT EXISTS is a no-op on migrated tables.
-        conn.execute(crate::constant::SCHEMA_CREATE_ASOBI_ENTITIES, ())
-            .await?;
+        conn.execute(
+            crate::backend::turso::constant::SCHEMA_CREATE_ASOBI_ENTITIES,
+            (),
+        )
+        .await?;
 
         if needs_migration {
             tracing::info!(
@@ -146,8 +151,11 @@ pub async fn init_db() -> Result<(Database, Connection)> {
                 (),
             )
             .await?;
-            conn.execute(crate::constant::SCHEMA_CREATE_ASOBI_OBSERVATIONS, ())
-                .await?;
+            conn.execute(
+                crate::backend::turso::constant::SCHEMA_CREATE_ASOBI_OBSERVATIONS,
+                (),
+            )
+            .await?;
             conn.execute(
                 "INSERT INTO asobi_observations (entity_name, content, created_at) \
                  SELECT entity_name, content, created_at FROM asobi_observations_old ORDER BY created_at, rowid",
@@ -156,28 +164,57 @@ pub async fn init_db() -> Result<(Database, Connection)> {
             conn.execute("DROP TABLE asobi_observations_old", ())
                 .await?;
         } else {
-            conn.execute(crate::constant::SCHEMA_CREATE_ASOBI_OBSERVATIONS, ())
-                .await?;
+            conn.execute(
+                crate::backend::turso::constant::SCHEMA_CREATE_ASOBI_OBSERVATIONS,
+                (),
+            )
+            .await?;
         }
 
-        conn.execute(crate::constant::SCHEMA_CREATE_IDX_ASOBI_OBSERVATIONS, ())
-            .await?;
+        conn.execute(
+            crate::backend::turso::constant::SCHEMA_CREATE_IDX_ASOBI_OBSERVATIONS,
+            (),
+        )
+        .await?;
 
-        conn.execute(crate::constant::SCHEMA_CREATE_ASOBI_RELATIONS, ())
-            .await?;
+        conn.execute(
+            crate::backend::turso::constant::SCHEMA_CREATE_ASOBI_RELATIONS,
+            (),
+        )
+        .await?;
 
-        conn.execute(crate::constant::SCHEMA_CREATE_ASOBI_TRUTHS, ())
-            .await?;
+        conn.execute(
+            crate::backend::turso::constant::SCHEMA_CREATE_ASOBI_TRUTHS,
+            (),
+        )
+        .await?;
 
-        conn.execute(crate::constant::SCHEMA_CREATE_ASOBI_SKILLS, ())
-            .await?;
+        conn.execute(
+            crate::backend::turso::constant::SCHEMA_CREATE_ASOBI_SKILLS,
+            (),
+        )
+        .await?;
+
+        conn.execute(
+            crate::backend::turso::constant::SCHEMA_CREATE_TOPICS_FTS,
+            (),
+        )
+        .await?;
+        conn.execute(
+            crate::backend::turso::constant::SCHEMA_CREATE_ASOBI_OBS_FTS,
+            (),
+        )
+        .await?;
 
         // Document Tier (Vectors)
-        conn.execute(crate::constant::SCHEMA_CREATE_CHUNKS, ())
+        conn.execute(crate::backend::turso::constant::SCHEMA_CREATE_CHUNKS, ())
             .await?;
 
-        conn.execute(crate::constant::SCHEMA_CREATE_IDX_CHUNKS_TOPIC_ID, ())
-            .await?;
+        conn.execute(
+            crate::backend::turso::constant::SCHEMA_CREATE_IDX_CHUNKS_TOPIC_ID,
+            (),
+        )
+        .await?;
 
         let version_pragma = format!("PRAGMA user_version = {}", SCHEMA_VERSION);
         conn.execute(&version_pragma, ()).await?;
@@ -206,7 +243,7 @@ pub async fn init_db() -> Result<(Database, Connection)> {
     Ok((db, conn))
 }
 
-/// FTS5 keyword search — returns (id, title, file_path, bm25_score)
+/// Turso FTS keyword search — returns (id, title, file_path, relevance_score)
 pub async fn search_fts(
     conn: &Connection,
     query: &str,
@@ -214,7 +251,7 @@ pub async fn search_fts(
 ) -> Result<Vec<(String, String, String, f64)>> {
     let mut rows = conn
         .query(
-            crate::constant::SQL_SEARCH_FTS,
+            crate::backend::turso::constant::SQL_SEARCH_FTS,
             turso::params![query, limit as i64],
         )
         .await?;
@@ -238,7 +275,7 @@ pub async fn upsert_topic(
     body: &str,
 ) -> Result<()> {
     conn.execute(
-        crate::constant::SQL_UPSERT_TOPIC,
+        crate::backend::turso::constant::SQL_UPSERT_TOPIC,
         turso::params![id, title, file_path, body],
     )
     .await?;
@@ -255,21 +292,21 @@ pub async fn create_entities(
     conn: &Connection,
     entities: Vec<crate::model::EntityInput>,
 ) -> Result<()> {
-    crate::turso::immediate_transaction(conn, |tx| {
+    crate::backend::turso::tx::immediate_transaction(conn, |tx| {
         let entities = entities.clone();
         Box::pin(async move {
             for mut ent in entities {
                 ent.name = crate::normalize::normalize_key(&ent.name);
                 let inserted = tx
                     .execute(
-                        crate::constant::SQL_INSERT_ENTITY,
+                        crate::backend::turso::constant::SQL_INSERT_ENTITY,
                         turso::params![ent.name.clone(), ent.entity_type],
                     )
                     .await?;
                 if inserted == 1 {
                     for obs in ent.observations {
                         tx.execute(
-                            crate::constant::SQL_INSERT_OBSERVATION,
+                            crate::backend::turso::constant::SQL_INSERT_OBSERVATION,
                             turso::params![ent.name.clone(), obs],
                         )
                         .await?;
@@ -288,21 +325,21 @@ pub async fn add_observations(
     observations: Vec<crate::model::ObservationInput>,
     limit: usize,
 ) -> Result<()> {
-    crate::turso::immediate_transaction(conn, |tx| {
+    crate::backend::turso::tx::immediate_transaction(conn, |tx| {
         let observations = observations.clone();
         Box::pin(async move {
             for mut obs_batch in observations {
                 obs_batch.entity_name = crate::normalize::normalize_key(&obs_batch.entity_name);
                 for content in obs_batch.contents {
                     tx.execute(
-                        crate::constant::SQL_INSERT_OBSERVATION,
+                        crate::backend::turso::constant::SQL_INSERT_OBSERVATION,
                         turso::params![obs_batch.entity_name.clone(), content],
                     )
                     .await?;
                 }
                 if limit > 0 {
                     tx.execute(
-                        crate::constant::SQL_EVICT_OBSERVATIONS,
+                        crate::backend::turso::constant::SQL_EVICT_OBSERVATIONS,
                         turso::params![obs_batch.entity_name.clone(), limit as i64],
                     )
                     .await?;
@@ -319,14 +356,14 @@ pub async fn create_relations(
     conn: &Connection,
     relations: Vec<crate::model::RelationInput>,
 ) -> Result<()> {
-    crate::turso::immediate_transaction(conn, |tx| {
+    crate::backend::turso::tx::immediate_transaction(conn, |tx| {
         let relations = relations.clone();
         Box::pin(async move {
             for mut rel in relations {
                 rel.from = crate::normalize::normalize_key(&rel.from);
                 rel.to = crate::normalize::normalize_key(&rel.to);
                 tx.execute(
-                    crate::constant::SQL_INSERT_RELATION,
+                    crate::backend::turso::constant::SQL_INSERT_RELATION,
                     turso::params![rel.from, rel.to, rel.relation_type],
                 )
                 .await?;
@@ -339,13 +376,13 @@ pub async fn create_relations(
 }
 
 pub async fn delete_entities(conn: &Connection, names: Vec<String>) -> Result<()> {
-    crate::turso::immediate_transaction(conn, |tx| {
+    crate::backend::turso::tx::immediate_transaction(conn, |tx| {
         let names = names.clone();
         Box::pin(async move {
             for name in names {
                 let norm_name = crate::normalize::normalize_key(&name);
                 tx.execute(
-                    crate::constant::SQL_DELETE_ENTITY,
+                    crate::backend::turso::constant::SQL_DELETE_ENTITY,
                     turso::params![norm_name.clone()],
                 )
                 .await?;
@@ -371,14 +408,14 @@ pub async fn delete_observations(
     conn: &Connection,
     deletions: Vec<crate::model::ObservationDeletion>,
 ) -> Result<()> {
-    crate::turso::immediate_transaction(conn, |tx| {
+    crate::backend::turso::tx::immediate_transaction(conn, |tx| {
         let deletions = deletions.clone();
         Box::pin(async move {
             for mut del in deletions {
                 del.entity_name = crate::normalize::normalize_key(&del.entity_name);
                 for obs in del.observations {
                     tx.execute(
-                        crate::constant::SQL_DELETE_OBSERVATION,
+                        crate::backend::turso::constant::SQL_DELETE_OBSERVATION,
                         turso::params![del.entity_name.clone(), obs],
                     )
                     .await?;
@@ -395,7 +432,7 @@ pub async fn delete_observation_by_id(conn: &Connection, entity_name: &str, id: 
     let norm_name = crate::normalize::normalize_key(entity_name);
     let affected = conn
         .execute(
-            crate::constant::SQL_DELETE_OBSERVATION_BY_ID,
+            crate::backend::turso::constant::SQL_DELETE_OBSERVATION_BY_ID,
             turso::params![id, norm_name],
         )
         .await?;
@@ -418,7 +455,7 @@ pub async fn update_observation_by_id(
     let norm_name = crate::normalize::normalize_key(entity_name);
     let affected = conn
         .execute(
-            crate::constant::SQL_UPDATE_OBSERVATION_BY_ID,
+            crate::backend::turso::constant::SQL_UPDATE_OBSERVATION_BY_ID,
             turso::params![id, new_content, norm_name],
         )
         .await?;
@@ -440,7 +477,7 @@ pub async fn update_observation(
 ) -> Result<()> {
     let norm_name = crate::normalize::normalize_key(entity_name);
     conn.execute(
-        crate::constant::SQL_UPDATE_OBSERVATION,
+        crate::backend::turso::constant::SQL_UPDATE_OBSERVATION,
         turso::params![norm_name, old_content, new_content],
     )
     .await?;
@@ -451,14 +488,14 @@ pub async fn delete_relations(
     conn: &Connection,
     relations: Vec<crate::model::RelationInput>,
 ) -> Result<()> {
-    crate::turso::immediate_transaction(conn, |tx| {
+    crate::backend::turso::tx::immediate_transaction(conn, |tx| {
         let relations = relations.clone();
         Box::pin(async move {
             for mut rel in relations {
                 rel.from = crate::normalize::normalize_key(&rel.from);
                 rel.to = crate::normalize::normalize_key(&rel.to);
                 tx.execute(
-                    crate::constant::SQL_DELETE_RELATION,
+                    crate::backend::turso::constant::SQL_DELETE_RELATION,
                     turso::params![rel.from, rel.to, rel.relation_type],
                 )
                 .await?;
@@ -473,7 +510,7 @@ pub async fn delete_relations(
 pub async fn read_graph(conn: &Connection) -> Result<crate::model::Graph> {
     let mut entity_names = Vec::new();
     let mut rows = conn
-        .query(crate::constant::SQL_SELECT_ALL_ENTITIES, ())
+        .query(crate::backend::turso::constant::SQL_SELECT_ALL_ENTITIES, ())
         .await?;
     while let Some(row) = rows.next().await? {
         entity_names.push(row.get::<String>(0)?);
@@ -482,7 +519,10 @@ pub async fn read_graph(conn: &Connection) -> Result<crate::model::Graph> {
 
     let mut relations = Vec::new();
     let mut rel_rows = conn
-        .query(crate::constant::SQL_SELECT_ALL_RELATIONS, ())
+        .query(
+            crate::backend::turso::constant::SQL_SELECT_ALL_RELATIONS,
+            (),
+        )
         .await?;
     while let Some(row) = rel_rows.next().await? {
         relations.push(crate::model::RelationInput {
@@ -501,7 +541,7 @@ pub async fn read_graph(conn: &Connection) -> Result<crate::model::Graph> {
 pub async fn read_graph_eager(conn: &Connection) -> Result<crate::model::Graph> {
     let mut entity_names = Vec::new();
     let mut rows = conn
-        .query(crate::constant::SQL_SELECT_ALL_ENTITIES, ())
+        .query(crate::backend::turso::constant::SQL_SELECT_ALL_ENTITIES, ())
         .await?;
     while let Some(row) = rows.next().await? {
         entity_names.push(row.get::<String>(0)?);
@@ -510,7 +550,10 @@ pub async fn read_graph_eager(conn: &Connection) -> Result<crate::model::Graph> 
 
     let mut relations = Vec::new();
     let mut rel_rows = conn
-        .query(crate::constant::SQL_SELECT_ALL_RELATIONS, ())
+        .query(
+            crate::backend::turso::constant::SQL_SELECT_ALL_RELATIONS,
+            (),
+        )
         .await?;
     while let Some(row) = rel_rows.next().await? {
         relations.push(crate::model::RelationInput {
@@ -682,7 +725,7 @@ pub async fn search_nodes_with_limit(
             }
         }
     } else {
-        // Primary: FTS5 on observation content
+        // Primary: Turso FTS on observation content
         let fts_hits: Vec<String> = async {
             let fts_fetch_limit = if filters.is_empty() {
                 limit.saturating_mul(8).max(limit) as i64
@@ -691,7 +734,7 @@ pub async fn search_nodes_with_limit(
             };
             let mut rows = conn
                 .query(
-                    crate::constant::SQL_SEARCH_OBSERVATIONS_FTS,
+                    crate::backend::turso::constant::SQL_SEARCH_OBSERVATIONS_FTS,
                     turso::params![query, fts_fetch_limit],
                 )
                 .await?;
@@ -727,7 +770,7 @@ pub async fn search_nodes_with_limit(
             };
             let mut rows = conn
                 .query(
-                    crate::constant::SQL_SEARCH_ENTITIES_LIKE,
+                    crate::backend::turso::constant::SQL_SEARCH_ENTITIES_LIKE,
                     turso::params![pattern, like_limit],
                 )
                 .await?;
@@ -824,7 +867,8 @@ async fn load_relations(
 
     for chunk in names.chunks(400) {
         let placeholders = chunk.iter().map(|_| "?").collect::<Vec<_>>().join(",");
-        let sql = crate::constant::SQL_SELECT_RELATIONS_IN_TEMPLATE.replace("{0}", &placeholders);
+        let sql = crate::backend::turso::constant::SQL_SELECT_RELATIONS_IN_TEMPLATE
+            .replace("{0}", &placeholders);
 
         let mut params = Vec::new();
         // Since we use the same array twice in the query logic, we only pass params once, wait!
@@ -867,8 +911,8 @@ async fn load_entities_lazy(
         let placeholders = chunk.iter().map(|_| "?").collect::<Vec<_>>().join(",");
 
         // Load entities
-        let entity_sql =
-            crate::constant::SQL_SELECT_ENTITIES_IN_TEMPLATE.replace("{}", &placeholders);
+        let entity_sql = crate::backend::turso::constant::SQL_SELECT_ENTITIES_IN_TEMPLATE
+            .replace("{}", &placeholders);
         let params = chunk
             .iter()
             .cloned()
@@ -936,8 +980,8 @@ async fn load_entities_eager_detailed(
         let placeholders = chunk.iter().map(|_| "?").collect::<Vec<_>>().join(",");
 
         // Load entities
-        let entity_sql =
-            crate::constant::SQL_SELECT_ENTITIES_IN_TEMPLATE.replace("{}", &placeholders);
+        let entity_sql = crate::backend::turso::constant::SQL_SELECT_ENTITIES_IN_TEMPLATE
+            .replace("{}", &placeholders);
         let params = chunk
             .iter()
             .cloned()
@@ -949,8 +993,8 @@ async fn load_entities_eager_detailed(
             entity_types.insert(row.get::<String>(0)?, row.get::<String>(1)?);
         }
 
-        let obs_sql =
-            crate::constant::SQL_SELECT_OBSERVATIONS_IN_TEMPLATE.replace("{}", &placeholders);
+        let obs_sql = crate::backend::turso::constant::SQL_SELECT_OBSERVATIONS_IN_TEMPLATE
+            .replace("{}", &placeholders);
         let mut rows = conn.query(&obs_sql, params.clone()).await?;
         while let Some(row) = rows.next().await? {
             let id = row.get::<i64>(0)?;
@@ -971,8 +1015,8 @@ async fn load_entities_eager_detailed(
         }
 
         // Load skill bodies
-        let skill_sql =
-            crate::constant::SQL_SELECT_SKILL_BODIES_IN_TEMPLATE.replace("{}", &placeholders);
+        let skill_sql = crate::backend::turso::constant::SQL_SELECT_SKILL_BODIES_IN_TEMPLATE
+            .replace("{}", &placeholders);
         let mut rows = conn.query(&skill_sql, params).await?;
         while let Some(row) = rows.next().await? {
             skill_bodies.insert(row.get::<String>(0)?, row.get::<String>(1)?);
@@ -1006,14 +1050,18 @@ async fn load_entities_eager_detailed(
 }
 
 pub async fn stats(conn: &Connection) -> Result<(usize, usize, usize)> {
-    let mut rows = conn.query(crate::constant::SQL_COUNT_ENTITIES, ()).await?;
+    let mut rows = conn
+        .query(crate::backend::turso::constant::SQL_COUNT_ENTITIES, ())
+        .await?;
     let entities_count: i64 = if let Some(row) = rows.next().await? {
         row.get(0)?
     } else {
         0
     };
 
-    let mut rows = conn.query(crate::constant::SQL_COUNT_RELATIONS, ()).await?;
+    let mut rows = conn
+        .query(crate::backend::turso::constant::SQL_COUNT_RELATIONS, ())
+        .await?;
     let relations_count: i64 = if let Some(row) = rows.next().await? {
         row.get(0)?
     } else {
@@ -1021,7 +1069,7 @@ pub async fn stats(conn: &Connection) -> Result<(usize, usize, usize)> {
     };
 
     let mut rows = conn
-        .query(crate::constant::SQL_COUNT_OBSERVATIONS, ())
+        .query(crate::backend::turso::constant::SQL_COUNT_OBSERVATIONS, ())
         .await?;
     let observations_count: i64 = if let Some(row) = rows.next().await? {
         row.get(0)?
@@ -1051,15 +1099,21 @@ pub async fn stats_per_entity(conn: &Connection) -> Result<Vec<(String, usize)>>
 }
 
 pub async fn reset(conn: &Connection) -> Result<()> {
-    conn.execute(crate::constant::SQL_DELETE_ALL_CHUNKS, ())
+    conn.execute(crate::backend::turso::constant::SQL_DELETE_ALL_CHUNKS, ())
         .await?;
-    conn.execute(crate::constant::SQL_DELETE_ALL_TOPICS, ())
+    conn.execute(crate::backend::turso::constant::SQL_DELETE_ALL_TOPICS, ())
         .await?;
-    conn.execute(crate::constant::SQL_DELETE_ALL_RELATIONS, ())
-        .await?;
-    conn.execute(crate::constant::SQL_DELETE_ALL_OBSERVATIONS, ())
-        .await?;
-    conn.execute(crate::constant::SQL_DELETE_ALL_ENTITIES, ())
+    conn.execute(
+        crate::backend::turso::constant::SQL_DELETE_ALL_RELATIONS,
+        (),
+    )
+    .await?;
+    conn.execute(
+        crate::backend::turso::constant::SQL_DELETE_ALL_OBSERVATIONS,
+        (),
+    )
+    .await?;
+    conn.execute(crate::backend::turso::constant::SQL_DELETE_ALL_ENTITIES, ())
         .await?;
     Ok(())
 }
@@ -1067,7 +1121,7 @@ pub async fn reset(conn: &Connection) -> Result<()> {
 pub async fn truth_upsert(conn: &Connection, entity: &str, key: &str, value: &str) -> Result<()> {
     let norm_entity = crate::normalize::normalize_key(entity);
     conn.execute(
-        crate::constant::SQL_UPSERT_TRUTH,
+        crate::backend::turso::constant::SQL_UPSERT_TRUTH,
         turso::params![norm_entity, key, value],
     )
     .await?;
@@ -1077,7 +1131,7 @@ pub async fn truth_upsert(conn: &Connection, entity: &str, key: &str, value: &st
 pub async fn truth_delete(conn: &Connection, entity: &str, key: &str) -> Result<()> {
     let norm_entity = crate::normalize::normalize_key(entity);
     conn.execute(
-        crate::constant::SQL_DELETE_TRUTH,
+        crate::backend::turso::constant::SQL_DELETE_TRUTH,
         turso::params![norm_entity, key],
     )
     .await?;
@@ -1105,7 +1159,8 @@ pub async fn select_truths(
 
     for chunk in normalized_names.chunks(500) {
         let placeholders = chunk.iter().map(|_| "?").collect::<Vec<_>>().join(",");
-        let sql = crate::constant::SQL_SELECT_TRUTHS_FOR_ENTITIES.replace("{}", &placeholders);
+        let sql = crate::backend::turso::constant::SQL_SELECT_TRUTHS_FOR_ENTITIES
+            .replace("{}", &placeholders);
         let params = chunk
             .iter()
             .cloned()
@@ -1145,7 +1200,7 @@ pub async fn skill_upsert(
 ) -> Result<()> {
     let norm_entity = crate::normalize::normalize_key(entity);
     conn.execute(
-        crate::constant::SQL_UPSERT_SKILL,
+        crate::backend::turso::constant::SQL_UPSERT_SKILL,
         turso::params![norm_entity, body, source, version],
     )
     .await?;
@@ -1156,7 +1211,7 @@ pub async fn skill_body(conn: &Connection, entity: &str) -> Result<Option<String
     let norm_entity = crate::normalize::normalize_key(entity);
     let mut rows = conn
         .query(
-            crate::constant::SQL_SELECT_SKILL_BODY,
+            crate::backend::turso::constant::SQL_SELECT_SKILL_BODY,
             turso::params![norm_entity],
         )
         .await?;
@@ -1169,7 +1224,9 @@ pub async fn skill_body(conn: &Connection, entity: &str) -> Result<Option<String
 }
 
 pub async fn list_skills(conn: &Connection) -> Result<Vec<SkillRow>> {
-    let mut rows = conn.query(crate::constant::SQL_LIST_SKILLS, ()).await?;
+    let mut rows = conn
+        .query(crate::backend::turso::constant::SQL_LIST_SKILLS, ())
+        .await?;
     let mut results = Vec::new();
     while let Some(row) = rows.next().await? {
         results.push(SkillRow {
@@ -1314,7 +1371,7 @@ mod tests {
         }
         let (_db, conn) = init_db().await.unwrap();
 
-        // FTS5 table should exist
+        // Turso-native FTS index should exist.
         let mut rows = conn
             .query("SELECT name FROM sqlite_master WHERE name='topics_fts'", ())
             .await
@@ -1331,7 +1388,10 @@ mod tests {
             std::env::set_var(ENV_DATABASE_URL, db_path.to_str().unwrap());
         }
 
-        let legacy_db = Builder::new_local(&db_path).build().await.unwrap();
+        let legacy_db = Builder::new_local(db_path.to_str().unwrap())
+            .build()
+            .await
+            .unwrap();
         let legacy_conn = legacy_db.connect().unwrap();
         legacy_conn
             .execute(
@@ -1349,34 +1409,6 @@ mod tests {
             .unwrap();
         legacy_conn
             .execute(
-                "CREATE VIRTUAL TABLE asobi_obs_fts USING fts5(content, content='asobi_observations', content_rowid='rowid', tokenize='porter unicode61')",
-                (),
-            )
-            .await
-            .unwrap();
-        legacy_conn
-            .execute(
-                "CREATE TRIGGER asobi_obs_ai AFTER INSERT ON asobi_observations BEGIN INSERT INTO asobi_obs_fts(rowid, content) VALUES (new.rowid, new.content); END",
-                (),
-            )
-            .await
-            .unwrap();
-        legacy_conn
-            .execute(
-                "CREATE TRIGGER asobi_obs_ad AFTER DELETE ON asobi_observations BEGIN INSERT INTO asobi_obs_fts(asobi_obs_fts, rowid, content) VALUES('delete', old.rowid, old.content); END",
-                (),
-            )
-            .await
-            .unwrap();
-        legacy_conn
-            .execute(
-                "CREATE TRIGGER asobi_obs_au AFTER UPDATE ON asobi_observations BEGIN INSERT INTO asobi_obs_fts(asobi_obs_fts, rowid, content) VALUES('delete', old.rowid, old.content); INSERT INTO asobi_obs_fts(rowid, content) VALUES (new.rowid, new.content); END",
-                (),
-            )
-            .await
-            .unwrap();
-        legacy_conn
-            .execute(
                 "INSERT INTO asobi_entities VALUES ('legacy', 'project')",
                 (),
             )
@@ -1387,10 +1419,6 @@ mod tests {
                 "INSERT INTO asobi_observations (id, entity_name, content) VALUES ('old', 'legacy', 'to be deleted'), ('survivor', 'legacy', 'migration survivor')",
                 (),
             )
-            .await
-            .unwrap();
-        legacy_conn
-            .execute("DROP TRIGGER asobi_obs_ad", ())
             .await
             .unwrap();
         legacy_conn
@@ -1420,11 +1448,7 @@ mod tests {
         let (_db, conn) = init_db().await.unwrap();
 
         conn.execute(
-            "INSERT INTO topics (id, title, file_path) VALUES ('rust-pin', 'Rust Pinning', '.asobi/topics/rust-pinning.md')",
-            (),
-        ).await.unwrap();
-        conn.execute(
-            "INSERT INTO topics_fts (rowid, title, body) VALUES ((SELECT rowid FROM topics WHERE id='rust-pin'), 'Rust Pinning', 'pinning is a mechanism...')",
+            "INSERT INTO topics (id, title, file_path, body) VALUES ('rust-pin', 'Rust Pinning', '.asobi/topics/rust-pinning.md', 'pinning is a mechanism...')",
             (),
         ).await.unwrap();
 
@@ -1508,8 +1532,8 @@ mod tests {
         )
         .await;
 
-        // "run" should match "running" via porter stemming
-        let graph = search_nodes(&conn, "run").await.unwrap();
+        // Turso FTS token matching does not provide SQLite FTS5 porter stemming.
+        let graph = search_nodes(&conn, "running").await.unwrap();
         assert_eq!(graph.entities.len(), 1);
         assert_eq!(graph.entities[0].name, "async-patterns");
     }
@@ -1564,7 +1588,7 @@ mod tests {
         }
         let (_db, conn) = init_db().await.unwrap();
 
-        // Invalid FTS5 syntax — must not panic, falls back to LIKE gracefully
+        // Invalid FTS syntax — must not panic, falls back to LIKE gracefully.
         let result = search_nodes(&conn, "AND AND").await;
         assert!(result.is_ok());
     }

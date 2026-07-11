@@ -57,7 +57,7 @@ pub struct EntityOutput {
     pub observations_detailed: Option<Vec<DetailedObservation>>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct Graph {
     pub entities: Vec<EntityOutput>,

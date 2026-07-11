@@ -1,4 +1,4 @@
-use asobi::db::{ENV_DATABASE_URL, create_entities, init_db, read_graph};
+use asobi::backend::turso::db::{ENV_DATABASE_URL, create_entities, init_db, read_graph};
 use asobi::model::EntityInput;
 use tempfile::tempdir;
 

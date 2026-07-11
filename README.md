@@ -23,7 +23,7 @@ Keep memory, track session state, and share context across conversations — sto
 
 - **Knowledge graph** — entities, append-only (capped) observations, and directed relations.
 - **Truths** — durable `key→value` facts per entity for current state (`status`, `version`); status-as-truth makes a board a single `search --where status=…`.
-- **Fast search** — `search` over FTS5 (porter stemming + BM25) with a substring fallback, plus `--where key=value` truth filters (the query term is optional).
+- **Fast search** — `search` over Turso FTS (relevance scoring) with a substring fallback, plus `--where key=value` truth filters (the query term is optional).
 - **Concurrency-safe** — WAL + `busy_timeout`, so a lead agent and dispatched sub-agents can write the same graph without lock errors.
 - **Lazy reads** — `graph`/`search` return truths + counts; `show` returns the full body. Cheap to load, cheap on tokens.
 - **Skills** — install reusable agent instructions from a git repo or local path.

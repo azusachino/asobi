@@ -1,20 +1,17 @@
 use crate::{
+    api::v1::{DocumentChunk, DocumentStore, TopicSnapshot},
     chunk::chunk_text,
-    db::upsert_topic,
     embed::EmbeddingProvider,
     normalize::slugify,
-    vector::{Chunk, VectorStore},
 };
 use anyhow::Result;
 use std::path::Path;
-use turso::Connection;
 use uuid::Uuid;
 use walkdir::WalkDir;
 
 pub async fn ingest_file(
     path: &Path,
-    conn: &Connection,
-    store: &VectorStore,
+    store: &impl DocumentStore,
     embedder: &impl EmbeddingProvider,
 ) -> Result<()> {
     let raw = std::fs::read_to_string(path)?;
@@ -45,45 +42,58 @@ pub async fn ingest_file(
     let file_path = path.to_str().unwrap_or_default().to_string();
 
     // Delete old chunks for this topic before re-indexing
-    store.delete_by_topic(&slug).await?;
+    store.delete_chunks_by_topic(&slug).await?;
 
     // Chunk and embed
     let texts = chunk_text(&body, 512, 64);
     if texts.is_empty() {
-        upsert_topic(conn, &slug, &title, &file_path, &body).await?;
+        store
+            .upsert_topic(TopicSnapshot {
+                id: slug.clone(),
+                title: title.clone(),
+                file_path: file_path.clone(),
+                body: body.clone(),
+            })
+            .await?;
         return Ok(());
     }
 
     let vectors = embedder.embed(&texts).await?;
-    let chunks: Vec<Chunk> = texts
+    let chunks: Vec<DocumentChunk> = texts
         .into_iter()
         .zip(vectors)
         .enumerate()
-        .map(|(i, (text, vector))| Chunk {
-            id: Uuid::new_v4().to_string(),
+        .map(|(i, (text, vector))| DocumentChunk {
+            id: Uuid::now_v7().to_string(),
             topic_id: slug.clone(),
             chunk_idx: i as u32,
             text,
             source: file_path.clone(),
-            vector,
+            embedding: vector,
         })
         .collect();
 
     store.insert_chunks(chunks).await?;
-    upsert_topic(conn, &slug, &title, &file_path, &body).await?;
+    store
+        .upsert_topic(TopicSnapshot {
+            id: slug,
+            title,
+            file_path,
+            body,
+        })
+        .await?;
     Ok(())
 }
 
 pub async fn ingest_dir(
     dir: &Path,
-    conn: &Connection,
-    store: &VectorStore,
+    store: &impl DocumentStore,
     embedder: &impl EmbeddingProvider,
 ) -> Result<usize> {
     let mut count = 0;
     for entry in WalkDir::new(dir).into_iter().filter_map(|e| e.ok()) {
         if entry.path().extension().and_then(|s| s.to_str()) == Some("md") {
-            ingest_file(entry.path(), conn, store, embedder).await?;
+            ingest_file(entry.path(), store, embedder).await?;
             count += 1;
         }
     }
@@ -116,8 +126,8 @@ fn parse_frontmatter(raw: &str) -> (String, String) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::init_db;
-    use crate::vector::VectorStore;
+    use crate::backend::TursoBackend;
+    use crate::backend::turso::db::init_db;
     use std::io::Write;
     use tempfile::tempdir;
 
@@ -147,7 +157,10 @@ mod tests {
         let dir = tempdir().unwrap();
         let db_path = dir.path().join("test.db");
         unsafe {
-            std::env::set_var(crate::db::ENV_DATABASE_URL, db_path.to_str().unwrap());
+            std::env::set_var(
+                crate::backend::turso::db::ENV_DATABASE_URL,
+                db_path.to_str().unwrap(),
+            );
         }
 
         let mut f = std::fs::File::create(dir.path().join("rust-pinning.md")).unwrap();
@@ -157,20 +170,21 @@ mod tests {
         )
         .unwrap();
 
-        let (_db, conn) = init_db().await.unwrap();
-        let store = VectorStore::new_with_dim(conn.clone(), 384);
+        let (db, conn) = init_db().await.unwrap();
+        let backend = TursoBackend::from_parts(db, conn);
         let embedder = FakeEmbedder(384);
 
         ingest_file(
             dir.path().join("rust-pinning.md").as_path(),
-            &conn,
-            &store,
+            &backend,
             &embedder,
         )
         .await
         .unwrap();
 
-        let results = crate::db::search_fts(&conn, "pinning", 5).await.unwrap();
+        let results = crate::backend::turso::db::search_fts(backend.connection(), "pinning", 5)
+            .await
+            .unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].1, "Rust Pinning");
     }
@@ -180,7 +194,10 @@ mod tests {
         let dir = tempdir().unwrap();
         let db_path = dir.path().join("test2.db");
         unsafe {
-            std::env::set_var(crate::db::ENV_DATABASE_URL, db_path.to_str().unwrap());
+            std::env::set_var(
+                crate::backend::turso::db::ENV_DATABASE_URL,
+                db_path.to_str().unwrap(),
+            );
         }
 
         for name in &["a.md", "b.md", "c.md"] {
@@ -192,13 +209,11 @@ mod tests {
             .unwrap();
         }
 
-        let (_db, conn) = init_db().await.unwrap();
-        let store = VectorStore::new_with_dim(conn.clone(), 384);
+        let (db, conn) = init_db().await.unwrap();
+        let backend = TursoBackend::from_parts(db, conn);
         let embedder = FakeEmbedder(384);
 
-        let count = ingest_dir(dir.path(), &conn, &store, &embedder)
-            .await
-            .unwrap();
+        let count = ingest_dir(dir.path(), &backend, &embedder).await.unwrap();
         assert_eq!(count, 3);
     }
 }

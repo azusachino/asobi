@@ -6,7 +6,7 @@
 //! makes the bench safe: pointing `ASOBI_DATABASE_URL` at a scratch file
 //! fully isolates writes and resets from any other database file.
 
-use asobi::db;
+use asobi::backend::turso::db;
 use asobi::model::EntityInput;
 use tempfile::tempdir;
 

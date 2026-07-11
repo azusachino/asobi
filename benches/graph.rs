@@ -1,4 +1,4 @@
-use asobi::db;
+use asobi::backend::turso::db;
 use std::env;
 use std::hint::black_box;
 use std::time::{Duration, Instant};
