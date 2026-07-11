@@ -1,5 +1,5 @@
 #[cfg(feature = "documents")]
-use asobi::{
+use asobi::storage::libsql::{
     db::init_db,
     vector::{Chunk, VectorStore},
 };
@@ -29,7 +29,10 @@ fn main() {
         let dir = tempdir().expect("tempdir");
         let db_path = dir.path().join("bench_vector.db");
         unsafe {
-            std::env::set_var("ASOBI_DATABASE_URL", db_path.to_str().expect("utf-8 path"));
+            std::env::set_var(
+                asobi::paths::ENV_DATABASE_URL,
+                db_path.to_str().expect("utf-8 path"),
+            );
         }
         let (_db, conn) = init_db().await.expect("init db");
         let store = VectorStore::new_with_dim(conn.clone(), DIMENSION);
@@ -83,3 +86,4 @@ fn main() {
 fn main() {
     println!("Vector benchmark requires the 'documents' feature.");
 }
+// storage-boundary: provider-test

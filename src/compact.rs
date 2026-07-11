@@ -34,18 +34,16 @@ pub async fn sync_graph_to_markdown(
         let mut compacted_time = today.clone();
         let mut should_write = true;
 
-        if file_path.exists() {
-            if let Ok(existing) = std::fs::read_to_string(&file_path) {
-                if let Some(old_time) = crate::frontmatter::parse(&existing)
-                    .and_then(|fm| fm.get("compacted").map(|s| s.to_string()))
-                {
-                    let content_with_old_time =
-                        render_entity_markdown(entity, &slug, &graph.relations, &old_time);
-                    if existing == content_with_old_time {
-                        should_write = false;
-                        compacted_time = old_time;
-                    }
-                }
+        if file_path.exists()
+            && let Ok(existing) = std::fs::read_to_string(&file_path)
+            && let Some(old_time) = crate::frontmatter::parse(&existing)
+                .and_then(|fm| fm.get("compacted").map(|s| s.to_string()))
+        {
+            let content_with_old_time =
+                render_entity_markdown(entity, &slug, &graph.relations, &old_time);
+            if existing == content_with_old_time {
+                should_write = false;
+                compacted_time = old_time;
             }
         }
 

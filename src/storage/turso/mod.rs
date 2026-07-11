@@ -210,8 +210,11 @@ impl MaintenanceStore for TursoStore {
     }
 
     async fn capabilities(&self) -> ApiResult<BackendCapabilities> {
-        // Document/vector operations are available when the optional document
-        // tier is compiled; snapshot support remains a later task.
+        // Keyword search is supported and correct — it is implemented with a
+        // stable substring scan rather than native FTS, so it is less performant
+        // (full scan) and unranked/unstemmed, but returns the right rows.
+        // Document/vector operations are available when the document tier is
+        // compiled (index-less vector distance, also stable).
         Ok(BackendCapabilities {
             backend: "turso".to_string(),
             keyword_search: true,

@@ -15,12 +15,12 @@ pub async fn open_local(path: &Path) -> Result<(Database, Connection)> {
         .context("Turso database path must be valid UTF-8")?;
     let mut retries = 0;
     let db = loop {
-        match Builder::new_local(path)
-            .experimental_multiprocess_wal(true)
-            .experimental_index_method(true)
-            .build()
-            .await
-        {
+        // Stable subset: Asobi drives Turso with only its stable feature set.
+        // The experimental multi-process WAL and index (native FTS) methods are
+        // deliberately not enabled — they are the source of Turso's engine
+        // instability under load, and the graph search degrades cleanly to a
+        // substring match without them (see `search_nodes`).
+        match Builder::new_local(path).build().await {
             Ok(db) => break db,
             Err(error)
                 if (is_retryable(&error) || error.to_string().contains("Locking error"))

@@ -15,7 +15,7 @@ help:
 	@echo "  verify-libsql - Run the default libSQL CLI verification"
 	@echo "  verify-turso - Run the experimental Turso CLI verification"
 	@echo "  bench-libsql - Run graph benchmarks against the default build"
-	@echo "  bench-turso - Run graph benchmarks with turso-experimental"
+	@echo "  bench-turso - Run graph benchmarks with turso-experimental (experimental backend)"
 	@echo "  fmt           - Format Rust, Python, JSON, and YAML code"
 	@echo "  fmt-check     - Verify formatting without writing (gate; run fmt to fix)"
 	@echo "  lint          - Run Rust clippy and Python ruff"
@@ -63,6 +63,9 @@ verify-turso:
 bench-libsql:
 	cargo bench --bench graph
 
+# The Turso backend is experimental and not part of any gate; libSQL is the
+# supported, benchmarked default. To exercise Turso here, select it explicitly:
+#   ASOBI_BACKEND=turso make bench-turso
 bench-turso:
 	cargo bench --features turso-experimental --bench graph
 
@@ -78,6 +81,7 @@ fmt-check:
 
 lint:
 	cargo clippy -- -D warnings
+	cargo clippy --features documents -- -D warnings
 	ruff check .
 
 check: verify-storage-boundary fmt-check lint test test-scripts check-documents
@@ -87,6 +91,7 @@ check-documents: build-documents test-documents test-documents-scripts
 # Experimental Turso backend is opt-in and not part of the default `check`
 # baseline (which ships libSQL). Run this to exercise the feature-gated matrix.
 check-turso:
+	cargo clippy --features turso-experimental -- -D warnings
 	cargo test --features turso-experimental -- --test-threads=1
 	cargo build --features turso-experimental
 	uv run scripts/verify_cli.turso.py

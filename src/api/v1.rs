@@ -78,6 +78,9 @@ pub struct Stats {
 #[serde(rename_all = "camelCase")]
 pub struct BackendCapabilities {
     pub backend: String,
+    /// True when the backend can serve the `search` command over graph content.
+    /// Quality varies by backend: libSQL uses ranked, stemmed FTS5; the
+    /// experimental Turso backend uses an unranked substring scan.
     pub keyword_search: bool,
     pub documents: bool,
     pub vectors: bool,

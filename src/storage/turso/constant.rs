@@ -23,9 +23,6 @@ pub const SCHEMA_CREATE_TOPICS: &str = "CREATE TABLE IF NOT EXISTS topics (
             updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
         )";
 
-pub const SCHEMA_CREATE_TOPICS_FTS: &str = "CREATE INDEX IF NOT EXISTS topics_fts
-          ON topics USING fts (title, body) WITH (weights = 'title=2.0,body=1.0')";
-
 pub const SCHEMA_CREATE_SESSIONS: &str = "CREATE TABLE IF NOT EXISTS sessions (
             id        TEXT PRIMARY KEY,
             summary   TEXT NOT NULL,
@@ -92,15 +89,14 @@ pub const SCHEMA_CREATE_CHUNKS: &str = "CREATE TABLE IF NOT EXISTS chunks (
 pub const SCHEMA_CREATE_IDX_CHUNKS_TOPIC_ID: &str =
     "CREATE INDEX IF NOT EXISTS idx_chunks_topic_id ON chunks(topic_id)";
 
-pub const SCHEMA_CREATE_ASOBI_OBS_FTS: &str = "CREATE INDEX IF NOT EXISTS asobi_obs_fts
-          ON asobi_observations USING fts (content)";
-
 // Queries - Topics
-pub const SQL_SEARCH_FTS: &str = "SELECT t.id, t.title, t.file_path,
-               fts_score(t.title, ?1) + fts_score(t.body, ?1) AS score
-               FROM topics t
-               WHERE fts_match(t.title, ?1) OR fts_match(t.body, ?1)
-               ORDER BY score DESC
+// Stable subset: substring keyword search over topics (no native FTS ranking).
+// `?1` is a pre-escaped `%pattern%`; a constant score keeps the SearchResult
+// shape without an FTS relevance score.
+pub const SQL_SEARCH_FTS: &str = "SELECT id, title, file_path, 1.0 AS score
+               FROM topics
+               WHERE title LIKE ?1 OR body LIKE ?1
+               ORDER BY title
                LIMIT ?2";
 
 pub const SQL_UPSERT_TOPIC: &str = "INSERT INTO topics (id, title, file_path, body) VALUES (?1, ?2, ?3, ?4) \
@@ -148,10 +144,11 @@ pub const SQL_SELECT_ALL_RELATIONS: &str =
     "SELECT from_entity, to_entity, relation_type FROM asobi_relations";
 
 // Graph Search
-pub const SQL_SEARCH_OBSERVATIONS_FTS: &str = "SELECT o.entity_name
-                   FROM asobi_observations o
-                   WHERE fts_match(o.content, ?1)
-                   ORDER BY fts_score(o.content, ?1) DESC
+// Stable subset: substring match over observation content (no native FTS).
+// `?1` is a pre-escaped `%pattern%`.
+pub const SQL_SEARCH_OBSERVATIONS_LIKE: &str = "SELECT DISTINCT entity_name
+                   FROM asobi_observations
+                   WHERE content LIKE ?1
                    LIMIT ?2";
 
 pub const SQL_SEARCH_ENTITIES_LIKE: &str = "SELECT name FROM asobi_entities

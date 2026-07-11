@@ -34,7 +34,7 @@ impl EmbeddingProvider for FastEmbedProvider {
             let mut model = model
                 .lock()
                 .map_err(|e| anyhow::anyhow!("mutex poisoned: {}", e))?;
-            Ok(model.embed(&texts, None)?)
+            model.embed(&texts, None)
         })
         .await?
     }

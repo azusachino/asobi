@@ -310,7 +310,7 @@ impl DocumentStore for LibsqlStore {
                 .search(embedding, limit)
                 .await
                 .map_err(be)?;
-            return Ok(results
+            Ok(results
                 .into_iter()
                 .map(|result| DocumentSearchResult {
                     id: result.id,
@@ -319,7 +319,7 @@ impl DocumentStore for LibsqlStore {
                     source: result.source,
                     score: result.score,
                 })
-                .collect());
+                .collect())
         }
         #[cfg(not(feature = "documents"))]
         {

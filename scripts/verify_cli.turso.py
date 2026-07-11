@@ -51,6 +51,7 @@ def main() -> None:
         capabilities = json.loads(run(["capabilities"], env).stdout)
         assert capabilities["apiVersion"] == 1
         assert capabilities["capabilities"]["backend"] == "turso"
+        # Keyword search is correct via a stable substring scan (no native FTS).
         assert capabilities["capabilities"]["keywordSearch"] is True
         assert capabilities["health"] == {
             "backend": "turso",
@@ -59,7 +60,7 @@ def main() -> None:
         }
 
         run(["new", "turso-project", "project"], env)
-        run(["obs", "turso-project", "Turso native FTS verification"], env)
+        run(["obs", "turso-project", "Turso substring search verification"], env)
         search = json.loads(run(["search", "Turso"], env).stdout)
         assert {entity["name"] for entity in search["entities"]} == {"turso-project"}
 

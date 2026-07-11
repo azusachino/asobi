@@ -172,16 +172,9 @@ pub async fn init_db() -> Result<(Database, Connection)> {
         )
         .await?;
 
-        conn.execute(
-            crate::storage::turso::constant::SCHEMA_CREATE_TOPICS_FTS,
-            (),
-        )
-        .await?;
-        conn.execute(
-            crate::storage::turso::constant::SCHEMA_CREATE_ASOBI_OBS_FTS,
-            (),
-        )
-        .await?;
+        // Native FTS indexes are intentionally omitted: they require Turso's
+        // experimental index method. Keyword search runs as a substring match
+        // instead (stable-subset backend).
 
         // Document Tier (Vectors)
         conn.execute(crate::storage::turso::constant::SCHEMA_CREATE_CHUNKS, ())
@@ -220,16 +213,18 @@ pub async fn init_db() -> Result<(Database, Connection)> {
     Ok((db, conn))
 }
 
-/// Turso FTS keyword search — returns (id, title, file_path, relevance_score)
+/// Turso topic keyword search (stable subset: substring match, constant score)
+/// — returns (id, title, file_path, score).
 pub async fn search_fts(
     conn: &Connection,
     query: &str,
     limit: usize,
 ) -> Result<Vec<(String, String, String, f64)>> {
+    let pattern = format!("%{}%", query);
     let mut rows = conn
         .query(
             crate::storage::turso::constant::SQL_SEARCH_FTS,
-            turso::params![query, limit as i64],
+            turso::params![pattern, limit as i64],
         )
         .await?;
     let mut results = Vec::new();
@@ -702,17 +697,19 @@ pub async fn search_nodes_with_limit(
             }
         }
     } else {
-        // Primary: Turso FTS on observation content
-        let fts_hits: Vec<String> = async {
-            let fts_fetch_limit = if filters.is_empty() {
+        // Primary: substring match on observation content (stable subset — no
+        // native FTS ranking or stemming).
+        let content_hits: Vec<String> = async {
+            let fetch_limit = if filters.is_empty() {
                 limit.saturating_mul(8).max(limit) as i64
             } else {
                 5000
             };
+            let pattern = format!("%{}%", query);
             let mut rows = conn
                 .query(
-                    crate::storage::turso::constant::SQL_SEARCH_OBSERVATIONS_FTS,
-                    turso::params![query, fts_fetch_limit],
+                    crate::storage::turso::constant::SQL_SEARCH_OBSERVATIONS_LIKE,
+                    turso::params![pattern, fetch_limit],
                 )
                 .await?;
             let mut names = Vec::new();
@@ -725,7 +722,7 @@ pub async fn search_nodes_with_limit(
         .unwrap_or_default();
 
         let mut seen_names = std::collections::HashSet::new();
-        for name in fts_hits {
+        for name in content_hits {
             if !filters.is_empty() && !filtered_names.contains(&name) {
                 continue;
             }
@@ -1076,22 +1073,26 @@ pub async fn stats_per_entity(conn: &Connection) -> Result<Vec<(String, usize)>>
 }
 
 pub async fn reset(conn: &Connection) -> Result<()> {
-    conn.execute(crate::storage::turso::constant::SQL_DELETE_ALL_CHUNKS, ())
-        .await?;
-    conn.execute(crate::storage::turso::constant::SQL_DELETE_ALL_TOPICS, ())
-        .await?;
-    conn.execute(
-        crate::storage::turso::constant::SQL_DELETE_ALL_RELATIONS,
-        (),
-    )
+    // Run the deletes inside one explicit transaction. Turso's experimental FTS
+    // index (turso_core 0.6.1 index_method/fts.rs) panics in its `Drop` if a
+    // statement that left pending FTS docs is dropped after an autocommit has
+    // already closed the transaction ("FTS Drop: transaction already committed,
+    // cannot flush"). Keeping a transaction open until COMMIT means the FTS
+    // index flushes while the transaction is still active.
+    use crate::storage::turso::constant::{
+        SQL_DELETE_ALL_CHUNKS, SQL_DELETE_ALL_ENTITIES, SQL_DELETE_ALL_OBSERVATIONS,
+        SQL_DELETE_ALL_RELATIONS, SQL_DELETE_ALL_TOPICS,
+    };
+    crate::storage::turso::tx::immediate_transaction(conn, |conn| {
+        Box::pin(async move {
+            conn.execute(SQL_DELETE_ALL_CHUNKS, ()).await?;
+            conn.execute(SQL_DELETE_ALL_TOPICS, ()).await?;
+            conn.execute(SQL_DELETE_ALL_RELATIONS, ()).await?;
+            conn.execute(SQL_DELETE_ALL_OBSERVATIONS, ()).await?;
+            conn.execute(SQL_DELETE_ALL_ENTITIES, ()).await.map(|_| ())
+        })
+    })
     .await?;
-    conn.execute(
-        crate::storage::turso::constant::SQL_DELETE_ALL_OBSERVATIONS,
-        (),
-    )
-    .await?;
-    conn.execute(crate::storage::turso::constant::SQL_DELETE_ALL_ENTITIES, ())
-        .await?;
     Ok(())
 }
 
@@ -1349,17 +1350,24 @@ mod tests {
         }
         let (_db, conn) = init_db().await.unwrap();
 
-        // Turso-native FTS index should exist.
-        let mut rows = conn
-            .query("SELECT name FROM sqlite_master WHERE name='topics_fts'", ())
-            .await
-            .unwrap();
-        let row = rows.next().await.unwrap();
-        assert!(row.is_some(), "topics_fts table missing");
+        // Core tables must exist (stable subset: no native FTS index).
+        for table in ["asobi_entities", "asobi_observations", "topics", "chunks"] {
+            let mut rows = conn
+                .query(
+                    "SELECT name FROM sqlite_master WHERE type='table' AND name=?1",
+                    turso::params![table],
+                )
+                .await
+                .unwrap();
+            assert!(
+                rows.next().await.unwrap().is_some(),
+                "table {table} missing"
+            );
+        }
     }
 
     #[tokio::test]
-    async fn test_observation_fts_rebuilds_after_legacy_id_migration() {
+    async fn test_observation_search_after_legacy_id_migration() {
         let dir = tempdir().unwrap();
         let db_path = dir.path().join("legacy.db");
         unsafe {
@@ -1417,7 +1425,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_fts_search_finds_topic() {
+    async fn test_topic_substring_search_finds_topic() {
         let dir = tempdir().unwrap();
         let db_path = dir.path().join("test.db");
         unsafe {
@@ -1492,7 +1500,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_search_nodes_stemming() {
+    async fn test_search_nodes_substring_match() {
         let dir = tempdir().unwrap();
         unsafe {
             std::env::set_var(
@@ -1510,7 +1518,8 @@ mod tests {
         )
         .await;
 
-        // Turso FTS token matching does not provide SQLite FTS5 porter stemming.
+        // Stable subset: substring match on observation content (no native FTS,
+        // so no stemming — a full term still matches its exact substring).
         let graph = search_nodes(&conn, "running").await.unwrap();
         assert_eq!(graph.entities.len(), 1);
         assert_eq!(graph.entities[0].name, "async-patterns");
@@ -1536,7 +1545,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_search_nodes_bm25_ordering() {
+    async fn test_search_nodes_multiword_substring() {
         let dir = tempdir().unwrap();
         unsafe {
             std::env::set_var(
@@ -1546,17 +1555,18 @@ mod tests {
         }
         let (_db, conn) = init_db().await.unwrap();
 
-        // "alpha" has both query words; "beta" has only one — alpha should rank first
+        // Stable subset: a multi-word query matches the contiguous substring, so
+        // only "alpha" (which contains "async tokio") is returned.
         seed_entity(&conn, "alpha", "project", &["async tokio runtime patterns"]).await;
         seed_entity(&conn, "beta", "project", &["tokio scheduler"]).await;
 
         let graph = search_nodes(&conn, "async tokio").await.unwrap();
-        assert!(!graph.entities.is_empty());
+        assert_eq!(graph.entities.len(), 1);
         assert_eq!(graph.entities[0].name, "alpha");
     }
 
     #[tokio::test]
-    async fn test_search_nodes_invalid_fts_syntax_no_panic() {
+    async fn test_search_nodes_special_query_no_panic() {
         let dir = tempdir().unwrap();
         unsafe {
             std::env::set_var(
@@ -1566,7 +1576,7 @@ mod tests {
         }
         let (_db, conn) = init_db().await.unwrap();
 
-        // Invalid FTS syntax — must not panic, falls back to LIKE gracefully.
+        // A query with SQL-ish tokens is treated as a literal substring — no panic.
         let result = search_nodes(&conn, "AND AND").await;
         assert!(result.is_ok());
     }

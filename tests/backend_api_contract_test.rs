@@ -114,6 +114,7 @@ async fn turso_reports_optional_capabilities_explicitly() {
     let backend = TursoStore::open().await.unwrap();
     let capabilities = backend.capabilities().await.unwrap();
     assert_eq!(capabilities.backend, "turso");
+    // Keyword search is correct (substring scan) even without native FTS.
     assert!(capabilities.keyword_search);
     assert_eq!(capabilities.documents, cfg!(feature = "documents"));
     assert_eq!(capabilities.vectors, cfg!(feature = "documents"));

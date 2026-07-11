@@ -196,6 +196,9 @@ pub async fn install_skills_from_dir<S: crate::api::v1::SkillStore>(
 }
 
 #[cfg(feature = "documents")]
+// Install + document-index in one pass: the store, document store, embedder,
+// and per-source install options are all genuinely distinct inputs.
+#[allow(clippy::too_many_arguments)]
 pub async fn install_skills_from_store<S, D, E>(
     store: &S,
     document_store: &D,
