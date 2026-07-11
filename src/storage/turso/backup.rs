@@ -18,10 +18,10 @@ use std::path::{Path, PathBuf};
 use tracing::{info, warn};
 use turso::{Builder, Connection, Database};
 
-use crate::backend::turso::constant::{
+use crate::paths::AsobiPaths;
+use crate::storage::turso::constant::{
     ENV_DATABASE_URL, SQL_INTEGRITY_CHECK, SQL_TABLE_EXISTS, SQL_VACUUM_INTO_TEMPLATE,
 };
-use crate::paths::AsobiPaths;
 
 /// Tables a valid Asobi snapshot must contain.
 const REQUIRED_TABLES: [&str; 2] = ["asobi_entities", "topics"];
@@ -31,12 +31,18 @@ const BACKUP_PREFIX: &str = "asobi";
 const PRE_RESTORE_PREFIX: &str = "pre-restore";
 
 /// The live database file the CLI operates on: `ASOBI_DATABASE_URL` if set,
-/// otherwise the resolved workspace `db_path()`. Backup and restore both go
-/// through this so they always target the same file as [`crate::backend::turso::db::init_db`].
+/// otherwise the Turso provider's own default state file inside the resolved
+/// workspace. Backup and restore both go through this so they always target the
+/// same file as [`crate::storage::turso::db::init_db`]. The default filename is
+/// owned by the provider, not by the shared workspace paths.
 pub fn effective_db_path() -> PathBuf {
     std::env::var(ENV_DATABASE_URL)
         .map(PathBuf::from)
-        .unwrap_or_else(|_| AsobiPaths::resolve().db_path())
+        .unwrap_or_else(|_| {
+            AsobiPaths::resolve()
+                .data_dir
+                .join(crate::storage::turso::db::DEFAULT_DATABASE_FILENAME)
+        })
 }
 
 /// Directory holding managed snapshots, co-located with the live DB so backups
@@ -303,7 +309,7 @@ mod tests {
     }
 
     async fn seed(conn: &Connection, name: &str) {
-        crate::backend::turso::db::create_entities(
+        crate::storage::turso::db::create_entities(
             conn,
             vec![EntityInput {
                 name: name.to_string(),
@@ -322,19 +328,19 @@ mod tests {
         let snap = dir.path().join("snap.db");
         set_db(&db_file);
 
-        let (db, conn) = crate::backend::turso::db::init_db().await.unwrap();
+        let (db, conn) = crate::storage::turso::db::init_db().await.unwrap();
         seed(&conn, "alpha").await;
 
         backup(&conn, Some(snap.clone()), 3).await.unwrap();
         assert!(snap.exists());
 
         // Mutate after the backup so a successful restore is observable.
-        crate::backend::turso::db::reset(&conn).await.unwrap();
+        crate::storage::turso::db::reset(&conn).await.unwrap();
 
         restore(db, conn, &snap, true).await.unwrap();
 
-        let (_db, conn) = crate::backend::turso::db::init_db().await.unwrap();
-        let graph = crate::backend::turso::db::open_nodes(&conn, vec!["alpha".to_string()])
+        let (_db, conn) = crate::storage::turso::db::init_db().await.unwrap();
+        let graph = crate::storage::turso::db::open_nodes(&conn, vec!["alpha".to_string()])
             .await
             .unwrap();
         assert_eq!(graph.entities.len(), 1, "restore did not bring back alpha");
@@ -348,7 +354,7 @@ mod tests {
         let snap = dir.path().join("snap.db");
         set_db(&db_file);
 
-        let (_db, conn) = crate::backend::turso::db::init_db().await.unwrap();
+        let (_db, conn) = crate::storage::turso::db::init_db().await.unwrap();
         backup(&conn, Some(snap.clone()), 3).await.unwrap();
 
         let err = backup(&conn, Some(snap), 3).await.unwrap_err();
@@ -363,7 +369,7 @@ mod tests {
         std::fs::write(&bogus, b"not a database").unwrap();
         set_db(&db_file);
 
-        let (db, conn) = crate::backend::turso::db::init_db().await.unwrap();
+        let (db, conn) = crate::storage::turso::db::init_db().await.unwrap();
         let err = restore(db, conn, &bogus, true).await.unwrap_err();
         assert!(err.to_string().contains("not a valid Asobi database"));
     }
@@ -375,7 +381,7 @@ mod tests {
         let snap = dir.path().join("snap.db");
         set_db(&db_file);
 
-        let (db, conn) = crate::backend::turso::db::init_db().await.unwrap();
+        let (db, conn) = crate::storage::turso::db::init_db().await.unwrap();
         seed(&conn, "alpha").await;
         backup(&conn, Some(snap.clone()), 3).await.unwrap();
 
@@ -404,7 +410,7 @@ mod tests {
             std::fs::write(bdir.join(name), b"old").unwrap();
         }
 
-        let (_db, conn) = crate::backend::turso::db::init_db().await.unwrap();
+        let (_db, conn) = crate::storage::turso::db::init_db().await.unwrap();
         // Default-location backup (output None) triggers retention.
         backup(&conn, None, 2).await.unwrap();
 
@@ -433,7 +439,7 @@ mod tests {
         let snap = dir.path().join("snap.db");
         set_db(&db_file);
 
-        let (_db, conn) = crate::backend::turso::db::init_db().await.unwrap();
+        let (_db, conn) = crate::storage::turso::db::init_db().await.unwrap();
         backup(&conn, Some(snap.clone()), 3).await.unwrap();
 
         let mode = std::fs::metadata(&snap).unwrap().permissions().mode();

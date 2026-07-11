@@ -1,7 +1,6 @@
 use anyhow::{Result, anyhow, bail};
 use std::collections::HashMap;
 use std::path::Path;
-use tracing::warn;
 use walkdir::WalkDir;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -56,6 +55,22 @@ pub fn derive_source_slug(url: &str) -> String {
     }
 
     crate::normalize::normalize_key(url)
+}
+
+/// When a skill file has no frontmatter `name:`, derive it from the filename
+/// stem — except for convention filenames (`SKILL.md`, `index.md`), where the
+/// skill's identity is the parent directory name.
+fn resolve_skill_name_fallback(path: &Path) -> String {
+    let file_stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+    if file_stem.eq_ignore_ascii_case("SKILL") || file_stem.eq_ignore_ascii_case("index") {
+        path.parent()
+            .and_then(|p| p.file_name())
+            .and_then(|n| n.to_str())
+            .unwrap_or(file_stem)
+            .to_string()
+    } else {
+        file_stem.to_string()
+    }
 }
 
 pub fn resolve_selection(
@@ -113,97 +128,51 @@ pub fn resolve_selection(
     }
 }
 
-pub async fn install_skills_from_dir<
-    #[cfg(feature = "documents")] E: crate::embed::EmbeddingProvider,
->(
-    conn: &turso::Connection,
+#[cfg(not(feature = "documents"))]
+pub async fn install_skills_from_dir<S: crate::api::v1::SkillStore>(
+    store: &S,
     dir_path: &Path,
     source: &str,
     version: &str,
     mode: SelectionMode,
     is_tty: bool,
     prune: bool,
-    #[cfg(feature = "documents")] vector_ctx: Option<(
-        &crate::backend::turso::vector::VectorStore,
-        &E,
-    )>,
 ) -> Result<()> {
     let mut parsed_skills = Vec::new();
     let mut skill_contents = HashMap::new();
-
     for entry in WalkDir::new(dir_path)
         .into_iter()
         .filter_map(|e| e.ok())
         .filter(|e| e.path().is_file() && e.path().extension().is_some_and(|ext| ext == "md"))
     {
-        let mut content = std::fs::read_to_string(entry.path())?;
-        content = content.replace("\r\n", "\n");
+        let mut content = std::fs::read_to_string(entry.path())?.replace("\r\n", "\n");
         if let Some((parsed_name, parsed_desc)) = parse_frontmatter(&content) {
-            let name = match parsed_name {
-                Some(n) => n,
-                None => {
-                    let file_stem = entry
-                        .path()
-                        .file_stem()
-                        .and_then(|s| s.to_str())
-                        .unwrap_or("");
-                    if file_stem.eq_ignore_ascii_case("SKILL")
-                        || file_stem.eq_ignore_ascii_case("index")
-                    {
-                        entry
-                            .path()
-                            .parent()
-                            .and_then(|p| p.file_name())
-                            .and_then(|n| n.to_str())
-                            .unwrap_or(file_stem)
-                            .to_string()
-                    } else {
-                        file_stem.to_string()
-                    }
-                }
-            };
-            let desc = parsed_desc.unwrap_or_default();
-            parsed_skills.push((name.clone(), desc));
-            skill_contents.insert(name, content);
-        } else {
-            // Check if it looks like it has frontmatter but is malformed
-            if content.starts_with("---\n") {
-                warn!("Malformed frontmatter in skill file {:?}", entry.path());
-            }
+            let name = parsed_name.unwrap_or_else(|| resolve_skill_name_fallback(entry.path()));
+            parsed_skills.push((name.clone(), parsed_desc.unwrap_or_default()));
+            skill_contents.insert(name, std::mem::take(&mut content));
         }
     }
-
     if parsed_skills.is_empty() {
         bail!("No valid skills found in {}", source);
     }
-
     let selected_names = resolve_selection(&parsed_skills, mode, is_tty)?;
     let slug = derive_source_slug(source);
-
-    // Sync mode (update / install --all): drop skills previously installed from
-    // this source that are no longer present upstream (deleted or renamed),
-    // so the graph mirrors the source. `--select` stays purely additive.
     if prune {
         let fresh: std::collections::HashSet<String> = selected_names
             .iter()
             .map(|n| crate::normalize::normalize_key(&format!("skill:{}:{}", slug, n)))
             .collect();
-        let orphans: Vec<String> = crate::backend::turso::db::list_skills(conn)
+        let orphans = store
+            .list_skills()
             .await?
             .into_iter()
             .filter(|s| derive_source_slug(&s.source) == slug && !fresh.contains(&s.entity_name))
             .map(|s| s.entity_name)
-            .collect();
+            .collect::<Vec<_>>();
         if !orphans.is_empty() {
-            warn!(
-                "Pruning {} orphaned skill(s) from {}",
-                orphans.len(),
-                source
-            );
-            crate::backend::turso::db::delete_entities(conn, orphans).await?;
+            store.remove_skills(orphans).await?;
         }
     }
-
     for name in selected_names {
         let body = skill_contents
             .remove(&name)
@@ -211,98 +180,129 @@ pub async fn install_skills_from_dir<
         let description = parsed_skills
             .iter()
             .find(|(n, _)| n == &name)
-            .map(|(_, d)| d.as_str())
-            .unwrap_or("");
-
-        let entity_name = crate::normalize::normalize_key(&format!("skill:{}:{}", slug, name));
-
-        crate::backend::turso::tx::immediate_transaction(conn, |tx| {
-            let entity_name = entity_name.clone();
-            let description = description.to_string();
-            let source = source.to_string();
-            let version = version.to_string();
-            let body = body.clone();
-            Box::pin(async move {
-                // 1. Create the entity
-                tx.execute(
-                    crate::backend::turso::constant::SQL_INSERT_ENTITY,
-                    turso::params![entity_name.clone(), "skill".to_string()],
-                )
-                .await?;
-
-                // 2. Set truths
-                tx.execute(
-                    crate::backend::turso::constant::SQL_UPSERT_TRUTH,
-                    turso::params![entity_name.clone(), "description".to_string(), description],
-                )
-                .await?;
-                tx.execute(
-                    crate::backend::turso::constant::SQL_UPSERT_TRUTH,
-                    turso::params![entity_name.clone(), "source".to_string(), source.clone()],
-                )
-                .await?;
-                tx.execute(
-                    crate::backend::turso::constant::SQL_UPSERT_TRUTH,
-                    turso::params![entity_name.clone(), "version".to_string(), version.clone()],
-                )
-                .await?;
-                tx.execute(
-                    crate::backend::turso::constant::SQL_UPSERT_TRUTH,
-                    turso::params![
-                        entity_name.clone(),
-                        "installed".to_string(),
-                        chrono::Utc::now().format("%Y-%m-%d").to_string()
-                    ],
-                )
-                .await?;
-
-                // 3. Upsert into asobi_skills
-                tx.execute(
-                    crate::backend::turso::constant::SQL_UPSERT_SKILL,
-                    turso::params![entity_name, body, source, version],
-                )
-                .await?;
-                Ok(())
+            .map(|(_, d)| d.clone())
+            .unwrap_or_default();
+        store
+            .upsert_skill(crate::api::v1::SkillRecord {
+                entity_name: crate::normalize::normalize_key(&format!("skill:{}:{}", slug, name)),
+                body,
+                source: source.to_string(),
+                version: version.to_string(),
+                description,
             })
-        })
-        .await?;
-
-        // 4. Chunk and embed into document store if available
-        #[cfg(feature = "documents")]
-        if let Some((store, embedder)) = vector_ctx {
-            // Delete old chunks for this topic before re-indexing
-            store.delete_by_topic(&entity_name).await?;
-            crate::backend::turso::db::delete_topic(conn, &entity_name).await?;
-
-            let texts = crate::chunk::chunk_text(&body, 512, 64);
-            if !texts.is_empty() {
-                let vectors = embedder.embed(&texts).await?;
-                let chunks: Vec<crate::backend::turso::vector::Chunk> = texts
-                    .into_iter()
-                    .zip(vectors)
-                    .enumerate()
-                    .map(|(i, (text, vector))| crate::backend::turso::vector::Chunk {
-                        id: uuid::Uuid::now_v7().to_string(),
-                        topic_id: entity_name.clone(),
-                        chunk_idx: i as u32,
-                        text,
-                        source: source.to_string(),
-                        vector,
-                    })
-                    .collect();
-                store.insert_chunks(chunks).await?;
-            }
-            crate::backend::turso::db::upsert_topic(conn, &entity_name, &name, source, &body)
-                .await?;
-        }
+            .await?;
     }
-
     Ok(())
 }
 
-#[cfg(test)]
+#[cfg(feature = "documents")]
+pub async fn install_skills_from_store<S, D, E>(
+    store: &S,
+    document_store: &D,
+    embedder: &E,
+    dir_path: &Path,
+    source: &str,
+    version: &str,
+    mode: SelectionMode,
+    is_tty: bool,
+    prune: bool,
+) -> Result<()>
+where
+    S: crate::api::v1::SkillStore,
+    D: crate::api::v1::DocumentStore,
+    E: crate::embed::EmbeddingProvider,
+{
+    let mut parsed_skills = Vec::new();
+    let mut skill_contents = HashMap::new();
+    for entry in WalkDir::new(dir_path)
+        .into_iter()
+        .filter_map(|e| e.ok())
+        .filter(|e| e.path().is_file() && e.path().extension().is_some_and(|ext| ext == "md"))
+    {
+        let content = std::fs::read_to_string(entry.path())?.replace("\r\n", "\n");
+        if let Some((parsed_name, parsed_desc)) = parse_frontmatter(&content) {
+            let name = parsed_name.unwrap_or_else(|| resolve_skill_name_fallback(entry.path()));
+            parsed_skills.push((name.clone(), parsed_desc.unwrap_or_default()));
+            skill_contents.insert(name, content);
+        }
+    }
+    if parsed_skills.is_empty() {
+        bail!("No valid skills found in {}", source);
+    }
+    let selected_names = resolve_selection(&parsed_skills, mode, is_tty)?;
+    let slug = derive_source_slug(source);
+    if prune {
+        let fresh: std::collections::HashSet<String> = selected_names
+            .iter()
+            .map(|n| crate::normalize::normalize_key(&format!("skill:{}:{}", slug, n)))
+            .collect();
+        let orphans = store
+            .list_skills()
+            .await?
+            .into_iter()
+            .filter(|s| derive_source_slug(&s.source) == slug && !fresh.contains(&s.entity_name))
+            .map(|s| s.entity_name)
+            .collect::<Vec<_>>();
+        if !orphans.is_empty() {
+            store.remove_skills(orphans).await?;
+        }
+    }
+    for name in selected_names {
+        let body = skill_contents
+            .remove(&name)
+            .ok_or_else(|| anyhow!("Content missing for skill {}", name))?;
+        let description = parsed_skills
+            .iter()
+            .find(|(n, _)| n == &name)
+            .map(|(_, d)| d.clone())
+            .unwrap_or_default();
+        let entity_name = crate::normalize::normalize_key(&format!("skill:{}:{}", slug, name));
+        store
+            .upsert_skill(crate::api::v1::SkillRecord {
+                entity_name: entity_name.clone(),
+                body: body.clone(),
+                source: source.to_string(),
+                version: version.to_string(),
+                description,
+            })
+            .await?;
+
+        document_store.delete_chunks_by_topic(&entity_name).await?;
+        let texts = crate::chunk::chunk_text(&body, 512, 64);
+        if !texts.is_empty() {
+            let vectors = embedder.embed(&texts).await?;
+            let chunks = texts
+                .into_iter()
+                .zip(vectors)
+                .enumerate()
+                .map(|(i, (text, embedding))| crate::api::v1::DocumentChunk {
+                    id: uuid::Uuid::now_v7().to_string(),
+                    topic_id: entity_name.clone(),
+                    chunk_idx: i as u32,
+                    text,
+                    source: source.to_string(),
+                    embedding,
+                })
+                .collect();
+            document_store.insert_chunks(chunks).await?;
+        }
+        document_store
+            .upsert_topic(crate::api::v1::TopicSnapshot {
+                id: entity_name,
+                title: name,
+                file_path: source.to_string(),
+                body,
+            })
+            .await?;
+    }
+    Ok(())
+}
+
+#[cfg(all(test, not(feature = "documents")))]
 mod tests {
     use super::*;
+    use crate::api::v1::SkillStore;
+    use crate::storage::Storage;
 
     #[test]
     fn test_parse_frontmatter_valid() {
@@ -437,11 +437,11 @@ mod tests {
         let db_dir = tempdir().unwrap();
         unsafe {
             std::env::set_var(
-                crate::backend::turso::db::ENV_DATABASE_URL,
+                crate::paths::ENV_DATABASE_URL,
                 db_dir.path().join("test.db").to_str().unwrap(),
             );
         }
-        let (_db, conn) = crate::backend::turso::db::init_db().await.unwrap();
+        let storage = Storage::open_default().await.unwrap();
 
         // 5. Clone and install
         let clone_temp_dir = tempdir().unwrap();
@@ -454,24 +454,19 @@ mod tests {
             .unwrap();
 
         install_skills_from_dir(
-            &conn,
+            &storage,
             clone_path,
             repo_path.to_str().unwrap(),
             &head_commit,
             SelectionMode::All,
             false,
             true,
-            #[cfg(feature = "documents")]
-            None::<(
-                &crate::backend::turso::vector::VectorStore,
-                &crate::embed::fastembed_provider::FastEmbedProvider,
-            )>,
         )
         .await
         .unwrap();
 
         // 6. Verify skill installed
-        let skills = crate::backend::turso::db::list_skills(&conn).await.unwrap();
+        let skills = storage.list_skills().await.unwrap();
         assert_eq!(skills.len(), 1);
         assert_eq!(
             skills[0].entity_name,
@@ -549,15 +544,11 @@ mod tests {
         let db_dir = tempdir().unwrap();
         unsafe {
             std::env::set_var(
-                crate::backend::turso::db::ENV_DATABASE_URL,
+                crate::paths::ENV_DATABASE_URL,
                 db_dir.path().join("test.db").to_str().unwrap(),
             );
         }
-        let (db, conn) = crate::backend::turso::db::init_db().await.unwrap();
-        let backend = crate::backend::TursoBackend::from_parts(db, conn.clone());
-
-        // Initialize VectorStore and FakeEmbedder
-        let store = crate::backend::turso::vector::VectorStore::new_with_dim(conn.clone(), 384);
+        let storage = Storage::open_default().await.unwrap();
 
         struct FakeEmbedder(usize);
         impl crate::embed::EmbeddingProvider for FakeEmbedder {
@@ -580,21 +571,22 @@ mod tests {
             .status()
             .unwrap();
 
-        install_skills_from_dir(
-            &conn,
+        install_skills_from_store(
+            &storage,
+            &storage,
+            &embedder,
             clone_path,
             repo_path.to_str().unwrap(),
             &head_commit,
             SelectionMode::All,
             false,
             true,
-            Some((&store, &embedder)),
         )
         .await
         .unwrap();
 
         // 6. Verify skill is queryable via recall
-        let results = crate::recall::recall("cryptography", &backend, &embedder, 5)
+        let results = crate::recall::recall("cryptography", &storage, &embedder, 5)
             .await
             .unwrap();
         assert!(!results.is_empty(), "expected skill to be queryable");
@@ -629,60 +621,28 @@ mod tests {
         let db_dir = tempdir().unwrap();
         unsafe {
             std::env::set_var(
-                crate::backend::turso::db::ENV_DATABASE_URL,
+                crate::paths::ENV_DATABASE_URL,
                 db_dir.path().join("test.db").to_str().unwrap(),
             );
         }
-        let (_db, conn) = crate::backend::turso::db::init_db().await.unwrap();
+        let storage = Storage::open_default().await.unwrap();
 
         let source = src.to_str().unwrap();
         let slug = derive_source_slug(source);
 
-        install_skills_from_dir(
-            &conn,
-            src,
-            source,
-            "v1",
-            SelectionMode::All,
-            false,
-            true,
-            #[cfg(feature = "documents")]
-            None::<(
-                &crate::backend::turso::vector::VectorStore,
-                &crate::embed::fastembed_provider::FastEmbedProvider,
-            )>,
-        )
-        .await
-        .unwrap();
-        assert_eq!(
-            crate::backend::turso::db::list_skills(&conn)
-                .await
-                .unwrap()
-                .len(),
-            2
-        );
+        install_skills_from_dir(&storage, src, source, "v1", SelectionMode::All, false, true)
+            .await
+            .unwrap();
+        assert_eq!(storage.list_skills().await.unwrap().len(), 2);
 
         // Upstream removes `beta`; a sync (install --all) must prune it.
         std::fs::remove_file(src.join("beta.md")).unwrap();
 
-        install_skills_from_dir(
-            &conn,
-            src,
-            source,
-            "v2",
-            SelectionMode::All,
-            false,
-            true,
-            #[cfg(feature = "documents")]
-            None::<(
-                &crate::backend::turso::vector::VectorStore,
-                &crate::embed::fastembed_provider::FastEmbedProvider,
-            )>,
-        )
-        .await
-        .unwrap();
+        install_skills_from_dir(&storage, src, source, "v2", SelectionMode::All, false, true)
+            .await
+            .unwrap();
 
-        let skills = crate::backend::turso::db::list_skills(&conn).await.unwrap();
+        let skills = storage.list_skills().await.unwrap();
         assert_eq!(skills.len(), 1);
         let alpha = crate::normalize::normalize_key(&format!("skill:{}:alpha", slug));
         assert_eq!(skills[0].entity_name, alpha);
@@ -709,40 +669,29 @@ mod tests {
         let db_dir = tempdir().unwrap();
         unsafe {
             std::env::set_var(
-                crate::backend::turso::db::ENV_DATABASE_URL,
+                crate::paths::ENV_DATABASE_URL,
                 db_dir.path().join("test.db").to_str().unwrap(),
             );
         }
-        let (_db, conn) = crate::backend::turso::db::init_db().await.unwrap();
+        let storage = Storage::open_default().await.unwrap();
         let source = src.to_str().unwrap();
 
         // Install only alpha, then only beta — both must survive (additive).
         for name in ["alpha", "beta"] {
             install_skills_from_dir(
-                &conn,
+                &storage,
                 src,
                 source,
                 "v1",
                 SelectionMode::Select(vec![name.to_string()]),
                 false,
                 false,
-                #[cfg(feature = "documents")]
-                None::<(
-                    &crate::backend::turso::vector::VectorStore,
-                    &crate::embed::fastembed_provider::FastEmbedProvider,
-                )>,
             )
             .await
             .unwrap();
         }
 
-        assert_eq!(
-            crate::backend::turso::db::list_skills(&conn)
-                .await
-                .unwrap()
-                .len(),
-            2
-        );
+        assert_eq!(storage.list_skills().await.unwrap().len(), 2);
     }
 
     #[tokio::test]
@@ -820,11 +769,11 @@ mod tests {
         let db_dir = tempdir().unwrap();
         unsafe {
             std::env::set_var(
-                crate::backend::turso::db::ENV_DATABASE_URL,
+                crate::paths::ENV_DATABASE_URL,
                 db_dir.path().join("test.db").to_str().unwrap(),
             );
         }
-        let (_db, conn) = crate::backend::turso::db::init_db().await.unwrap();
+        let storage = Storage::open_default().await.unwrap();
 
         // 5. Clone and install
         let clone_temp_dir = tempdir().unwrap();
@@ -837,24 +786,19 @@ mod tests {
             .unwrap();
 
         install_skills_from_dir(
-            &conn,
+            &storage,
             clone_path,
             repo_path.to_str().unwrap(),
             &head_commit,
             SelectionMode::All,
             false,
             true,
-            #[cfg(feature = "documents")]
-            None::<(
-                &crate::backend::turso::vector::VectorStore,
-                &crate::embed::fastembed_provider::FastEmbedProvider,
-            )>,
         )
         .await
         .unwrap();
 
         // 6. Verify skills installed correctly with fallbacks
-        let skills = crate::backend::turso::db::list_skills(&conn).await.unwrap();
+        let skills = storage.list_skills().await.unwrap();
         assert_eq!(skills.len(), 2);
 
         let slug = derive_source_slug(repo_path.to_str().unwrap());

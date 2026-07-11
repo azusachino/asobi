@@ -7,7 +7,6 @@ use std::fmt::Write as _;
 use std::io::Write as _;
 use std::path::PathBuf;
 use std::time::{Duration, SystemTime};
-use turso::params;
 
 pub async fn sync_graph_to_markdown(
     graph_store: &impl GraphStore,
@@ -239,62 +238,13 @@ pub fn prune_old_sessions(topics_root: &str, days: u32) -> Result<usize> {
 /// Fetch all topic title embeddings and cluster by similarity.
 /// Returns clusters of topic IDs with pairwise cosine similarity > threshold.
 pub async fn find_duplicate_clusters(
-    store: &crate::backend::turso::vector::VectorStore,
-    conn: &turso::Connection,
-    threshold: f32,
+    _store: &impl crate::api::v1::DocumentMaintenanceStore,
+    _threshold: f32,
 ) -> anyhow::Result<Vec<Vec<String>>> {
-    // Get all topic IDs
-    let mut rows = conn
-        .query(
-            crate::backend::turso::constant::SQL_SELECT_ALL_TOPIC_IDS,
-            (),
-        )
-        .await?;
-    let mut topic_ids = Vec::new();
-    while let Some(row) = rows.next().await? {
-        topic_ids.push(row.get::<String>(0)?);
-    }
-
-    let mut clusters: Vec<Vec<String>> = Vec::new();
-    let mut clustered: std::collections::HashSet<String> = std::collections::HashSet::new();
-
-    for id in &topic_ids {
-        if clustered.contains(id) {
-            continue;
-        }
-
-        // Fetch representative vector for this topic (first chunk)
-        let mut rows = conn
-            .query(
-                "SELECT embedding FROM chunks WHERE topic_id = ?1 LIMIT 1",
-                params![id.clone()],
-            )
-            .await?;
-
-        if let Some(row) = rows.next().await? {
-            let blob: Vec<u8> = row.get(0)?;
-            // Turso vector32 values are stored as little-endian f32s.
-            let vector: Vec<f32> = blob
-                .chunks_exact(4)
-                .map(|c| f32::from_le_bytes(c.try_into().unwrap()))
-                .collect();
-
-            let similar = store.search(&vector, 10).await?;
-            let mut cluster = vec![id.clone()];
-            for s in similar {
-                if s.score >= threshold && s.topic_id != *id && !clustered.contains(&s.topic_id) {
-                    cluster.push(s.topic_id.clone());
-                    clustered.insert(s.topic_id.clone());
-                }
-            }
-
-            if cluster.len() > 1 {
-                clustered.insert(id.clone());
-                clusters.push(cluster);
-            }
-        }
-    }
-    Ok(clusters)
+    _store
+        .find_duplicate_clusters(_threshold)
+        .await
+        .map_err(Into::into)
 }
 
 #[cfg(test)]
@@ -341,66 +291,23 @@ mod tests {
         assert!(!should_sync("skill"));
     }
 
-    #[tokio::test]
-    async fn test_find_duplicate_clusters_round_trips_vector32_blob() {
-        let dir = tempdir().unwrap();
-        let db_path = dir.path().join("compact-vectors.db");
-        unsafe {
-            std::env::set_var(
-                crate::backend::turso::db::ENV_DATABASE_URL,
-                db_path.to_str().unwrap(),
-            );
+    struct FakeMaintenance;
+
+    impl crate::api::v1::DocumentMaintenanceStore for FakeMaintenance {
+        async fn find_duplicate_clusters(
+            &self,
+            _threshold: f32,
+        ) -> crate::api::v1::ApiResult<Vec<Vec<String>>> {
+            Ok(vec![vec!["topic-a".into(), "topic-b".into()]])
         }
-        let (_db, conn) = crate::backend::turso::db::init_db().await.unwrap();
-        conn.execute(
-            "INSERT INTO topics (id, title, file_path, body) VALUES ('topic-a', 'A', 'a.md', ''), ('topic-b', 'B', 'b.md', '')",
-            (),
-        )
-        .await
-        .unwrap();
+    }
 
-        let dim = 384;
-        let mut vector = vec![0.0f32; dim];
-        vector[0] = 1.0;
-        let store = crate::backend::turso::vector::VectorStore::new(conn.clone());
-        store
-            .insert_chunks(vec![
-                crate::backend::turso::vector::Chunk {
-                    id: "chunk-a".into(),
-                    topic_id: "topic-a".into(),
-                    chunk_idx: 0,
-                    text: "a".into(),
-                    source: "a.md".into(),
-                    vector: vector.clone(),
-                },
-                crate::backend::turso::vector::Chunk {
-                    id: "chunk-b".into(),
-                    topic_id: "topic-b".into(),
-                    chunk_idx: 0,
-                    text: "b".into(),
-                    source: "b.md".into(),
-                    vector: vector.clone(),
-                },
-            ])
+    #[tokio::test]
+    async fn test_find_duplicate_clusters_uses_storage_capability() {
+        let clusters = find_duplicate_clusters(&FakeMaintenance, 0.99)
             .await
             .unwrap();
-
-        let mut rows = conn
-            .query("SELECT embedding FROM chunks WHERE id = 'chunk-a'", ())
-            .await
-            .unwrap();
-        let blob: Vec<u8> = rows.next().await.unwrap().unwrap().get(0).unwrap();
-        let decoded: Vec<f32> = blob
-            .chunks_exact(4)
-            .map(|chunk| f32::from_le_bytes(chunk.try_into().unwrap()))
-            .collect();
-        assert_eq!(decoded.len(), dim);
-        assert_eq!(decoded[0], 1.0);
-        assert_eq!(decoded[1], 0.0);
-
-        let clusters = find_duplicate_clusters(&store, &conn, 0.99).await.unwrap();
-        assert_eq!(clusters.len(), 1);
-        assert_eq!(clusters[0], vec!["topic-a", "topic-b"]);
+        assert_eq!(clusters, vec![vec!["topic-a", "topic-b"]]);
     }
 
     fn entity(name: &str, entity_type: &str) -> EntityOutput {

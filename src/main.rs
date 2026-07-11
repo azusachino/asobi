@@ -1,8 +1,9 @@
 use anyhow::Result;
-use asobi::api::{GraphStore, MaintenanceStore, OpenNodes, SearchQuery, SearchStore, Stats};
-use asobi::backend::TursoBackend;
-#[cfg(feature = "documents")]
-use asobi::embed::EmbeddingProvider;
+use asobi::api::{
+    BackupStore, GraphStore, MaintenanceStore, OpenNodes, SearchQuery, SearchStore, SkillStore,
+    Stats,
+};
+use asobi::application::AsobiRuntime;
 use asobi::paths::AsobiPaths;
 use clap::{Parser, Subcommand};
 #[cfg(feature = "documents")]
@@ -111,7 +112,7 @@ enum Commands {
         /// Search query terms
         query: Option<String>,
         /// Maximum number of matched nodes to return
-        #[arg(long, default_value_t = asobi::backend::turso::db::DEFAULT_SEARCH_LIMIT)]
+        #[arg(long, default_value_t = 10)]
         limit: usize,
         /// Filter by entity truths: `--where KEY=VALUE` (repeatable)
         #[arg(long = "where", value_name = "KEY=VALUE")]
@@ -247,27 +248,13 @@ pub const ENV_FASTEMBED_CACHE_DIR: &str = "ASOBI_FASTEMBED_CACHE_DIR";
 pub const ENV_TOPICS_DIR: &str = "ASOBI_TOPICS_DIR";
 
 #[cfg(feature = "documents")]
-async fn init_vector(
-    conn: turso::Connection,
-    paths: &AsobiPaths,
-) -> Result<(
-    asobi::backend::turso::vector::VectorStore,
-    Arc<asobi::embed::FastEmbedProvider>,
-)> {
-    let store = asobi::backend::turso::vector::VectorStore::new(conn);
+fn init_embedder(paths: &AsobiPaths) -> Result<Arc<asobi::embed::FastEmbedProvider>> {
     let cache_dir = std::env::var(ENV_FASTEMBED_CACHE_DIR)
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|_| paths.data_dir.join("fastembed_cache"));
     let embedder: Arc<asobi::embed::FastEmbedProvider> =
         Arc::new(asobi::embed::FastEmbedProvider::new(cache_dir)?);
-    if store.dim() != embedder.dim() {
-        anyhow::bail!(
-            "Vector store dimension mismatch: store={}, embedder={}",
-            store.dim(),
-            embedder.dim()
-        );
-    }
-    Ok((store, embedder))
+    Ok(embedder)
 }
 
 /// Initialise the global tracing subscriber. Logs go to **stderr** so the
@@ -436,9 +423,8 @@ async fn run_cli(cli: Cli) -> Result<()> {
     }
 
     let paths = AsobiPaths::resolve();
-    let (db, conn) = asobi::backend::turso::db::init_db().await?;
-    let backend = TursoBackend::from_parts(db, conn);
-    let conn = backend.connection();
+    let runtime = AsobiRuntime::open_default().await?;
+    let backend = runtime.storage();
 
     // Vector store + embedder are only initialised for commands that need them.
     // Graph-only operations (new, graph, etc.) skip the heavy
@@ -446,25 +432,25 @@ async fn run_cli(cli: Cli) -> Result<()> {
     if needs_vector(&cli.command) {
         #[cfg(feature = "documents")]
         {
-            let (store, embedder) = init_vector(conn.clone(), &paths).await?;
+            let embedder = init_embedder(&paths)?;
             match cli.command {
                 Commands::Ingest { path } => {
                     let p = std::path::Path::new(&path);
                     if p.is_dir() {
                         info!("Ingesting directory: {:?}...", p);
                         let count =
-                            asobi::ingest::ingest_dir(p, &backend, embedder.as_ref()).await?;
+                            asobi::ingest::ingest_dir(p, backend, embedder.as_ref()).await?;
                         info!("Done. Ingested {} files.", count);
                     } else {
                         info!("Ingesting file: {:?}...", p);
-                        asobi::ingest::ingest_file(p, &backend, embedder.as_ref()).await?;
+                        asobi::ingest::ingest_file(p, backend, embedder.as_ref()).await?;
                         info!("Done.");
                     }
                 }
                 Commands::Query { query, limit, json } => {
                     info!("Searching: {}...", query);
                     let results =
-                        asobi::recall::recall(&query, &backend, embedder.as_ref(), limit).await?;
+                        asobi::recall::recall(&query, backend, embedder.as_ref(), limit).await?;
                     if json {
                         println!("{}", serde_json::to_string_pretty(&results)?);
                     } else if results.is_empty() {
@@ -484,20 +470,16 @@ async fn run_cli(cli: Cli) -> Result<()> {
                     let pruned = asobi::compact::prune_old_sessions(&topics_root, older_than)?;
                     info!("Pruned {} old session files.", pruned);
 
-                    let clusters =
-                        asobi::compact::find_duplicate_clusters(&store, store.conn(), 0.85).await?;
+                    let clusters = asobi::compact::find_duplicate_clusters(backend, 0.85).await?;
                     info!("Found {} near-duplicate topic clusters.", clusters.len());
                     for (i, cluster) in clusters.iter().enumerate() {
                         info!("  Cluster {}: {}", i + 1, cluster.join(", "));
                     }
 
                     info!("Syncing Graph to Markdown...");
-                    let synced = asobi::compact::sync_graph_to_markdown(
-                        &backend,
-                        &backend,
-                        embedder.as_ref(),
-                    )
-                    .await?;
+                    let synced =
+                        asobi::compact::sync_graph_to_markdown(backend, backend, embedder.as_ref())
+                            .await?;
                     info!("Done. Synced {} entities to Markdown.", synced);
                 }
                 _ => unreachable!(),
@@ -530,7 +512,7 @@ async fn run_cli(cli: Cli) -> Result<()> {
             backend.create_entities(entities).await?;
             info!("{} entit{} created.", names.len(), plural(names.len()));
             if json {
-                emit_nodes(&backend, names).await?;
+                emit_nodes(backend, names).await?;
             }
         }
         Commands::Link { triples } => {
@@ -556,19 +538,15 @@ async fn run_cli(cli: Cli) -> Result<()> {
             backend.create_relations(relations).await?;
             info!("{} relation{} created.", count, suffix(count));
             if json {
-                emit_nodes(&backend, involved).await?;
+                emit_nodes(backend, involved).await?;
             }
         }
         Commands::Obs { name, contents } => {
             let paths = asobi::paths::AsobiPaths::resolve();
-            let limit = std::env::var(asobi::backend::turso::constant::ENV_OBSERVATION_LIMIT)
+            let limit = std::env::var("ASOBI_OBSERVATION_LIMIT")
                 .ok()
                 .and_then(|v| v.parse::<usize>().ok())
-                .unwrap_or(
-                    paths
-                        .observation_limit
-                        .unwrap_or(asobi::backend::turso::constant::DEFAULT_OBSERVATION_LIMIT),
-                );
+                .unwrap_or(paths.observation_limit.unwrap_or(200));
             backend
                 .add_observations(
                     vec![asobi::model::ObservationInput {
@@ -580,21 +558,21 @@ async fn run_cli(cli: Cli) -> Result<()> {
                 .await?;
             info!("Observation added.");
             if json {
-                emit_nodes(&backend, vec![name]).await?;
+                emit_nodes(backend, vec![name]).await?;
             }
         }
         Commands::Truth { name, key, value } => {
             backend.truth_upsert(&name, &key, &value).await?;
             info!("Truth added.");
             if json {
-                emit_nodes(&backend, vec![name]).await?;
+                emit_nodes(backend, vec![name]).await?;
             }
         }
         Commands::RmTruth { name, key } => {
             backend.truth_delete(&name, &key).await?;
             info!("Truth deleted.");
             if json {
-                emit_nodes(&backend, vec![name]).await?;
+                emit_nodes(backend, vec![name]).await?;
             }
         }
         Commands::Rm { names } => {
@@ -627,7 +605,7 @@ async fn run_cli(cli: Cli) -> Result<()> {
             }
             info!("Observations deleted.");
             if json {
-                emit_nodes(&backend, vec![name]).await?;
+                emit_nodes(backend, vec![name]).await?;
             }
         }
         Commands::UpdateObs {
@@ -653,7 +631,7 @@ async fn run_cli(cli: Cli) -> Result<()> {
             }
             info!("Observation updated.");
             if json {
-                emit_nodes(&backend, vec![name]).await?;
+                emit_nodes(backend, vec![name]).await?;
             }
         }
         Commands::Unlink {
@@ -670,7 +648,7 @@ async fn run_cli(cli: Cli) -> Result<()> {
                 .await?;
             info!("Relations deleted.");
             if json {
-                emit_nodes(&backend, vec![from, to]).await?;
+                emit_nodes(backend, vec![from, to]).await?;
             }
         }
         Commands::Graph => {
@@ -715,15 +693,8 @@ async fn run_cli(cli: Cli) -> Result<()> {
             println!("{}", serde_json::to_string_pretty(&graph)?);
         }
         Commands::Stats { per_entity } => {
-            let paths = asobi::paths::AsobiPaths::resolve();
-            let db_path = std::env::var(asobi::backend::turso::constant::ENV_DATABASE_URL)
-                .unwrap_or_else(|_| paths.db_path().to_str().unwrap().to_string());
-            let mut rows = conn.query("PRAGMA journal_mode", ()).await?;
-            let journal_mode = if let Some(row) = rows.next().await? {
-                row.get::<String>(0)?
-            } else {
-                "unknown".to_string()
-            };
+            let db_path = "provider-managed";
+            let journal_mode = "provider-managed";
 
             let Stats {
                 entities,
@@ -741,13 +712,10 @@ async fn run_cli(cli: Cli) -> Result<()> {
 
                 if per_entity {
                     let paths = asobi::paths::AsobiPaths::resolve();
-                    let limit =
-                        std::env::var(asobi::backend::turso::constant::ENV_OBSERVATION_LIMIT)
-                            .ok()
-                            .and_then(|v| v.parse::<usize>().ok())
-                            .unwrap_or(paths.observation_limit.unwrap_or(
-                                asobi::backend::turso::constant::DEFAULT_OBSERVATION_LIMIT,
-                            ));
+                    let limit = std::env::var("ASOBI_OBSERVATION_LIMIT")
+                        .ok()
+                        .and_then(|v| v.parse::<usize>().ok())
+                        .unwrap_or(paths.observation_limit.unwrap_or(200));
 
                     let list = backend.stats_per_entity().await?;
                     let detailed: Vec<serde_json::Value> = list
@@ -781,13 +749,10 @@ async fn run_cli(cli: Cli) -> Result<()> {
 
                 if per_entity {
                     let paths = asobi::paths::AsobiPaths::resolve();
-                    let limit =
-                        std::env::var(asobi::backend::turso::constant::ENV_OBSERVATION_LIMIT)
-                            .ok()
-                            .and_then(|v| v.parse::<usize>().ok())
-                            .unwrap_or(paths.observation_limit.unwrap_or(
-                                asobi::backend::turso::constant::DEFAULT_OBSERVATION_LIMIT,
-                            ));
+                    let limit = std::env::var("ASOBI_OBSERVATION_LIMIT")
+                        .ok()
+                        .and_then(|v| v.parse::<usize>().ok())
+                        .unwrap_or(paths.observation_limit.unwrap_or(200));
 
                     let list = backend.stats_per_entity().await?;
                     if !list.is_empty() {
@@ -837,7 +802,7 @@ async fn run_cli(cli: Cli) -> Result<()> {
             let json = serde_json::to_string_pretty(&graph)?;
             if let Some(path) = output {
                 std::fs::write(&path, json)?;
-                asobi::backup::restrict_permissions(std::path::Path::new(&path), 0o600)?;
+                asobi::application::restrict_permissions(std::path::Path::new(&path), 0o600)?;
                 info!("Graph exported to {}", path);
             } else {
                 println!("{}", json);
@@ -849,7 +814,7 @@ async fn run_cli(cli: Cli) -> Result<()> {
 
             let had_entities = !graph.entities.is_empty();
             let had_relations = !graph.relations.is_empty();
-            import_graph(&backend, graph).await?;
+            import_graph(backend, graph).await?;
             if had_entities {
                 info!("Imported entities, observations, and truths.");
             }
@@ -874,25 +839,30 @@ async fn run_cli(cli: Cli) -> Result<()> {
             info!("Knowledge graph reset successfully.");
         }
         Commands::Backup { output, keep } => {
-            let dest =
-                asobi::backup::backup(conn, output.map(std::path::PathBuf::from), keep).await?;
-            info!("Backup written to {}", dest.display());
+            let receipt = backend
+                .backup(asobi::api::v1::BackupRequest {
+                    destination: output.map(std::path::PathBuf::from).unwrap_or_default(),
+                    keep,
+                })
+                .await?;
+            info!("Backup written to {}", receipt.path.display());
         }
         Commands::Restore { file, force } => {
-            let (db, conn) = backend.into_parts();
-            asobi::backup::restore(db, conn, std::path::Path::new(&file), force).await?;
+            backend
+                .restore(std::path::PathBuf::from(file), force)
+                .await?;
         }
         Commands::Skills { subcommand } => {
             use std::io::IsTerminal;
             match subcommand {
                 None => {
-                    let skills = asobi::backend::turso::db::list_skills(conn).await?;
+                    let skills = backend.list_skills().await?;
                     if skills.is_empty() {
                         println!("No skills installed.");
                     } else {
                         let mut grouped: std::collections::BTreeMap<
                             String,
-                            Vec<asobi::backend::turso::db::SkillRow>,
+                            Vec<asobi::api::v1::SkillRecord>,
                         > = std::collections::BTreeMap::new();
                         for s in skills {
                             grouped.entry(s.source.clone()).or_default().push(s);
@@ -944,24 +914,34 @@ async fn run_cli(cli: Cli) -> Result<()> {
                     let is_tty = std::io::stdin().is_terminal();
 
                     #[cfg(feature = "documents")]
-                    let (store, embedder) = init_vector(conn.clone(), &paths).await?;
-                    #[cfg(feature = "documents")]
-                    let vector_ctx = Some((&store, embedder.as_ref()));
+                    let embedder = init_embedder(&paths)?;
 
                     // `--all` is a full sync of the source: prune skills that
                     // vanished upstream. `--select` / interactive stay additive.
                     let prune = matches!(mode, asobi::skills::SelectionMode::All);
 
-                    asobi::skills::install_skills_from_dir(
-                        conn,
+                    #[cfg(feature = "documents")]
+                    asobi::skills::install_skills_from_store(
+                        backend,
+                        backend,
+                        embedder.as_ref(),
                         &target_path,
                         &git_url,
                         &version,
                         mode,
                         is_tty,
                         prune,
-                        #[cfg(feature = "documents")]
-                        vector_ctx,
+                    )
+                    .await?;
+                    #[cfg(not(feature = "documents"))]
+                    asobi::skills::install_skills_from_dir(
+                        backend,
+                        &target_path,
+                        &git_url,
+                        &version,
+                        mode,
+                        is_tty,
+                        prune,
                     )
                     .await?;
 
@@ -969,11 +949,9 @@ async fn run_cli(cli: Cli) -> Result<()> {
                 }
                 Some(SkillsCommands::Update { source }) => {
                     #[cfg(feature = "documents")]
-                    let (store, embedder) = init_vector(conn.clone(), &paths).await?;
-                    #[cfg(feature = "documents")]
-                    let vector_ctx = Some((&store, embedder.as_ref()));
+                    let embedder = init_embedder(&paths)?;
 
-                    let skills = asobi::backend::turso::db::list_skills(conn).await?;
+                    let skills = backend.list_skills().await?;
                     let mut unique_sources = std::collections::HashSet::new();
                     for s in skills {
                         if let Some(ref filter_src) = source {
@@ -1023,23 +1001,35 @@ async fn run_cli(cli: Cli) -> Result<()> {
                             (local_path.to_path_buf(), "local".to_string())
                         };
 
-                        asobi::skills::install_skills_from_dir(
-                            conn,
+                        #[cfg(feature = "documents")]
+                        asobi::skills::install_skills_from_store(
+                            backend,
+                            backend,
+                            embedder.as_ref(),
                             &target_path,
                             &git_url,
                             &version,
                             asobi::skills::SelectionMode::All,
                             false,
                             true,
-                            #[cfg(feature = "documents")]
-                            vector_ctx,
+                        )
+                        .await?;
+                        #[cfg(not(feature = "documents"))]
+                        asobi::skills::install_skills_from_dir(
+                            backend,
+                            &target_path,
+                            &git_url,
+                            &version,
+                            asobi::skills::SelectionMode::All,
+                            false,
+                            true,
                         )
                         .await?;
                         info!("Successfully updated skills from {}.", src);
                     }
                 }
                 Some(SkillsCommands::Remove { target }) => {
-                    let skills = asobi::backend::turso::db::list_skills(conn).await?;
+                    let skills = backend.list_skills().await?;
                     let mut entities_to_delete = Vec::new();
                     for s in skills {
                         let slug = asobi::skills::derive_source_slug(&s.source);
@@ -1050,11 +1040,11 @@ async fn run_cli(cli: Cli) -> Result<()> {
 
                     if !entities_to_delete.is_empty() {
                         info!("Deleting {} skill entities...", entities_to_delete.len());
-                        backend.delete_entities(entities_to_delete).await?;
+                        backend.remove_skills(entities_to_delete).await?;
                         info!("Skills removed successfully.");
                     } else if target.starts_with("skill:") {
                         info!("Deleting skill entity {}...", target);
-                        backend.delete_entities(vec![target.clone()]).await?;
+                        backend.remove_skills(vec![target.clone()]).await?;
                         info!("Skills removed successfully.");
                     } else {
                         anyhow::bail!("No installed skills found matching target {:?}", target);
@@ -1063,7 +1053,7 @@ async fn run_cli(cli: Cli) -> Result<()> {
                 Some(SkillsCommands::Show { name }) => {
                     let mut entity_name = name.clone();
                     if !entity_name.starts_with("skill:") {
-                        let skills = asobi::backend::turso::db::list_skills(conn).await?;
+                        let skills = backend.list_skills().await?;
                         let matches: Vec<_> = skills
                             .iter()
                             .filter(|s| {
@@ -1089,7 +1079,7 @@ async fn run_cli(cli: Cli) -> Result<()> {
                         }
                     }
 
-                    match asobi::backend::turso::db::skill_body(conn, &entity_name).await? {
+                    match backend.skill_body(&entity_name).await? {
                         Some(body) => {
                             print!("{}", body);
                         }
@@ -1182,8 +1172,9 @@ fn print_init_report(report: &asobi::init::InitReport) {
 
 #[cfg(test)]
 mod tests {
-    use super::{TursoBackend, import_graph, validate_git_url};
+    use super::{import_graph, validate_git_url};
     use asobi::api::{GraphStore, MaintenanceStore};
+    use asobi::storage::Storage;
     use tempfile::tempdir;
 
     #[test]
@@ -1210,12 +1201,11 @@ mod tests {
         let dir = tempdir().unwrap();
         unsafe {
             std::env::set_var(
-                asobi::backend::turso::constant::ENV_DATABASE_URL,
+                asobi::paths::ENV_DATABASE_URL,
                 dir.path().join("test.db").to_str().unwrap(),
             );
         }
-        let (db, conn) = asobi::backend::turso::db::init_db().await.unwrap();
-        let backend = TursoBackend::from_parts(db, conn);
+        let backend = Storage::open_default().await.unwrap();
         backend
             .create_entities(vec![asobi::model::EntityInput {
                 name: "project".to_string(),

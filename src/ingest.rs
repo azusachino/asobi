@@ -126,8 +126,8 @@ fn parse_frontmatter(raw: &str) -> (String, String) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::backend::TursoBackend;
-    use crate::backend::turso::db::init_db;
+    use crate::api::v1::DocumentStore;
+    use crate::storage::Storage;
     use std::io::Write;
     use tempfile::tempdir;
 
@@ -157,10 +157,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let db_path = dir.path().join("test.db");
         unsafe {
-            std::env::set_var(
-                crate::backend::turso::db::ENV_DATABASE_URL,
-                db_path.to_str().unwrap(),
-            );
+            std::env::set_var(crate::paths::ENV_DATABASE_URL, db_path.to_str().unwrap());
         }
 
         let mut f = std::fs::File::create(dir.path().join("rust-pinning.md")).unwrap();
@@ -170,23 +167,20 @@ mod tests {
         )
         .unwrap();
 
-        let (db, conn) = init_db().await.unwrap();
-        let backend = TursoBackend::from_parts(db, conn);
+        let storage = Storage::open_default().await.unwrap();
         let embedder = FakeEmbedder(384);
 
         ingest_file(
             dir.path().join("rust-pinning.md").as_path(),
-            &backend,
+            &storage,
             &embedder,
         )
         .await
         .unwrap();
 
-        let results = crate::backend::turso::db::search_fts(backend.connection(), "pinning", 5)
-            .await
-            .unwrap();
+        let results = storage.search_topics("pinning", 5).await.unwrap();
         assert_eq!(results.len(), 1);
-        assert_eq!(results[0].1, "Rust Pinning");
+        assert_eq!(results[0].title, "Rust Pinning");
     }
 
     #[tokio::test]
@@ -194,10 +188,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let db_path = dir.path().join("test2.db");
         unsafe {
-            std::env::set_var(
-                crate::backend::turso::db::ENV_DATABASE_URL,
-                db_path.to_str().unwrap(),
-            );
+            std::env::set_var(crate::paths::ENV_DATABASE_URL, db_path.to_str().unwrap());
         }
 
         for name in &["a.md", "b.md", "c.md"] {
@@ -209,11 +200,10 @@ mod tests {
             .unwrap();
         }
 
-        let (db, conn) = init_db().await.unwrap();
-        let backend = TursoBackend::from_parts(db, conn);
+        let storage = Storage::open_default().await.unwrap();
         let embedder = FakeEmbedder(384);
 
-        let count = ingest_dir(dir.path(), &backend, &embedder).await.unwrap();
+        let count = ingest_dir(dir.path(), &storage, &embedder).await.unwrap();
         assert_eq!(count, 3);
     }
 }

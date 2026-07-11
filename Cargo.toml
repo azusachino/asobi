@@ -31,6 +31,12 @@ default = []
 documents = [
     "dep:fastembed",
 ]
+# Experimental Turso backend. libSQL is the default provider; Turso is compiled
+# and selectable only when this feature is enabled. See docs/specs for the
+# backend-boundary plan.
+turso-experimental = [
+    "dep:turso",
+]
 
 [dependencies]
 # Core
@@ -59,7 +65,8 @@ fastembed = { version = "5", optional = true }
 
 
 # Database & Vector Store
-turso = { version = "0.6.1", features = ["fts"] }
+# libSQL is the default backend; Turso is opt-in behind `turso-experimental`.
+turso = { version = "0.6.1", features = ["fts"], optional = true }
 libsql = "0.9"
 
 

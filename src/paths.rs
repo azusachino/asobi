@@ -20,6 +20,16 @@ pub struct AsobiPaths {
 
 pub const ENV_ASOBI_HOME: &str = "ASOBI_HOME";
 
+/// Backend-neutral override for the selected provider's state file. Each storage
+/// provider reads this same variable; the concrete default filename stays private
+/// to the provider (libSQL: `asobi.db`, Turso: `asobi.turso.db`).
+pub const ENV_DATABASE_URL: &str = "ASOBI_DATABASE_URL";
+
+/// Explicit backend selector. libSQL is the default; setting this to `turso`
+/// selects the experimental Turso provider, but only in a build compiled with
+/// `--features turso-experimental` (otherwise the value is ignored).
+pub const ENV_BACKEND: &str = "ASOBI_BACKEND";
+
 /// XDG base directories for the user-level Asobi workspace. A single root
 /// (`$XDG_DATA_HOME/asobi`, honoring the env var on every platform — macOS
 /// included, where the `directories` crate would prefer `~/Library/...`) holds
@@ -142,10 +152,6 @@ impl AsobiPaths {
         }
     }
 
-    pub fn db_path(&self) -> PathBuf {
-        self.data_dir.join("asobi.turso.db")
-    }
-
     pub fn caches_dir(&self) -> PathBuf {
         self.cache_dir.clone()
     }
@@ -242,19 +248,6 @@ mod tests {
         }
 
         assert_eq!(paths.data_dir, home);
-    }
-
-    #[test]
-    fn db_path_is_backend_qualified_for_turso() {
-        let dir = tempdir().unwrap();
-        let paths = AsobiPaths {
-            data_dir: dir.path().join("data"),
-            config_dir: dir.path().join("config"),
-            topics_dir: dir.path().join("topics"),
-            cache_dir: dir.path().join("caches"),
-            observation_limit: None,
-        };
-        assert_eq!(paths.db_path(), dir.path().join("data/asobi.turso.db"));
     }
 
     #[test]

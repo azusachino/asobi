@@ -1,4 +1,5 @@
-use asobi::backend::turso::db;
+use asobi::api::{GraphStore, MaintenanceStore, OpenNodes, SearchQuery, SearchStore};
+use asobi::storage::Storage;
 use std::env;
 use std::hint::black_box;
 use std::time::{Duration, Instant};
@@ -35,48 +36,66 @@ fn main() {
             let dir = tempdir().expect("tempdir");
             let db_path = dir.path().join("bench.db");
             unsafe {
-                // Must be ASOBI_DATABASE_URL (the constant), not "DATABASE_URL".
-                // The wrong name is silently ignored by init_db(), causing the bench
-                // to seed and mcp_reset() the user's REAL global graph. See db::ENV_DATABASE_URL.
-                std::env::set_var(db::ENV_DATABASE_URL, db_path.to_str().expect("utf-8 path"));
+                std::env::set_var("ASOBI_DATABASE_URL", db_path.to_str().expect("utf-8 path"));
             }
-            let (_db, conn) = db::init_db().await.expect("init db");
+            let store = Storage::open_default().await.expect("open default storage");
 
-            seed_graph(&conn, entity_count).await;
+            seed_graph(&store, entity_count).await;
 
-            let selective_hits = db::search_nodes(&conn, "rareterm7777")
+            let selective_hits = store
+                .search_nodes(SearchQuery {
+                    query: "rareterm7777".into(),
+                    limit: 10,
+                    filters: Vec::new(),
+                })
                 .await
                 .expect("selective search")
                 .entities
                 .len();
             assert!(selective_hits > 0, "selective search returned no hits");
             let selective_elapsed = time_many(SEARCH_ITERS, || async {
-                let graph = db::search_nodes(&conn, black_box("rareterm7777"))
+                let graph = store
+                    .search_nodes(SearchQuery {
+                        query: black_box("rareterm7777").into(),
+                        limit: 10,
+                        filters: Vec::new(),
+                    })
                     .await
                     .expect("selective search");
                 black_box(graph.entities.len());
             })
             .await;
 
-            let capped_hits = db::search_nodes(&conn, "commonterm")
+            let capped_hits = store
+                .search_nodes(SearchQuery {
+                    query: "commonterm".into(),
+                    limit: 10,
+                    filters: Vec::new(),
+                })
                 .await
                 .expect("broad capped search")
                 .entities
                 .len();
-            assert_eq!(
-                capped_hits,
-                db::DEFAULT_SEARCH_LIMIT,
-                "default broad search should be capped"
-            );
+            assert_eq!(capped_hits, 10, "default broad search should be capped");
             let broad_elapsed = time_many(BROAD_SEARCH_ITERS, || async {
-                let graph = db::search_nodes(&conn, black_box("commonterm"))
+                let graph = store
+                    .search_nodes(SearchQuery {
+                        query: black_box("commonterm").into(),
+                        limit: 10,
+                        filters: Vec::new(),
+                    })
                     .await
                     .expect("broad capped search");
                 black_box(graph.entities.len());
             })
             .await;
 
-            let export_hits = db::search_nodes_with_limit(&conn, "commonterm", entity_count, &[])
+            let export_hits = store
+                .search_nodes(SearchQuery {
+                    query: "commonterm".into(),
+                    limit: entity_count,
+                    filters: Vec::new(),
+                })
                 .await
                 .expect("broad export search")
                 .entities
@@ -86,31 +105,37 @@ fn main() {
                 "explicit broad export should return every seeded entity"
             );
             let export_elapsed = time_many(BROAD_EXPORT_ITERS, || async {
-                let graph =
-                    db::search_nodes_with_limit(&conn, black_box("commonterm"), entity_count, &[])
-                        .await
-                        .expect("broad export search");
+                let graph = store
+                    .search_nodes(SearchQuery {
+                        query: black_box("commonterm").into(),
+                        limit: entity_count,
+                        filters: Vec::new(),
+                    })
+                    .await
+                    .expect("broad export search");
                 black_box(graph.entities.len());
             })
             .await;
 
             let open_elapsed = time_many(OPEN_ITERS, || async {
-                let graph = db::open_nodes(
-                    &conn,
-                    black_box(vec![
-                        "entity-10".to_string(),
-                        format!("entity-{}", entity_count / 2),
-                        format!("entity-{}", entity_count - 1),
-                    ]),
-                )
-                .await
-                .expect("open nodes");
+                let graph = store
+                    .open_nodes(OpenNodes {
+                        names: black_box(vec![
+                            "entity-10".to_string(),
+                            format!("entity-{}", entity_count / 2),
+                            format!("entity-{}", entity_count - 1),
+                        ]),
+                        with_ids: false,
+                        expand: Vec::new(),
+                    })
+                    .await
+                    .expect("open nodes");
                 black_box(graph.entities.len());
             })
             .await;
 
             let stats_elapsed = time_many(STATS_ITERS, || async {
-                let stats = db::stats(&conn).await.expect("stats");
+                let stats = store.stats().await.expect("stats");
                 black_box(stats);
             })
             .await;
@@ -150,32 +175,30 @@ fn main() {
             );
 
             let reset_start = Instant::now();
-            db::reset(&conn).await.expect("reset");
+            store.reset().await.expect("reset");
             let reset_elapsed = reset_start.elapsed();
             println!("reset: total={:?}", reset_elapsed);
         }
     });
 }
 
-async fn seed_graph(conn: &turso::Connection, entity_count: usize) {
+async fn seed_graph(store: &impl GraphStore, entity_count: usize) {
     for i in 0..entity_count {
         let rare_token = if i % 1_000 == 0 || i == 7_777 {
             " rareterm7777"
         } else {
             ""
         };
-        db::create_entities(
-            conn,
-            vec![asobi::model::EntityInput {
+        store
+            .create_entities(vec![asobi::model::EntityInput {
                 name: format!("entity-{i}"),
                 entity_type: "bench".to_string(),
                 observations: vec![format!(
                     "commonterm graph observation {i} with ranked full text search{rare_token}"
                 )],
-            }],
-        )
-        .await
-        .expect("create entity");
+            }])
+            .await
+            .expect("create entity");
     }
 }
 

@@ -1,5 +1,5 @@
 use anyhow::Result;
-use turso::{Connection, params};
+use libsql::{Connection, params};
 
 pub struct VectorStore {
     conn: Connection,
@@ -44,14 +44,14 @@ impl VectorStore {
     }
 
     pub async fn insert_chunks(&self, chunks: Vec<Chunk>) -> Result<()> {
-        crate::backend::turso::tx::immediate_transaction(&self.conn, |tx| {
+        crate::storage::libsql::tx::immediate_transaction(&self.conn, |tx| {
             let chunks = chunks.clone();
             Box::pin(async move {
                 for chunk in chunks {
                     let vector_json = serde_json::to_string(&chunk.vector)
-                        .map_err(|error| turso::Error::Error(error.to_string()))?;
+                        .map_err(|error| libsql::Error::Misuse(error.to_string()))?;
                     tx.execute(
-                        crate::backend::turso::constant::SQL_INSERT_CHUNK,
+                        crate::storage::libsql::constant::SQL_INSERT_CHUNK,
                         params![
                             chunk.id,
                             chunk.topic_id,
@@ -75,7 +75,7 @@ impl VectorStore {
         let mut rows = self
             .conn
             .query(
-                crate::backend::turso::constant::SQL_SEARCH_CHUNKS,
+                crate::storage::libsql::constant::SQL_SEARCH_CHUNKS,
                 params![vector_json, limit as i64],
             )
             .await?;
@@ -96,7 +96,7 @@ impl VectorStore {
     pub async fn delete_by_topic(&self, topic_id: &str) -> Result<()> {
         self.conn
             .execute(
-                crate::backend::turso::constant::SQL_DELETE_CHUNKS_BY_TOPIC,
+                crate::storage::libsql::constant::SQL_DELETE_CHUNKS_BY_TOPIC,
                 params![topic_id],
             )
             .await?;
@@ -109,7 +109,10 @@ mod tests {
     use super::*;
 
     async fn setup_test_db() -> Connection {
-        let db = turso::Builder::new_local(":memory:").build().await.unwrap();
+        let db = libsql::Builder::new_local(":memory:")
+            .build()
+            .await
+            .unwrap();
         let conn = db.connect().unwrap();
         conn.execute(
             "CREATE TABLE chunks (
@@ -118,8 +121,14 @@ mod tests {
                 chunk_idx INTEGER NOT NULL,
                 text      TEXT NOT NULL,
                 source    TEXT NOT NULL,
-                embedding BLOB NOT NULL
+                embedding F32_BLOB(384) NOT NULL
             )",
+            (),
+        )
+        .await
+        .unwrap();
+        conn.execute(
+            "CREATE INDEX idx_chunks_vector ON chunks(libsql_vector_idx(embedding, 'metric=cosine'))",
             (),
         )
         .await

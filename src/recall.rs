@@ -117,7 +117,7 @@ pub async fn recall(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{backend::turso::db::init_db, ingest::ingest_file};
+    use crate::{ingest::ingest_file, storage::Storage};
     use std::io::Write;
     use tempfile::tempdir;
 
@@ -146,28 +146,24 @@ mod tests {
         let dir = tempdir().unwrap();
         let db_path = dir.path().join("test.db");
         unsafe {
-            std::env::set_var(
-                crate::backend::turso::db::ENV_DATABASE_URL,
-                db_path.to_str().unwrap(),
-            );
+            std::env::set_var(crate::paths::ENV_DATABASE_URL, db_path.to_str().unwrap());
         }
 
         let mut f = std::fs::File::create(dir.path().join("rust-pinning.md")).unwrap();
         writeln!(f, "---\ntitle: Rust Pinning\nslug: rust-pinning\n---\n\nPinning is a mechanism to prevent moves.").unwrap();
 
-        let (db, conn) = init_db().await.unwrap();
-        let backend = crate::backend::TursoBackend::from_parts(db, conn);
+        let storage = Storage::open_default().await.unwrap();
         let embedder = FakeEmbedder(384);
 
         ingest_file(
             dir.path().join("rust-pinning.md").as_path(),
-            &backend,
+            &storage,
             &embedder,
         )
         .await
         .unwrap();
 
-        let results = recall("pinning", &backend, &embedder, 5).await.unwrap();
+        let results = recall("pinning", &storage, &embedder, 5).await.unwrap();
         assert!(!results.is_empty(), "expected at least one result");
         assert!(results[0].title.contains("Pinning"));
     }

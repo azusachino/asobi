@@ -1,8 +1,8 @@
-use asobi::{backend::turso::db, model};
+use asobi::{model, storage::libsql::db};
 use std::fs;
 use tempfile::tempdir;
 
-async fn test_conn() -> (tempfile::TempDir, turso::Connection) {
+async fn test_conn() -> (tempfile::TempDir, libsql::Connection) {
     let dir = tempdir().unwrap();
     let db_path = dir.path().join("edge-cases.db");
     unsafe {
@@ -275,3 +275,4 @@ async fn graph_handles_malicious_payloads_gracefully() {
         assert_eq!(rel.relation_type, *payload);
     }
 }
+// storage-boundary: provider-test

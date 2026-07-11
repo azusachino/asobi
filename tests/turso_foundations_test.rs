@@ -1,3 +1,7 @@
+//! Turso-specific foundations. Compiled only under the experimental
+//! `turso-experimental` feature; the default build ships libSQL.
+#![cfg(feature = "turso-experimental")]
+
 use std::path::Path;
 
 use tempfile::tempdir;
@@ -145,3 +149,4 @@ async fn turso_transaction_rolls_back() {
         0
     );
 }
+// storage-boundary: provider-test

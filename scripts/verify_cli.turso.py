@@ -36,11 +36,16 @@ def run(
 
 
 def main() -> None:
-    subprocess.run(["cargo", "build"], cwd=ROOT, check=True)
+    # Turso is opt-in: it must be compiled behind the feature and selected at
+    # runtime with ASOBI_BACKEND=turso (libSQL is the default provider).
+    subprocess.run(
+        ["cargo", "build", "--features", "turso-experimental"], cwd=ROOT, check=True
+    )
 
     with tempfile.TemporaryDirectory(prefix="asobi-turso-cli-") as tmp:
         root = Path(tmp)
         env = os.environ.copy()
+        env["ASOBI_BACKEND"] = "turso"
         env["ASOBI_DATABASE_URL"] = str(root / "asobi.db")
 
         capabilities = json.loads(run(["capabilities"], env).stdout)
@@ -63,6 +68,7 @@ def main() -> None:
         (fresh_home / "asobi.db").write_bytes(b"legacy placeholder")
         fresh_env = os.environ.copy()
         fresh_env.pop("ASOBI_DATABASE_URL", None)
+        fresh_env["ASOBI_BACKEND"] = "turso"
         fresh_env["ASOBI_HOME"] = str(fresh_home)
         initialized = run(["capabilities"], fresh_env)
         assert (fresh_home / "asobi.turso.db").exists()

@@ -4,7 +4,8 @@ use std::collections::HashMap;
 use std::env;
 
 pub const DEFAULT_SEARCH_LIMIT: usize = 100;
-pub use crate::backend::libsql::constant::ENV_DATABASE_URL;
+pub const DEFAULT_DATABASE_FILENAME: &str = "asobi.db";
+pub use crate::storage::libsql::constant::ENV_DATABASE_URL;
 
 pub const SCHEMA_VERSION: i64 = 1;
 
@@ -18,16 +19,22 @@ pub async fn init_db() -> Result<(Database, Connection)> {
             ))?;
     }
 
-    let db_path = env::var(ENV_DATABASE_URL)
-        .unwrap_or_else(|_| paths.db_path().to_str().unwrap().to_string());
-    let (db, conn) = crate::backend::libsql::tx::open_local(std::path::Path::new(&db_path))
+    let db_path = env::var(ENV_DATABASE_URL).unwrap_or_else(|_| {
+        paths
+            .data_dir
+            .join(DEFAULT_DATABASE_FILENAME)
+            .to_str()
+            .unwrap()
+            .to_string()
+    });
+    let (db, conn) = crate::storage::libsql::tx::open_local(std::path::Path::new(&db_path))
         .await
         .with_context(|| format!(
             "failed to build/open database file at '{}'. Hint: run 'asobi init --local' or set ASOBI_HOME to a writable directory.",
             db_path
         ))?;
 
-    let timeout_ms = env::var(crate::backend::libsql::constant::ENV_BUSY_TIMEOUT)
+    let timeout_ms = env::var(crate::storage::libsql::constant::ENV_BUSY_TIMEOUT)
         .ok()
         .and_then(|v| v.parse::<u64>().ok())
         .unwrap_or(15000);
@@ -41,8 +48,8 @@ pub async fn init_db() -> Result<(Database, Connection)> {
     }
 
     for pragma in [
-        crate::backend::libsql::constant::PRAGMA_FOREIGN_KEYS_ON,
-        crate::backend::libsql::constant::PRAGMA_SYNCHRONOUS_NORMAL,
+        crate::storage::libsql::constant::PRAGMA_FOREIGN_KEYS_ON,
+        crate::storage::libsql::constant::PRAGMA_SYNCHRONOUS_NORMAL,
     ] {
         let mut rows = conn.query(pragma, ()).await?;
         let _ = rows.next().await?;
@@ -64,7 +71,7 @@ pub async fn init_db() -> Result<(Database, Connection)> {
     }
 
     // journal_mode cannot be changed inside a transaction — set it up front.
-    let journal_mode = env::var(crate::backend::libsql::constant::ENV_JOURNAL_MODE)
+    let journal_mode = env::var(crate::storage::libsql::constant::ENV_JOURNAL_MODE)
         .unwrap_or_else(|_| "WAL".to_string())
         .to_uppercase();
     let journal_mode_pragma = format!("PRAGMA journal_mode = {}", journal_mode);
@@ -125,22 +132,22 @@ pub async fn init_db() -> Result<(Database, Connection)> {
             return Ok(());
         }
 
-        conn.execute(crate::backend::libsql::constant::SCHEMA_CREATE_TOPICS, ())
+        conn.execute(crate::storage::libsql::constant::SCHEMA_CREATE_TOPICS, ())
             .await?;
 
         // FTS5 for full-text keyword search
         conn.execute(
-            crate::backend::libsql::constant::SCHEMA_CREATE_TOPICS_FTS,
+            crate::storage::libsql::constant::SCHEMA_CREATE_TOPICS_FTS,
             (),
         )
         .await?;
 
-        conn.execute(crate::backend::libsql::constant::SCHEMA_CREATE_SESSIONS, ())
+        conn.execute(crate::storage::libsql::constant::SCHEMA_CREATE_SESSIONS, ())
             .await?;
 
         // Graph Tier (Hot) — CREATE IF NOT EXISTS is a no-op on migrated tables.
         conn.execute(
-            crate::backend::libsql::constant::SCHEMA_CREATE_ASOBI_ENTITIES,
+            crate::storage::libsql::constant::SCHEMA_CREATE_ASOBI_ENTITIES,
             (),
         )
         .await?;
@@ -155,7 +162,7 @@ pub async fn init_db() -> Result<(Database, Connection)> {
             )
             .await?;
             conn.execute(
-                crate::backend::libsql::constant::SCHEMA_CREATE_ASOBI_OBSERVATIONS,
+                crate::storage::libsql::constant::SCHEMA_CREATE_ASOBI_OBSERVATIONS,
                 (),
             )
             .await?;
@@ -168,90 +175,90 @@ pub async fn init_db() -> Result<(Database, Connection)> {
                 .await?;
         } else {
             conn.execute(
-                crate::backend::libsql::constant::SCHEMA_CREATE_ASOBI_OBSERVATIONS,
+                crate::storage::libsql::constant::SCHEMA_CREATE_ASOBI_OBSERVATIONS,
                 (),
             )
             .await?;
         }
 
         conn.execute(
-            crate::backend::libsql::constant::SCHEMA_CREATE_IDX_ASOBI_OBSERVATIONS,
+            crate::storage::libsql::constant::SCHEMA_CREATE_IDX_ASOBI_OBSERVATIONS,
             (),
         )
         .await?;
 
         conn.execute(
-            crate::backend::libsql::constant::SCHEMA_CREATE_ASOBI_RELATIONS,
+            crate::storage::libsql::constant::SCHEMA_CREATE_ASOBI_RELATIONS,
             (),
         )
         .await?;
 
         conn.execute(
-            crate::backend::libsql::constant::SCHEMA_CREATE_ASOBI_TRUTHS,
+            crate::storage::libsql::constant::SCHEMA_CREATE_ASOBI_TRUTHS,
             (),
         )
         .await?;
 
         conn.execute(
-            crate::backend::libsql::constant::SCHEMA_CREATE_ASOBI_SKILLS,
+            crate::storage::libsql::constant::SCHEMA_CREATE_ASOBI_SKILLS,
             (),
         )
         .await?;
 
         // Document Tier (Vectors)
-        conn.execute(crate::backend::libsql::constant::SCHEMA_CREATE_CHUNKS, ())
+        conn.execute(crate::storage::libsql::constant::SCHEMA_CREATE_CHUNKS, ())
             .await?;
 
         conn.execute(
-            crate::backend::libsql::constant::SCHEMA_CREATE_IDX_CHUNKS_TOPIC_ID,
+            crate::storage::libsql::constant::SCHEMA_CREATE_IDX_CHUNKS_TOPIC_ID,
             (),
         )
         .await?;
 
         // Vector index - metric=cosine is default
         conn.execute(
-            crate::backend::libsql::constant::SCHEMA_CREATE_IDX_CHUNKS_VECTOR,
+            crate::storage::libsql::constant::SCHEMA_CREATE_IDX_CHUNKS_VECTOR,
             (),
         )
         .await?;
 
         // Triggers to keep topics_fts in sync with topics
         conn.execute(
-            crate::backend::libsql::constant::SCHEMA_CREATE_TRIGGER_TOPICS_AI,
+            crate::storage::libsql::constant::SCHEMA_CREATE_TRIGGER_TOPICS_AI,
             (),
         )
         .await?;
         conn.execute(
-            crate::backend::libsql::constant::SCHEMA_CREATE_TRIGGER_TOPICS_AD,
+            crate::storage::libsql::constant::SCHEMA_CREATE_TRIGGER_TOPICS_AD,
             (),
         )
         .await?;
         conn.execute(
-            crate::backend::libsql::constant::SCHEMA_CREATE_TRIGGER_TOPICS_AU,
+            crate::storage::libsql::constant::SCHEMA_CREATE_TRIGGER_TOPICS_AU,
             (),
         )
         .await?;
 
         // FTS5 for graph observation search (porter stemming, BM25 ranking)
         conn.execute(
-            crate::backend::libsql::constant::SCHEMA_CREATE_ASOBI_OBS_FTS,
+            crate::storage::libsql::constant::SCHEMA_CREATE_ASOBI_OBS_FTS,
             (),
         )
         .await?;
 
         // Triggers to keep asobi_obs_fts in sync with asobi_observations
         conn.execute(
-            crate::backend::libsql::constant::SCHEMA_CREATE_TRIGGER_ASOBI_OBS_AI,
+            crate::storage::libsql::constant::SCHEMA_CREATE_TRIGGER_ASOBI_OBS_AI,
             (),
         )
         .await?;
         conn.execute(
-            crate::backend::libsql::constant::SCHEMA_CREATE_TRIGGER_ASOBI_OBS_AD,
+            crate::storage::libsql::constant::SCHEMA_CREATE_TRIGGER_ASOBI_OBS_AD,
             (),
         )
         .await?;
         conn.execute(
-            crate::backend::libsql::constant::SCHEMA_CREATE_TRIGGER_ASOBI_OBS_AU,
+            crate::storage::libsql::constant::SCHEMA_CREATE_TRIGGER_ASOBI_OBS_AU,
             (),
         )
         .await?;
@@ -299,7 +306,7 @@ pub async fn search_fts(
 ) -> Result<Vec<(String, String, String, f64)>> {
     let mut rows = conn
         .query(
-            crate::backend::libsql::constant::SQL_SEARCH_FTS,
+            crate::storage::libsql::constant::SQL_SEARCH_FTS,
             libsql::params![query, limit as i64],
         )
         .await?;
@@ -323,7 +330,7 @@ pub async fn upsert_topic(
     body: &str,
 ) -> Result<()> {
     conn.execute(
-        crate::backend::libsql::constant::SQL_UPSERT_TOPIC,
+        crate::storage::libsql::constant::SQL_UPSERT_TOPIC,
         libsql::params![id, title, file_path, body],
     )
     .await?;
@@ -340,21 +347,21 @@ pub async fn create_entities(
     conn: &Connection,
     entities: Vec<crate::model::EntityInput>,
 ) -> Result<()> {
-    crate::backend::libsql::tx::immediate_transaction(conn, |tx| {
+    crate::storage::libsql::tx::immediate_transaction(conn, |tx| {
         let entities = entities.clone();
         Box::pin(async move {
             for mut ent in entities {
                 ent.name = crate::normalize::normalize_key(&ent.name);
                 let inserted = tx
                     .execute(
-                        crate::backend::libsql::constant::SQL_INSERT_ENTITY,
+                        crate::storage::libsql::constant::SQL_INSERT_ENTITY,
                         libsql::params![ent.name.clone(), ent.entity_type],
                     )
                     .await?;
                 if inserted == 1 {
                     for obs in ent.observations {
                         tx.execute(
-                            crate::backend::libsql::constant::SQL_INSERT_OBSERVATION,
+                            crate::storage::libsql::constant::SQL_INSERT_OBSERVATION,
                             libsql::params![ent.name.clone(), obs],
                         )
                         .await?;
@@ -373,21 +380,21 @@ pub async fn add_observations(
     observations: Vec<crate::model::ObservationInput>,
     limit: usize,
 ) -> Result<()> {
-    crate::backend::libsql::tx::immediate_transaction(conn, |tx| {
+    crate::storage::libsql::tx::immediate_transaction(conn, |tx| {
         let observations = observations.clone();
         Box::pin(async move {
             for mut obs_batch in observations {
                 obs_batch.entity_name = crate::normalize::normalize_key(&obs_batch.entity_name);
                 for content in obs_batch.contents {
                     tx.execute(
-                        crate::backend::libsql::constant::SQL_INSERT_OBSERVATION,
+                        crate::storage::libsql::constant::SQL_INSERT_OBSERVATION,
                         libsql::params![obs_batch.entity_name.clone(), content],
                     )
                     .await?;
                 }
                 if limit > 0 {
                     tx.execute(
-                        crate::backend::libsql::constant::SQL_EVICT_OBSERVATIONS,
+                        crate::storage::libsql::constant::SQL_EVICT_OBSERVATIONS,
                         libsql::params![obs_batch.entity_name.clone(), limit as i64],
                     )
                     .await?;
@@ -404,14 +411,14 @@ pub async fn create_relations(
     conn: &Connection,
     relations: Vec<crate::model::RelationInput>,
 ) -> Result<()> {
-    crate::backend::libsql::tx::immediate_transaction(conn, |tx| {
+    crate::storage::libsql::tx::immediate_transaction(conn, |tx| {
         let relations = relations.clone();
         Box::pin(async move {
             for mut rel in relations {
                 rel.from = crate::normalize::normalize_key(&rel.from);
                 rel.to = crate::normalize::normalize_key(&rel.to);
                 tx.execute(
-                    crate::backend::libsql::constant::SQL_INSERT_RELATION,
+                    crate::storage::libsql::constant::SQL_INSERT_RELATION,
                     libsql::params![rel.from, rel.to, rel.relation_type],
                 )
                 .await?;
@@ -424,13 +431,13 @@ pub async fn create_relations(
 }
 
 pub async fn delete_entities(conn: &Connection, names: Vec<String>) -> Result<()> {
-    crate::backend::libsql::tx::immediate_transaction(conn, |tx| {
+    crate::storage::libsql::tx::immediate_transaction(conn, |tx| {
         let names = names.clone();
         Box::pin(async move {
             for name in names {
                 let norm_name = crate::normalize::normalize_key(&name);
                 tx.execute(
-                    crate::backend::libsql::constant::SQL_DELETE_ENTITY,
+                    crate::storage::libsql::constant::SQL_DELETE_ENTITY,
                     libsql::params![norm_name.clone()],
                 )
                 .await?;
@@ -456,14 +463,14 @@ pub async fn delete_observations(
     conn: &Connection,
     deletions: Vec<crate::model::ObservationDeletion>,
 ) -> Result<()> {
-    crate::backend::libsql::tx::immediate_transaction(conn, |tx| {
+    crate::storage::libsql::tx::immediate_transaction(conn, |tx| {
         let deletions = deletions.clone();
         Box::pin(async move {
             for mut del in deletions {
                 del.entity_name = crate::normalize::normalize_key(&del.entity_name);
                 for obs in del.observations {
                     tx.execute(
-                        crate::backend::libsql::constant::SQL_DELETE_OBSERVATION,
+                        crate::storage::libsql::constant::SQL_DELETE_OBSERVATION,
                         libsql::params![del.entity_name.clone(), obs],
                     )
                     .await?;
@@ -480,7 +487,7 @@ pub async fn delete_observation_by_id(conn: &Connection, entity_name: &str, id: 
     let norm_name = crate::normalize::normalize_key(entity_name);
     let affected = conn
         .execute(
-            crate::backend::libsql::constant::SQL_DELETE_OBSERVATION_BY_ID,
+            crate::storage::libsql::constant::SQL_DELETE_OBSERVATION_BY_ID,
             libsql::params![id, norm_name],
         )
         .await?;
@@ -503,7 +510,7 @@ pub async fn update_observation_by_id(
     let norm_name = crate::normalize::normalize_key(entity_name);
     let affected = conn
         .execute(
-            crate::backend::libsql::constant::SQL_UPDATE_OBSERVATION_BY_ID,
+            crate::storage::libsql::constant::SQL_UPDATE_OBSERVATION_BY_ID,
             libsql::params![id, new_content, norm_name],
         )
         .await?;
@@ -525,7 +532,7 @@ pub async fn update_observation(
 ) -> Result<()> {
     let norm_name = crate::normalize::normalize_key(entity_name);
     conn.execute(
-        crate::backend::libsql::constant::SQL_UPDATE_OBSERVATION,
+        crate::storage::libsql::constant::SQL_UPDATE_OBSERVATION,
         libsql::params![norm_name, old_content, new_content],
     )
     .await?;
@@ -536,14 +543,14 @@ pub async fn delete_relations(
     conn: &Connection,
     relations: Vec<crate::model::RelationInput>,
 ) -> Result<()> {
-    crate::backend::libsql::tx::immediate_transaction(conn, |tx| {
+    crate::storage::libsql::tx::immediate_transaction(conn, |tx| {
         let relations = relations.clone();
         Box::pin(async move {
             for mut rel in relations {
                 rel.from = crate::normalize::normalize_key(&rel.from);
                 rel.to = crate::normalize::normalize_key(&rel.to);
                 tx.execute(
-                    crate::backend::libsql::constant::SQL_DELETE_RELATION,
+                    crate::storage::libsql::constant::SQL_DELETE_RELATION,
                     libsql::params![rel.from, rel.to, rel.relation_type],
                 )
                 .await?;
@@ -559,7 +566,7 @@ pub async fn read_graph(conn: &Connection) -> Result<crate::model::Graph> {
     let mut entity_names = Vec::new();
     let mut rows = conn
         .query(
-            crate::backend::libsql::constant::SQL_SELECT_ALL_ENTITIES,
+            crate::storage::libsql::constant::SQL_SELECT_ALL_ENTITIES,
             (),
         )
         .await?;
@@ -571,7 +578,7 @@ pub async fn read_graph(conn: &Connection) -> Result<crate::model::Graph> {
     let mut relations = Vec::new();
     let mut rel_rows = conn
         .query(
-            crate::backend::libsql::constant::SQL_SELECT_ALL_RELATIONS,
+            crate::storage::libsql::constant::SQL_SELECT_ALL_RELATIONS,
             (),
         )
         .await?;
@@ -593,7 +600,7 @@ pub async fn read_graph_eager(conn: &Connection) -> Result<crate::model::Graph> 
     let mut entity_names = Vec::new();
     let mut rows = conn
         .query(
-            crate::backend::libsql::constant::SQL_SELECT_ALL_ENTITIES,
+            crate::storage::libsql::constant::SQL_SELECT_ALL_ENTITIES,
             (),
         )
         .await?;
@@ -605,7 +612,7 @@ pub async fn read_graph_eager(conn: &Connection) -> Result<crate::model::Graph> 
     let mut relations = Vec::new();
     let mut rel_rows = conn
         .query(
-            crate::backend::libsql::constant::SQL_SELECT_ALL_RELATIONS,
+            crate::storage::libsql::constant::SQL_SELECT_ALL_RELATIONS,
             (),
         )
         .await?;
@@ -788,7 +795,7 @@ pub async fn search_nodes_with_limit(
             };
             let mut rows = conn
                 .query(
-                    crate::backend::libsql::constant::SQL_SEARCH_OBSERVATIONS_FTS,
+                    crate::storage::libsql::constant::SQL_SEARCH_OBSERVATIONS_FTS,
                     libsql::params![query, fts_fetch_limit],
                 )
                 .await?;
@@ -824,7 +831,7 @@ pub async fn search_nodes_with_limit(
             };
             let mut rows = conn
                 .query(
-                    crate::backend::libsql::constant::SQL_SEARCH_ENTITIES_LIKE,
+                    crate::storage::libsql::constant::SQL_SEARCH_ENTITIES_LIKE,
                     libsql::params![pattern, like_limit],
                 )
                 .await?;
@@ -921,7 +928,7 @@ async fn load_relations(
 
     for chunk in names.chunks(400) {
         let placeholders = chunk.iter().map(|_| "?").collect::<Vec<_>>().join(",");
-        let sql = crate::backend::libsql::constant::SQL_SELECT_RELATIONS_IN_TEMPLATE
+        let sql = crate::storage::libsql::constant::SQL_SELECT_RELATIONS_IN_TEMPLATE
             .replace("{0}", &placeholders);
 
         let mut params = Vec::new();
@@ -965,7 +972,7 @@ async fn load_entities_lazy(
         let placeholders = chunk.iter().map(|_| "?").collect::<Vec<_>>().join(",");
 
         // Load entities
-        let entity_sql = crate::backend::libsql::constant::SQL_SELECT_ENTITIES_IN_TEMPLATE
+        let entity_sql = crate::storage::libsql::constant::SQL_SELECT_ENTITIES_IN_TEMPLATE
             .replace("{}", &placeholders);
         let params = chunk
             .iter()
@@ -1034,7 +1041,7 @@ async fn load_entities_eager_detailed(
         let placeholders = chunk.iter().map(|_| "?").collect::<Vec<_>>().join(",");
 
         // Load entities
-        let entity_sql = crate::backend::libsql::constant::SQL_SELECT_ENTITIES_IN_TEMPLATE
+        let entity_sql = crate::storage::libsql::constant::SQL_SELECT_ENTITIES_IN_TEMPLATE
             .replace("{}", &placeholders);
         let params = chunk
             .iter()
@@ -1047,7 +1054,7 @@ async fn load_entities_eager_detailed(
             entity_types.insert(row.get::<String>(0)?, row.get::<String>(1)?);
         }
 
-        let obs_sql = crate::backend::libsql::constant::SQL_SELECT_OBSERVATIONS_IN_TEMPLATE
+        let obs_sql = crate::storage::libsql::constant::SQL_SELECT_OBSERVATIONS_IN_TEMPLATE
             .replace("{}", &placeholders);
         let mut rows = conn.query(&obs_sql, params.clone()).await?;
         while let Some(row) = rows.next().await? {
@@ -1069,7 +1076,7 @@ async fn load_entities_eager_detailed(
         }
 
         // Load skill bodies
-        let skill_sql = crate::backend::libsql::constant::SQL_SELECT_SKILL_BODIES_IN_TEMPLATE
+        let skill_sql = crate::storage::libsql::constant::SQL_SELECT_SKILL_BODIES_IN_TEMPLATE
             .replace("{}", &placeholders);
         let mut rows = conn.query(&skill_sql, params).await?;
         while let Some(row) = rows.next().await? {
@@ -1105,7 +1112,7 @@ async fn load_entities_eager_detailed(
 
 pub async fn stats(conn: &Connection) -> Result<(usize, usize, usize)> {
     let mut rows = conn
-        .query(crate::backend::libsql::constant::SQL_COUNT_ENTITIES, ())
+        .query(crate::storage::libsql::constant::SQL_COUNT_ENTITIES, ())
         .await?;
     let entities_count: i64 = if let Some(row) = rows.next().await? {
         row.get(0)?
@@ -1114,7 +1121,7 @@ pub async fn stats(conn: &Connection) -> Result<(usize, usize, usize)> {
     };
 
     let mut rows = conn
-        .query(crate::backend::libsql::constant::SQL_COUNT_RELATIONS, ())
+        .query(crate::storage::libsql::constant::SQL_COUNT_RELATIONS, ())
         .await?;
     let relations_count: i64 = if let Some(row) = rows.next().await? {
         row.get(0)?
@@ -1123,7 +1130,7 @@ pub async fn stats(conn: &Connection) -> Result<(usize, usize, usize)> {
     };
 
     let mut rows = conn
-        .query(crate::backend::libsql::constant::SQL_COUNT_OBSERVATIONS, ())
+        .query(crate::storage::libsql::constant::SQL_COUNT_OBSERVATIONS, ())
         .await?;
     let observations_count: i64 = if let Some(row) = rows.next().await? {
         row.get(0)?
@@ -1153,22 +1160,22 @@ pub async fn stats_per_entity(conn: &Connection) -> Result<Vec<(String, usize)>>
 }
 
 pub async fn reset(conn: &Connection) -> Result<()> {
-    conn.execute(crate::backend::libsql::constant::SQL_DELETE_ALL_CHUNKS, ())
+    conn.execute(crate::storage::libsql::constant::SQL_DELETE_ALL_CHUNKS, ())
         .await?;
-    conn.execute(crate::backend::libsql::constant::SQL_DELETE_ALL_TOPICS, ())
+    conn.execute(crate::storage::libsql::constant::SQL_DELETE_ALL_TOPICS, ())
         .await?;
     conn.execute(
-        crate::backend::libsql::constant::SQL_DELETE_ALL_RELATIONS,
+        crate::storage::libsql::constant::SQL_DELETE_ALL_RELATIONS,
         (),
     )
     .await?;
     conn.execute(
-        crate::backend::libsql::constant::SQL_DELETE_ALL_OBSERVATIONS,
+        crate::storage::libsql::constant::SQL_DELETE_ALL_OBSERVATIONS,
         (),
     )
     .await?;
     conn.execute(
-        crate::backend::libsql::constant::SQL_DELETE_ALL_ENTITIES,
+        crate::storage::libsql::constant::SQL_DELETE_ALL_ENTITIES,
         (),
     )
     .await?;
@@ -1178,7 +1185,7 @@ pub async fn reset(conn: &Connection) -> Result<()> {
 pub async fn truth_upsert(conn: &Connection, entity: &str, key: &str, value: &str) -> Result<()> {
     let norm_entity = crate::normalize::normalize_key(entity);
     conn.execute(
-        crate::backend::libsql::constant::SQL_UPSERT_TRUTH,
+        crate::storage::libsql::constant::SQL_UPSERT_TRUTH,
         libsql::params![norm_entity, key, value],
     )
     .await?;
@@ -1188,7 +1195,7 @@ pub async fn truth_upsert(conn: &Connection, entity: &str, key: &str, value: &st
 pub async fn truth_delete(conn: &Connection, entity: &str, key: &str) -> Result<()> {
     let norm_entity = crate::normalize::normalize_key(entity);
     conn.execute(
-        crate::backend::libsql::constant::SQL_DELETE_TRUTH,
+        crate::storage::libsql::constant::SQL_DELETE_TRUTH,
         libsql::params![norm_entity, key],
     )
     .await?;
@@ -1216,7 +1223,7 @@ pub async fn select_truths(
 
     for chunk in normalized_names.chunks(500) {
         let placeholders = chunk.iter().map(|_| "?").collect::<Vec<_>>().join(",");
-        let sql = crate::backend::libsql::constant::SQL_SELECT_TRUTHS_FOR_ENTITIES
+        let sql = crate::storage::libsql::constant::SQL_SELECT_TRUTHS_FOR_ENTITIES
             .replace("{}", &placeholders);
         let params = chunk
             .iter()
@@ -1257,7 +1264,7 @@ pub async fn skill_upsert(
 ) -> Result<()> {
     let norm_entity = crate::normalize::normalize_key(entity);
     conn.execute(
-        crate::backend::libsql::constant::SQL_UPSERT_SKILL,
+        crate::storage::libsql::constant::SQL_UPSERT_SKILL,
         libsql::params![norm_entity, body, source, version],
     )
     .await?;
@@ -1268,7 +1275,7 @@ pub async fn skill_body(conn: &Connection, entity: &str) -> Result<Option<String
     let norm_entity = crate::normalize::normalize_key(entity);
     let mut rows = conn
         .query(
-            crate::backend::libsql::constant::SQL_SELECT_SKILL_BODY,
+            crate::storage::libsql::constant::SQL_SELECT_SKILL_BODY,
             libsql::params![norm_entity],
         )
         .await?;
@@ -1282,7 +1289,7 @@ pub async fn skill_body(conn: &Connection, entity: &str) -> Result<Option<String
 
 pub async fn list_skills(conn: &Connection) -> Result<Vec<SkillRow>> {
     let mut rows = conn
-        .query(crate::backend::libsql::constant::SQL_LIST_SKILLS, ())
+        .query(crate::storage::libsql::constant::SQL_LIST_SKILLS, ())
         .await?;
     let mut results = Vec::new();
     while let Some(row) = rows.next().await? {

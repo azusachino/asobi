@@ -9,7 +9,8 @@
 //! to v2.
 
 // `async fn` in these public traits intentionally carries no `Send` bound: the
-// backend is chosen once at startup and dispatched statically (see `AnyBackend`),
+// storage is chosen once at startup and dispatched statically (see
+// `crate::storage::Storage`),
 // so the future's Send-ness is inferred at the call site rather than frozen into
 // the contract. A `!Send` turso connection and a `Send` postgres pool both fit.
 // Revisit (via `trait_variant`) only if a multi-threaded consumer needs it.
@@ -18,6 +19,8 @@
 pub const API_VERSION: u32 = 1;
 
 use crate::model::{EntityInput, Graph, ObservationDeletion, ObservationInput, RelationInput};
+
+pub const SNAPSHOT_FORMAT_VERSION: u32 = 1;
 
 // ---- Stable error surface -------------------------------------------------
 
@@ -129,6 +132,67 @@ pub struct BackendHealth {
     pub detail: Option<String>,
 }
 
+/// Identity and compatibility metadata for the selected backend.  The state
+/// identifier is descriptive only; resolving its concrete path remains a
+/// backend concern.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BackendInfo {
+    pub backend: String,
+    pub api_version: u32,
+    pub schema_version: u32,
+    pub state_id: String,
+    pub capabilities: BackendCapabilities,
+}
+
+/// A persisted skill record.  Git/frontmatter parsing belongs to the
+/// application layer; this type is only the storage-facing result.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SkillRecord {
+    pub entity_name: String,
+    pub body: String,
+    pub source: String,
+    pub version: String,
+    pub description: String,
+}
+
+/// Logical, backend-neutral graph snapshot used by export/import.  It is not
+/// a physical database backup and must not contain driver-specific state.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Snapshot {
+    pub api_version: u32,
+    pub format_version: u32,
+    pub source_backend: String,
+    pub source_schema_version: u32,
+    pub graph: Graph,
+}
+
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportReport {
+    pub entities_created: usize,
+    pub entities_updated: usize,
+    pub observations_added: usize,
+    pub relations_added: usize,
+    pub truths_updated: usize,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BackupRequest {
+    pub destination: std::path::PathBuf,
+    pub keep: usize,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BackupReceipt {
+    pub path: std::path::PathBuf,
+    pub backend: String,
+}
+
 // ---- Capability traits ----------------------------------------------------
 
 pub trait GraphStore {
@@ -185,6 +249,35 @@ pub trait DocumentStore {
     async fn topics_by_id(&self, ids: &[String]) -> ApiResult<Vec<SearchResult>>;
 }
 
+/// Skill persistence only.  Installation orchestration, Git, and frontmatter
+/// parsing remain in the application layer.
+pub trait SkillStore {
+    async fn list_skills(&self) -> ApiResult<Vec<SkillRecord>>;
+    async fn skill_body(&self, entity_name: &str) -> ApiResult<Option<String>>;
+    async fn upsert_skill(&self, skill: SkillRecord) -> ApiResult<()>;
+    async fn remove_skills(&self, entity_names: Vec<String>) -> ApiResult<()>;
+}
+
+/// Logical export/import.  Implementations must preserve the snapshot format
+/// and apply the graph atomically where their backend supports transactions.
+pub trait SnapshotStore {
+    async fn export_snapshot(&self, scope: &[String], rationale: bool) -> ApiResult<Snapshot>;
+    async fn import_snapshot(&self, snapshot: Snapshot) -> ApiResult<ImportReport>;
+}
+
+/// Optional physical backup capability.  A physical backup is not portable
+/// across backends; callers must use `SnapshotStore` for handoff.
+pub trait BackupStore {
+    async fn backup(&self, request: BackupRequest) -> ApiResult<BackupReceipt>;
+    async fn restore(&self, source: std::path::PathBuf, force: bool) -> ApiResult<()>;
+}
+
+/// Storage operation needed by compact's duplicate-topic report.  Markdown
+/// rendering and file writes remain outside the backend boundary.
+pub trait DocumentMaintenanceStore {
+    async fn find_duplicate_clusters(&self, threshold: f32) -> ApiResult<Vec<Vec<String>>>;
+}
+
 pub trait MaintenanceStore {
     async fn stats(&self) -> ApiResult<Stats>;
     async fn stats_per_entity(&self) -> ApiResult<Vec<(String, usize)>>;
@@ -192,11 +285,3 @@ pub trait MaintenanceStore {
     async fn capabilities(&self) -> ApiResult<BackendCapabilities>;
     async fn health(&self) -> ApiResult<BackendHealth>;
 }
-
-/// The aggregate an application depends on. Document/vector storage
-/// (`DocumentStore`) is an optional capability, not part of the mandatory
-/// core: a backend must provide graph, search, and maintenance to be a
-/// `Backend`.
-pub trait Backend: GraphStore + SearchStore + MaintenanceStore {}
-
-impl<T> Backend for T where T: GraphStore + SearchStore + MaintenanceStore {}

@@ -1,17 +1,19 @@
 # Changelog
 
-## v0.5.0 — Turso Migration & Scoped Export
+## v0.5.0 — Storage Backend Boundary & Scoped Export
 
 ### Added
 - **Scoped subgraph export (`export --scope <entity>`)**: Restrict `export` to the subgraph rooted at one or more entities — each root, its `part_of` children (transitively), and the `depends_on` targets they cite (one hop) — for handing a single epic to a teammate without exporting the whole graph. `--rationale` additionally follows one hop of `supersedes`/`extends` off the cited leaves. Volatile/global entities (`session`, `preference`, `standard`) are never included, so an imported bundle cannot clobber the importer's own preferences. Output is the same JSON shape as a full export, so `import` consumes it unchanged.
+- **Storage backend boundary (`api::v1`)**: A stable set of capability traits (`GraphStore`, `SearchStore`, `DocumentStore`, `SkillStore`, `MaintenanceStore`, plus optional `SnapshotStore`/`BackupStore`/`DocumentMaintenanceStore`) with a `Storage` composite and an `AsobiRuntime` composition root. The application layer (CLI, skills, ingest, recall, compact) depends only on these contracts and never names a provider, driver, SQL, or state-file — enforced by the `scripts/verify_storage_boundary.py` gate. See `docs/specs/2026-07-11-storage-composition-adr.md`.
 
 ### Changed
-- Bumped `clap` (4.5 → 4.6) and `toml` (0.8 → 1) and refreshed the lockfile to the latest compatible transitive versions. The turso storage-engine migration (replacing libsql; FTS + vector + multi-process concurrency reworked onto turso's model) is the main body of v0.5 and lands in this release — see the `asobi:v0.5` epic for the task breakdown.
-- Replaced SQLite FTS5/triggers with Turso native FTS indexes and replaced the libSQL vector index with exact `vector32`/`vector_distance_cos` search. Turso's native FTS does not provide porter stemming.
-- Removed legacy journal-mode and busy-timeout environment overrides; Turso owns multi-process WAL coordination and bounded retry behavior.
-- Turso now uses the backend-qualified `asobi.turso.db` filename; an orphaned legacy `asobi.db` is left untouched and triggers a migration notice while v0.5 starts fresh.
+- **libSQL is the default backend; Turso is an experimental opt-in.** Turso is compiled and selectable only behind `--features turso-experimental`; the default build, tests, and `make check` ship libSQL alone. Each provider owns its own state-file name (libSQL `asobi.db`, Turso `asobi.turso.db`) and concurrency model, so the two never share a database file. `make check-turso` runs the feature-gated Turso matrix.
+- libSQL keeps SQLite FTS5 (BM25 ranking, porter stemming) and the `libsql_vector_idx` ANN index; the experimental Turso provider uses native FTS and exact `vector32`/`vector_distance_cos` search (no porter stemming), surfaced through `BackendInfo` capabilities.
+- Bumped `clap` (4.5 → 4.6) and `toml` (0.8 → 1) and refreshed the lockfile to the latest compatible transitive versions.
+- Removed legacy journal-mode and busy-timeout environment overrides; the storage backend owns WAL coordination and bounded retry behavior.
 
 ### Tests
+- Rewrote application-layer tests (skills, ingest, recall, `import_graph`) to run through the `Storage` composite and `api::v1` traits, so they exercise the default backend without reaching into a provider. Storage-layer regression tests (normalization, graph edge cases, neighbor expansion, bench isolation) run against libSQL; genuinely Turso-specific suites are gated behind `turso-experimental`.
 - Added a `scope_subgraph` unit suite and an end-to-end `export --scope` CLI check (leaf-termination, shared-pitfall isolation, `--rationale`, multi-root union, type guard, round-trip import).
 - Added CLI coverage for `unlink` and strengthened the full export/import check into a round-trip fidelity guard over entities, truths, and relations.
 

@@ -23,8 +23,9 @@ Keep memory, track session state, and share context across conversations — sto
 
 - **Knowledge graph** — entities, append-only (capped) observations, and directed relations.
 - **Truths** — durable `key→value` facts per entity for current state (`status`, `version`); status-as-truth makes a board a single `search --where status=…`.
-- **Fast search** — `search` over Turso FTS (relevance scoring) with a substring fallback, plus `--where key=value` truth filters (the query term is optional).
-- **Concurrency-safe** — Turso multi-process WAL with bounded startup and write retries, so lead and dispatched agents can share a graph.
+- **Fast search** — `search` over libSQL FTS5 (BM25 relevance, porter stemming) with a substring fallback, plus `--where key=value` truth filters (the query term is optional).
+- **Concurrency-safe** — WAL-mode storage with bounded startup and write retries, so lead and dispatched agents can share a graph.
+- **Pluggable backend** — libSQL is the default; an experimental Turso backend is opt-in behind `--features turso-experimental` and keeps its own isolated state file.
 - **Lazy reads** — `graph`/`search` return truths + counts; `show` returns the full body. Cheap to load, cheap on tokens.
 - **Skills** — install reusable agent instructions from a git repo or local path.
 - **Document tier** (optional, `--features documents`) — `ingest` + semantic `query` over Markdown.
@@ -80,7 +81,7 @@ asobi rm-obs "my-project" 1 --id
 
 ## 🔒 Sandboxed Environments
 
-When running in sandboxed or restricted environments (such as Codex, Nix build sandboxes, or containerized runners), use a project-local workspace (`asobi init --local`) or configure custom database paths (`ASOBI_HOME`, `ASOBI_DATABASE_URL`). Turso manages WAL coordination and retry behavior; legacy journal-mode and busy-timeout overrides are not supported.
+When running in sandboxed or restricted environments (such as Codex, Nix build sandboxes, or containerized runners), use a project-local workspace (`asobi init --local`) or configure custom database paths (`ASOBI_HOME`, `ASOBI_DATABASE_URL`). The storage backend manages WAL coordination and retry behavior; legacy journal-mode and busy-timeout overrides are not supported.
 
 See the [Running in Sandboxed Environments](docs/usage.md#running-in-sandboxed-environments-codex-etc) section in the Usage Guide for more details.
 

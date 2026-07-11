@@ -6,15 +6,15 @@
 //! makes the bench safe: pointing `ASOBI_DATABASE_URL` at a scratch file
 //! fully isolates writes and resets from any other database file.
 
-use asobi::backend::turso::db;
 use asobi::model::EntityInput;
+use asobi::storage::libsql::db;
 use tempfile::tempdir;
 
 fn set_db(path: &std::path::Path) {
     unsafe { std::env::set_var(db::ENV_DATABASE_URL, path.to_str().unwrap()) };
 }
 
-async fn seed(conn: &turso::Connection, name: &str) {
+async fn seed(conn: &libsql::Connection, name: &str) {
     db::create_entities(
         conn,
         vec![EntityInput {
@@ -58,3 +58,4 @@ async fn bench_env_var_isolates_real_graph() {
     assert_eq!(graph.entities.len(), 1, "bench reset wiped the real graph");
     assert_eq!(graph.entities[0].name, "keep-me");
 }
+// storage-boundary: provider-test

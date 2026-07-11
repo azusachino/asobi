@@ -1,7 +1,7 @@
-use asobi::backend::turso::db::{
+use asobi::model::{EntityInput, RelationInput};
+use asobi::storage::libsql::db::{
     ENV_DATABASE_URL, create_entities, create_relations, init_db, search_nodes,
 };
-use asobi::model::{EntityInput, RelationInput};
 use tempfile::tempdir;
 
 #[tokio::test]
@@ -60,3 +60,4 @@ async fn test_search_nodes_expands_neighbors() {
     );
     assert!(graph.relations[0].from == "source" && graph.relations[0].to == "target");
 }
+// storage-boundary: provider-test
