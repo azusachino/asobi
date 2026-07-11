@@ -15,5 +15,5 @@ pub mod v1;
 pub use v1::{
     API_VERSION, ApiError, ApiResult, Backend, BackendCapabilities, BackendHealth, DocumentChunk,
     DocumentSearchResult, DocumentStore, GraphStore, MaintenanceStore, OpenNodes, SearchQuery,
-    SearchResult, SearchStore, Snapshot, SnapshotStore, Stats, TopicSnapshot,
+    SearchResult, SearchStore, Stats, TopicSnapshot,
 };

@@ -121,19 +121,6 @@ pub struct TopicSnapshot {
     pub body: String,
 }
 
-/// Backend-neutral logical snapshot — never a file copy. This is the ONLY
-/// cross-backend interchange format, so turso -> postgres -> rocksdb round-trips
-/// through it.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Snapshot {
-    pub api_version: u32,
-    pub schema_version: u32,
-    pub graph: Graph,
-    pub topics: Vec<TopicSnapshot>,
-    pub chunks: Vec<DocumentChunk>,
-}
-
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BackendHealth {
@@ -182,8 +169,6 @@ pub trait GraphStore {
 
 pub trait SearchStore {
     async fn search_nodes(&self, query: SearchQuery) -> ApiResult<Graph>;
-    async fn search_topics(&self, query: &str, limit: usize) -> ApiResult<Vec<SearchResult>>;
-    async fn topics_by_id(&self, ids: &[String]) -> ApiResult<Vec<SearchResult>>;
 }
 
 pub trait DocumentStore {
@@ -196,11 +181,8 @@ pub trait DocumentStore {
         limit: usize,
     ) -> ApiResult<Vec<DocumentSearchResult>>;
     async fn delete_chunks_by_topic(&self, topic_id: &str) -> ApiResult<()>;
-}
-
-pub trait SnapshotStore {
-    async fn export_snapshot(&self) -> ApiResult<Snapshot>;
-    async fn import_snapshot(&self, snapshot: Snapshot) -> ApiResult<()>;
+    async fn search_topics(&self, query: &str, limit: usize) -> ApiResult<Vec<SearchResult>>;
+    async fn topics_by_id(&self, ids: &[String]) -> ApiResult<Vec<SearchResult>>;
 }
 
 pub trait MaintenanceStore {
@@ -211,14 +193,10 @@ pub trait MaintenanceStore {
     async fn health(&self) -> ApiResult<BackendHealth>;
 }
 
-/// The aggregate an application depends on. A backend that satisfies every
-/// capability trait is automatically a `Backend`.
-pub trait Backend:
-    GraphStore + SearchStore + DocumentStore + SnapshotStore + MaintenanceStore
-{
-}
+/// The aggregate an application depends on. Document/vector storage
+/// (`DocumentStore`) is an optional capability, not part of the mandatory
+/// core: a backend must provide graph, search, and maintenance to be a
+/// `Backend`.
+pub trait Backend: GraphStore + SearchStore + MaintenanceStore {}
 
-impl<T> Backend for T where
-    T: GraphStore + SearchStore + DocumentStore + SnapshotStore + MaintenanceStore
-{
-}
+impl<T> Backend for T where T: GraphStore + SearchStore + MaintenanceStore {}

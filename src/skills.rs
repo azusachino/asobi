@@ -594,7 +594,7 @@ mod tests {
         .unwrap();
 
         // 6. Verify skill is queryable via recall
-        let results = crate::recall::recall("cryptography", &backend, &backend, &embedder, 5)
+        let results = crate::recall::recall("cryptography", &backend, &embedder, 5)
             .await
             .unwrap();
         assert!(!results.is_empty(), "expected skill to be queryable");

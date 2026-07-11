@@ -1,10 +1,10 @@
 use anyhow::{Context, Result};
+use libsql::{Connection, Database};
 use std::collections::HashMap;
 use std::env;
-use turso::{Connection, Database};
 
 pub const DEFAULT_SEARCH_LIMIT: usize = 100;
-pub use crate::backend::turso::constant::ENV_DATABASE_URL;
+pub use crate::backend::libsql::constant::ENV_DATABASE_URL;
 
 pub const SCHEMA_VERSION: i64 = 1;
 
@@ -18,30 +18,31 @@ pub async fn init_db() -> Result<(Database, Connection)> {
             ))?;
     }
 
-    let explicit_db_path = env::var(ENV_DATABASE_URL).ok();
-    let db_path = explicit_db_path
-        .clone()
-        .unwrap_or_else(|| paths.db_path().to_str().unwrap().to_string());
-    if explicit_db_path.is_none() && !std::path::Path::new(&db_path).exists() {
-        let legacy_path = paths.data_dir.join("asobi.db");
-        if legacy_path.exists() {
-            tracing::warn!(
-                legacy = %legacy_path.display(),
-                fresh = %db_path,
-                "found an older Asobi database; Turso starts with a fresh database. Export it with the v0.4 binary and import it into this v0.5 session"
-            );
-        }
-    }
-    let (db, conn) = crate::backend::turso::tx::open_local(std::path::Path::new(&db_path))
+    let db_path = env::var(ENV_DATABASE_URL)
+        .unwrap_or_else(|_| paths.db_path().to_str().unwrap().to_string());
+    let (db, conn) = crate::backend::libsql::tx::open_local(std::path::Path::new(&db_path))
         .await
         .with_context(|| format!(
             "failed to build/open database file at '{}'. Hint: run 'asobi init --local' or set ASOBI_HOME to a writable directory.",
             db_path
         ))?;
 
+    let timeout_ms = env::var(crate::backend::libsql::constant::ENV_BUSY_TIMEOUT)
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(15000);
+    let busy_timeout_pragma = format!("PRAGMA busy_timeout = {}", timeout_ms);
+
+    // Apply basic connection pragmas needed for every connection.
+    // Set busy timeout FIRST so subsequent pragmas and queries respect it.
+    {
+        let mut rows = conn.query(&busy_timeout_pragma, ()).await?;
+        let _ = rows.next().await?;
+    }
+
     for pragma in [
-        crate::backend::turso::constant::PRAGMA_FOREIGN_KEYS_ON,
-        crate::backend::turso::constant::PRAGMA_SYNCHRONOUS_NORMAL,
+        crate::backend::libsql::constant::PRAGMA_FOREIGN_KEYS_ON,
+        crate::backend::libsql::constant::PRAGMA_SYNCHRONOUS_NORMAL,
     ] {
         let mut rows = conn.query(pragma, ()).await?;
         let _ = rows.next().await?;
@@ -60,6 +61,30 @@ pub async fn init_db() -> Result<(Database, Connection)> {
 
     if current_version == SCHEMA_VERSION {
         return Ok((db, conn));
+    }
+
+    // journal_mode cannot be changed inside a transaction — set it up front.
+    let journal_mode = env::var(crate::backend::libsql::constant::ENV_JOURNAL_MODE)
+        .unwrap_or_else(|_| "WAL".to_string())
+        .to_uppercase();
+    let journal_mode_pragma = format!("PRAGMA journal_mode = {}", journal_mode);
+
+    let run_journal_mode = async {
+        {
+            let mut rows = conn.query(&journal_mode_pragma, ()).await?;
+            let _ = rows.next().await?;
+        }
+        Ok::<(), libsql::Error>(())
+    };
+
+    if let Err(e) = run_journal_mode.await {
+        tracing::warn!(
+            "Failed to set journal_mode to '{}': {:?}. Falling back to DELETE.",
+            journal_mode,
+            e
+        );
+        let mut rows = conn.query("PRAGMA journal_mode = DELETE", ()).await?;
+        let _ = rows.next().await?;
     }
 
     // Determine if migration is needed before starting transaction to allow setting foreign keys accordingly.
@@ -100,15 +125,22 @@ pub async fn init_db() -> Result<(Database, Connection)> {
             return Ok(());
         }
 
-        conn.execute(crate::backend::turso::constant::SCHEMA_CREATE_TOPICS, ())
+        conn.execute(crate::backend::libsql::constant::SCHEMA_CREATE_TOPICS, ())
             .await?;
 
-        conn.execute(crate::backend::turso::constant::SCHEMA_CREATE_SESSIONS, ())
+        // FTS5 for full-text keyword search
+        conn.execute(
+            crate::backend::libsql::constant::SCHEMA_CREATE_TOPICS_FTS,
+            (),
+        )
+        .await?;
+
+        conn.execute(crate::backend::libsql::constant::SCHEMA_CREATE_SESSIONS, ())
             .await?;
 
         // Graph Tier (Hot) — CREATE IF NOT EXISTS is a no-op on migrated tables.
         conn.execute(
-            crate::backend::turso::constant::SCHEMA_CREATE_ASOBI_ENTITIES,
+            crate::backend::libsql::constant::SCHEMA_CREATE_ASOBI_ENTITIES,
             (),
         )
         .await?;
@@ -123,7 +155,7 @@ pub async fn init_db() -> Result<(Database, Connection)> {
             )
             .await?;
             conn.execute(
-                crate::backend::turso::constant::SCHEMA_CREATE_ASOBI_OBSERVATIONS,
+                crate::backend::libsql::constant::SCHEMA_CREATE_ASOBI_OBSERVATIONS,
                 (),
             )
             .await?;
@@ -136,56 +168,101 @@ pub async fn init_db() -> Result<(Database, Connection)> {
                 .await?;
         } else {
             conn.execute(
-                crate::backend::turso::constant::SCHEMA_CREATE_ASOBI_OBSERVATIONS,
+                crate::backend::libsql::constant::SCHEMA_CREATE_ASOBI_OBSERVATIONS,
                 (),
             )
             .await?;
         }
 
         conn.execute(
-            crate::backend::turso::constant::SCHEMA_CREATE_IDX_ASOBI_OBSERVATIONS,
+            crate::backend::libsql::constant::SCHEMA_CREATE_IDX_ASOBI_OBSERVATIONS,
             (),
         )
         .await?;
 
         conn.execute(
-            crate::backend::turso::constant::SCHEMA_CREATE_ASOBI_RELATIONS,
+            crate::backend::libsql::constant::SCHEMA_CREATE_ASOBI_RELATIONS,
             (),
         )
         .await?;
 
         conn.execute(
-            crate::backend::turso::constant::SCHEMA_CREATE_ASOBI_TRUTHS,
+            crate::backend::libsql::constant::SCHEMA_CREATE_ASOBI_TRUTHS,
             (),
         )
         .await?;
 
         conn.execute(
-            crate::backend::turso::constant::SCHEMA_CREATE_ASOBI_SKILLS,
-            (),
-        )
-        .await?;
-
-        conn.execute(
-            crate::backend::turso::constant::SCHEMA_CREATE_TOPICS_FTS,
-            (),
-        )
-        .await?;
-        conn.execute(
-            crate::backend::turso::constant::SCHEMA_CREATE_ASOBI_OBS_FTS,
+            crate::backend::libsql::constant::SCHEMA_CREATE_ASOBI_SKILLS,
             (),
         )
         .await?;
 
         // Document Tier (Vectors)
-        conn.execute(crate::backend::turso::constant::SCHEMA_CREATE_CHUNKS, ())
+        conn.execute(crate::backend::libsql::constant::SCHEMA_CREATE_CHUNKS, ())
             .await?;
 
         conn.execute(
-            crate::backend::turso::constant::SCHEMA_CREATE_IDX_CHUNKS_TOPIC_ID,
+            crate::backend::libsql::constant::SCHEMA_CREATE_IDX_CHUNKS_TOPIC_ID,
             (),
         )
         .await?;
+
+        // Vector index - metric=cosine is default
+        conn.execute(
+            crate::backend::libsql::constant::SCHEMA_CREATE_IDX_CHUNKS_VECTOR,
+            (),
+        )
+        .await?;
+
+        // Triggers to keep topics_fts in sync with topics
+        conn.execute(
+            crate::backend::libsql::constant::SCHEMA_CREATE_TRIGGER_TOPICS_AI,
+            (),
+        )
+        .await?;
+        conn.execute(
+            crate::backend::libsql::constant::SCHEMA_CREATE_TRIGGER_TOPICS_AD,
+            (),
+        )
+        .await?;
+        conn.execute(
+            crate::backend::libsql::constant::SCHEMA_CREATE_TRIGGER_TOPICS_AU,
+            (),
+        )
+        .await?;
+
+        // FTS5 for graph observation search (porter stemming, BM25 ranking)
+        conn.execute(
+            crate::backend::libsql::constant::SCHEMA_CREATE_ASOBI_OBS_FTS,
+            (),
+        )
+        .await?;
+
+        // Triggers to keep asobi_obs_fts in sync with asobi_observations
+        conn.execute(
+            crate::backend::libsql::constant::SCHEMA_CREATE_TRIGGER_ASOBI_OBS_AI,
+            (),
+        )
+        .await?;
+        conn.execute(
+            crate::backend::libsql::constant::SCHEMA_CREATE_TRIGGER_ASOBI_OBS_AD,
+            (),
+        )
+        .await?;
+        conn.execute(
+            crate::backend::libsql::constant::SCHEMA_CREATE_TRIGGER_ASOBI_OBS_AU,
+            (),
+        )
+        .await?;
+
+        if needs_migration {
+            conn.execute(
+                "INSERT INTO asobi_obs_fts(asobi_obs_fts) VALUES('rebuild')",
+                (),
+            )
+            .await?;
+        }
 
         let version_pragma = format!("PRAGMA user_version = {}", SCHEMA_VERSION);
         conn.execute(&version_pragma, ()).await?;
@@ -214,7 +291,7 @@ pub async fn init_db() -> Result<(Database, Connection)> {
     Ok((db, conn))
 }
 
-/// Turso FTS keyword search — returns (id, title, file_path, relevance_score)
+/// FTS5 keyword search — returns (id, title, file_path, bm25_score)
 pub async fn search_fts(
     conn: &Connection,
     query: &str,
@@ -222,8 +299,8 @@ pub async fn search_fts(
 ) -> Result<Vec<(String, String, String, f64)>> {
     let mut rows = conn
         .query(
-            crate::backend::turso::constant::SQL_SEARCH_FTS,
-            turso::params![query, limit as i64],
+            crate::backend::libsql::constant::SQL_SEARCH_FTS,
+            libsql::params![query, limit as i64],
         )
         .await?;
     let mut results = Vec::new();
@@ -246,15 +323,15 @@ pub async fn upsert_topic(
     body: &str,
 ) -> Result<()> {
     conn.execute(
-        crate::backend::turso::constant::SQL_UPSERT_TOPIC,
-        turso::params![id, title, file_path, body],
+        crate::backend::libsql::constant::SQL_UPSERT_TOPIC,
+        libsql::params![id, title, file_path, body],
     )
     .await?;
     Ok(())
 }
 
 pub async fn delete_topic(conn: &Connection, id: &str) -> Result<()> {
-    conn.execute("DELETE FROM topics WHERE id = ?1", turso::params![id])
+    conn.execute("DELETE FROM topics WHERE id = ?1", libsql::params![id])
         .await?;
     Ok(())
 }
@@ -263,22 +340,22 @@ pub async fn create_entities(
     conn: &Connection,
     entities: Vec<crate::model::EntityInput>,
 ) -> Result<()> {
-    crate::backend::turso::tx::immediate_transaction(conn, |tx| {
+    crate::backend::libsql::tx::immediate_transaction(conn, |tx| {
         let entities = entities.clone();
         Box::pin(async move {
             for mut ent in entities {
                 ent.name = crate::normalize::normalize_key(&ent.name);
                 let inserted = tx
                     .execute(
-                        crate::backend::turso::constant::SQL_INSERT_ENTITY,
-                        turso::params![ent.name.clone(), ent.entity_type],
+                        crate::backend::libsql::constant::SQL_INSERT_ENTITY,
+                        libsql::params![ent.name.clone(), ent.entity_type],
                     )
                     .await?;
                 if inserted == 1 {
                     for obs in ent.observations {
                         tx.execute(
-                            crate::backend::turso::constant::SQL_INSERT_OBSERVATION,
-                            turso::params![ent.name.clone(), obs],
+                            crate::backend::libsql::constant::SQL_INSERT_OBSERVATION,
+                            libsql::params![ent.name.clone(), obs],
                         )
                         .await?;
                     }
@@ -296,22 +373,22 @@ pub async fn add_observations(
     observations: Vec<crate::model::ObservationInput>,
     limit: usize,
 ) -> Result<()> {
-    crate::backend::turso::tx::immediate_transaction(conn, |tx| {
+    crate::backend::libsql::tx::immediate_transaction(conn, |tx| {
         let observations = observations.clone();
         Box::pin(async move {
             for mut obs_batch in observations {
                 obs_batch.entity_name = crate::normalize::normalize_key(&obs_batch.entity_name);
                 for content in obs_batch.contents {
                     tx.execute(
-                        crate::backend::turso::constant::SQL_INSERT_OBSERVATION,
-                        turso::params![obs_batch.entity_name.clone(), content],
+                        crate::backend::libsql::constant::SQL_INSERT_OBSERVATION,
+                        libsql::params![obs_batch.entity_name.clone(), content],
                     )
                     .await?;
                 }
                 if limit > 0 {
                     tx.execute(
-                        crate::backend::turso::constant::SQL_EVICT_OBSERVATIONS,
-                        turso::params![obs_batch.entity_name.clone(), limit as i64],
+                        crate::backend::libsql::constant::SQL_EVICT_OBSERVATIONS,
+                        libsql::params![obs_batch.entity_name.clone(), limit as i64],
                     )
                     .await?;
                 }
@@ -327,15 +404,15 @@ pub async fn create_relations(
     conn: &Connection,
     relations: Vec<crate::model::RelationInput>,
 ) -> Result<()> {
-    crate::backend::turso::tx::immediate_transaction(conn, |tx| {
+    crate::backend::libsql::tx::immediate_transaction(conn, |tx| {
         let relations = relations.clone();
         Box::pin(async move {
             for mut rel in relations {
                 rel.from = crate::normalize::normalize_key(&rel.from);
                 rel.to = crate::normalize::normalize_key(&rel.to);
                 tx.execute(
-                    crate::backend::turso::constant::SQL_INSERT_RELATION,
-                    turso::params![rel.from, rel.to, rel.relation_type],
+                    crate::backend::libsql::constant::SQL_INSERT_RELATION,
+                    libsql::params![rel.from, rel.to, rel.relation_type],
                 )
                 .await?;
             }
@@ -347,24 +424,24 @@ pub async fn create_relations(
 }
 
 pub async fn delete_entities(conn: &Connection, names: Vec<String>) -> Result<()> {
-    crate::backend::turso::tx::immediate_transaction(conn, |tx| {
+    crate::backend::libsql::tx::immediate_transaction(conn, |tx| {
         let names = names.clone();
         Box::pin(async move {
             for name in names {
                 let norm_name = crate::normalize::normalize_key(&name);
                 tx.execute(
-                    crate::backend::turso::constant::SQL_DELETE_ENTITY,
-                    turso::params![norm_name.clone()],
+                    crate::backend::libsql::constant::SQL_DELETE_ENTITY,
+                    libsql::params![norm_name.clone()],
                 )
                 .await?;
                 tx.execute(
                     "DELETE FROM topics WHERE id = ?1",
-                    turso::params![norm_name.clone()],
+                    libsql::params![norm_name.clone()],
                 )
                 .await?;
                 tx.execute(
                     "DELETE FROM chunks WHERE topic_id = ?1",
-                    turso::params![norm_name],
+                    libsql::params![norm_name],
                 )
                 .await?;
             }
@@ -379,15 +456,15 @@ pub async fn delete_observations(
     conn: &Connection,
     deletions: Vec<crate::model::ObservationDeletion>,
 ) -> Result<()> {
-    crate::backend::turso::tx::immediate_transaction(conn, |tx| {
+    crate::backend::libsql::tx::immediate_transaction(conn, |tx| {
         let deletions = deletions.clone();
         Box::pin(async move {
             for mut del in deletions {
                 del.entity_name = crate::normalize::normalize_key(&del.entity_name);
                 for obs in del.observations {
                     tx.execute(
-                        crate::backend::turso::constant::SQL_DELETE_OBSERVATION,
-                        turso::params![del.entity_name.clone(), obs],
+                        crate::backend::libsql::constant::SQL_DELETE_OBSERVATION,
+                        libsql::params![del.entity_name.clone(), obs],
                     )
                     .await?;
                 }
@@ -403,8 +480,8 @@ pub async fn delete_observation_by_id(conn: &Connection, entity_name: &str, id: 
     let norm_name = crate::normalize::normalize_key(entity_name);
     let affected = conn
         .execute(
-            crate::backend::turso::constant::SQL_DELETE_OBSERVATION_BY_ID,
-            turso::params![id, norm_name],
+            crate::backend::libsql::constant::SQL_DELETE_OBSERVATION_BY_ID,
+            libsql::params![id, norm_name],
         )
         .await?;
     if affected == 0 {
@@ -426,8 +503,8 @@ pub async fn update_observation_by_id(
     let norm_name = crate::normalize::normalize_key(entity_name);
     let affected = conn
         .execute(
-            crate::backend::turso::constant::SQL_UPDATE_OBSERVATION_BY_ID,
-            turso::params![id, new_content, norm_name],
+            crate::backend::libsql::constant::SQL_UPDATE_OBSERVATION_BY_ID,
+            libsql::params![id, new_content, norm_name],
         )
         .await?;
     if affected == 0 {
@@ -448,8 +525,8 @@ pub async fn update_observation(
 ) -> Result<()> {
     let norm_name = crate::normalize::normalize_key(entity_name);
     conn.execute(
-        crate::backend::turso::constant::SQL_UPDATE_OBSERVATION,
-        turso::params![norm_name, old_content, new_content],
+        crate::backend::libsql::constant::SQL_UPDATE_OBSERVATION,
+        libsql::params![norm_name, old_content, new_content],
     )
     .await?;
     Ok(())
@@ -459,15 +536,15 @@ pub async fn delete_relations(
     conn: &Connection,
     relations: Vec<crate::model::RelationInput>,
 ) -> Result<()> {
-    crate::backend::turso::tx::immediate_transaction(conn, |tx| {
+    crate::backend::libsql::tx::immediate_transaction(conn, |tx| {
         let relations = relations.clone();
         Box::pin(async move {
             for mut rel in relations {
                 rel.from = crate::normalize::normalize_key(&rel.from);
                 rel.to = crate::normalize::normalize_key(&rel.to);
                 tx.execute(
-                    crate::backend::turso::constant::SQL_DELETE_RELATION,
-                    turso::params![rel.from, rel.to, rel.relation_type],
+                    crate::backend::libsql::constant::SQL_DELETE_RELATION,
+                    libsql::params![rel.from, rel.to, rel.relation_type],
                 )
                 .await?;
             }
@@ -481,7 +558,10 @@ pub async fn delete_relations(
 pub async fn read_graph(conn: &Connection) -> Result<crate::model::Graph> {
     let mut entity_names = Vec::new();
     let mut rows = conn
-        .query(crate::backend::turso::constant::SQL_SELECT_ALL_ENTITIES, ())
+        .query(
+            crate::backend::libsql::constant::SQL_SELECT_ALL_ENTITIES,
+            (),
+        )
         .await?;
     while let Some(row) = rows.next().await? {
         entity_names.push(row.get::<String>(0)?);
@@ -491,7 +571,7 @@ pub async fn read_graph(conn: &Connection) -> Result<crate::model::Graph> {
     let mut relations = Vec::new();
     let mut rel_rows = conn
         .query(
-            crate::backend::turso::constant::SQL_SELECT_ALL_RELATIONS,
+            crate::backend::libsql::constant::SQL_SELECT_ALL_RELATIONS,
             (),
         )
         .await?;
@@ -512,7 +592,10 @@ pub async fn read_graph(conn: &Connection) -> Result<crate::model::Graph> {
 pub async fn read_graph_eager(conn: &Connection) -> Result<crate::model::Graph> {
     let mut entity_names = Vec::new();
     let mut rows = conn
-        .query(crate::backend::turso::constant::SQL_SELECT_ALL_ENTITIES, ())
+        .query(
+            crate::backend::libsql::constant::SQL_SELECT_ALL_ENTITIES,
+            (),
+        )
         .await?;
     while let Some(row) = rows.next().await? {
         entity_names.push(row.get::<String>(0)?);
@@ -522,7 +605,7 @@ pub async fn read_graph_eager(conn: &Connection) -> Result<crate::model::Graph> 
     let mut relations = Vec::new();
     let mut rel_rows = conn
         .query(
-            crate::backend::turso::constant::SQL_SELECT_ALL_RELATIONS,
+            crate::backend::libsql::constant::SQL_SELECT_ALL_RELATIONS,
             (),
         )
         .await?;
@@ -662,13 +745,13 @@ pub async fn search_nodes_with_limit(
                 i * 2 + 1,
                 i * 2 + 2
             ));
-            params.push(turso::Value::from(k.clone()));
-            params.push(turso::Value::from(v.clone()));
+            params.push(libsql::Value::from(k.clone()));
+            params.push(libsql::Value::from(v.clone()));
         }
         sql.push_str(" GROUP BY entity_name HAVING COUNT(DISTINCT key) = ?");
-        params.push(turso::Value::from(filters.len() as i64));
+        params.push(libsql::Value::from(filters.len() as i64));
 
-        let mut rows = conn.query(&sql, turso::params_from_iter(params)).await?;
+        let mut rows = conn.query(&sql, libsql::params_from_iter(params)).await?;
         while let Some(row) = rows.next().await? {
             filtered_names.insert(row.get::<String>(0)?);
         }
@@ -688,7 +771,7 @@ pub async fn search_nodes_with_limit(
             let mut rows = conn
                 .query(
                     "SELECT name FROM asobi_entities LIMIT ?1",
-                    turso::params![limit as i64],
+                    libsql::params![limit as i64],
                 )
                 .await?;
             while let Some(row) = rows.next().await? {
@@ -696,7 +779,7 @@ pub async fn search_nodes_with_limit(
             }
         }
     } else {
-        // Primary: Turso FTS on observation content
+        // Primary: FTS5 on observation content (porter stemming, bm25 ranking)
         let fts_hits: Vec<String> = async {
             let fts_fetch_limit = if filters.is_empty() {
                 limit.saturating_mul(8).max(limit) as i64
@@ -705,8 +788,8 @@ pub async fn search_nodes_with_limit(
             };
             let mut rows = conn
                 .query(
-                    crate::backend::turso::constant::SQL_SEARCH_OBSERVATIONS_FTS,
-                    turso::params![query, fts_fetch_limit],
+                    crate::backend::libsql::constant::SQL_SEARCH_OBSERVATIONS_FTS,
+                    libsql::params![query, fts_fetch_limit],
                 )
                 .await?;
             let mut names = Vec::new();
@@ -741,8 +824,8 @@ pub async fn search_nodes_with_limit(
             };
             let mut rows = conn
                 .query(
-                    crate::backend::turso::constant::SQL_SEARCH_ENTITIES_LIKE,
-                    turso::params![pattern, like_limit],
+                    crate::backend::libsql::constant::SQL_SEARCH_ENTITIES_LIKE,
+                    libsql::params![pattern, like_limit],
                 )
                 .await?;
             while let Some(row) = rows.next().await? {
@@ -838,19 +921,19 @@ async fn load_relations(
 
     for chunk in names.chunks(400) {
         let placeholders = chunk.iter().map(|_| "?").collect::<Vec<_>>().join(",");
-        let sql = crate::backend::turso::constant::SQL_SELECT_RELATIONS_IN_TEMPLATE
+        let sql = crate::backend::libsql::constant::SQL_SELECT_RELATIONS_IN_TEMPLATE
             .replace("{0}", &placeholders);
 
         let mut params = Vec::new();
         // Since we use the same array twice in the query logic, we only pass params once, wait!
         // The query "from_entity IN ({0}) OR to_entity IN ({0})" uses the placeholders twice.
-        // It's technically better to use different placeholders, but Turso bindings map "?" sequentially.
+        // It's technically better to use different placeholders, but libsql bindings map "?" sequentially.
         // So we need to push the parameters twice!
         for name in chunk {
-            params.push(turso::Value::from(name.clone()));
+            params.push(libsql::Value::from(name.clone()));
         }
         for name in chunk {
-            params.push(turso::Value::from(name.clone()));
+            params.push(libsql::Value::from(name.clone()));
         }
 
         let mut rel_rows = conn.query(&sql, params).await?;
@@ -882,12 +965,12 @@ async fn load_entities_lazy(
         let placeholders = chunk.iter().map(|_| "?").collect::<Vec<_>>().join(",");
 
         // Load entities
-        let entity_sql = crate::backend::turso::constant::SQL_SELECT_ENTITIES_IN_TEMPLATE
+        let entity_sql = crate::backend::libsql::constant::SQL_SELECT_ENTITIES_IN_TEMPLATE
             .replace("{}", &placeholders);
         let params = chunk
             .iter()
             .cloned()
-            .map(turso::Value::from)
+            .map(libsql::Value::from)
             .collect::<Vec<_>>();
 
         let mut rows = conn.query(&entity_sql, params.clone()).await?;
@@ -951,12 +1034,12 @@ async fn load_entities_eager_detailed(
         let placeholders = chunk.iter().map(|_| "?").collect::<Vec<_>>().join(",");
 
         // Load entities
-        let entity_sql = crate::backend::turso::constant::SQL_SELECT_ENTITIES_IN_TEMPLATE
+        let entity_sql = crate::backend::libsql::constant::SQL_SELECT_ENTITIES_IN_TEMPLATE
             .replace("{}", &placeholders);
         let params = chunk
             .iter()
             .cloned()
-            .map(turso::Value::from)
+            .map(libsql::Value::from)
             .collect::<Vec<_>>();
 
         let mut rows = conn.query(&entity_sql, params.clone()).await?;
@@ -964,7 +1047,7 @@ async fn load_entities_eager_detailed(
             entity_types.insert(row.get::<String>(0)?, row.get::<String>(1)?);
         }
 
-        let obs_sql = crate::backend::turso::constant::SQL_SELECT_OBSERVATIONS_IN_TEMPLATE
+        let obs_sql = crate::backend::libsql::constant::SQL_SELECT_OBSERVATIONS_IN_TEMPLATE
             .replace("{}", &placeholders);
         let mut rows = conn.query(&obs_sql, params.clone()).await?;
         while let Some(row) = rows.next().await? {
@@ -986,7 +1069,7 @@ async fn load_entities_eager_detailed(
         }
 
         // Load skill bodies
-        let skill_sql = crate::backend::turso::constant::SQL_SELECT_SKILL_BODIES_IN_TEMPLATE
+        let skill_sql = crate::backend::libsql::constant::SQL_SELECT_SKILL_BODIES_IN_TEMPLATE
             .replace("{}", &placeholders);
         let mut rows = conn.query(&skill_sql, params).await?;
         while let Some(row) = rows.next().await? {
@@ -1022,7 +1105,7 @@ async fn load_entities_eager_detailed(
 
 pub async fn stats(conn: &Connection) -> Result<(usize, usize, usize)> {
     let mut rows = conn
-        .query(crate::backend::turso::constant::SQL_COUNT_ENTITIES, ())
+        .query(crate::backend::libsql::constant::SQL_COUNT_ENTITIES, ())
         .await?;
     let entities_count: i64 = if let Some(row) = rows.next().await? {
         row.get(0)?
@@ -1031,7 +1114,7 @@ pub async fn stats(conn: &Connection) -> Result<(usize, usize, usize)> {
     };
 
     let mut rows = conn
-        .query(crate::backend::turso::constant::SQL_COUNT_RELATIONS, ())
+        .query(crate::backend::libsql::constant::SQL_COUNT_RELATIONS, ())
         .await?;
     let relations_count: i64 = if let Some(row) = rows.next().await? {
         row.get(0)?
@@ -1040,7 +1123,7 @@ pub async fn stats(conn: &Connection) -> Result<(usize, usize, usize)> {
     };
 
     let mut rows = conn
-        .query(crate::backend::turso::constant::SQL_COUNT_OBSERVATIONS, ())
+        .query(crate::backend::libsql::constant::SQL_COUNT_OBSERVATIONS, ())
         .await?;
     let observations_count: i64 = if let Some(row) = rows.next().await? {
         row.get(0)?
@@ -1070,30 +1153,33 @@ pub async fn stats_per_entity(conn: &Connection) -> Result<Vec<(String, usize)>>
 }
 
 pub async fn reset(conn: &Connection) -> Result<()> {
-    conn.execute(crate::backend::turso::constant::SQL_DELETE_ALL_CHUNKS, ())
+    conn.execute(crate::backend::libsql::constant::SQL_DELETE_ALL_CHUNKS, ())
         .await?;
-    conn.execute(crate::backend::turso::constant::SQL_DELETE_ALL_TOPICS, ())
+    conn.execute(crate::backend::libsql::constant::SQL_DELETE_ALL_TOPICS, ())
         .await?;
     conn.execute(
-        crate::backend::turso::constant::SQL_DELETE_ALL_RELATIONS,
+        crate::backend::libsql::constant::SQL_DELETE_ALL_RELATIONS,
         (),
     )
     .await?;
     conn.execute(
-        crate::backend::turso::constant::SQL_DELETE_ALL_OBSERVATIONS,
+        crate::backend::libsql::constant::SQL_DELETE_ALL_OBSERVATIONS,
         (),
     )
     .await?;
-    conn.execute(crate::backend::turso::constant::SQL_DELETE_ALL_ENTITIES, ())
-        .await?;
+    conn.execute(
+        crate::backend::libsql::constant::SQL_DELETE_ALL_ENTITIES,
+        (),
+    )
+    .await?;
     Ok(())
 }
 
 pub async fn truth_upsert(conn: &Connection, entity: &str, key: &str, value: &str) -> Result<()> {
     let norm_entity = crate::normalize::normalize_key(entity);
     conn.execute(
-        crate::backend::turso::constant::SQL_UPSERT_TRUTH,
-        turso::params![norm_entity, key, value],
+        crate::backend::libsql::constant::SQL_UPSERT_TRUTH,
+        libsql::params![norm_entity, key, value],
     )
     .await?;
     Ok(())
@@ -1102,8 +1188,8 @@ pub async fn truth_upsert(conn: &Connection, entity: &str, key: &str, value: &st
 pub async fn truth_delete(conn: &Connection, entity: &str, key: &str) -> Result<()> {
     let norm_entity = crate::normalize::normalize_key(entity);
     conn.execute(
-        crate::backend::turso::constant::SQL_DELETE_TRUTH,
-        turso::params![norm_entity, key],
+        crate::backend::libsql::constant::SQL_DELETE_TRUTH,
+        libsql::params![norm_entity, key],
     )
     .await?;
     Ok(())
@@ -1130,12 +1216,12 @@ pub async fn select_truths(
 
     for chunk in normalized_names.chunks(500) {
         let placeholders = chunk.iter().map(|_| "?").collect::<Vec<_>>().join(",");
-        let sql = crate::backend::turso::constant::SQL_SELECT_TRUTHS_FOR_ENTITIES
+        let sql = crate::backend::libsql::constant::SQL_SELECT_TRUTHS_FOR_ENTITIES
             .replace("{}", &placeholders);
         let params = chunk
             .iter()
             .cloned()
-            .map(turso::Value::from)
+            .map(libsql::Value::from)
             .collect::<Vec<_>>();
 
         let mut rows = conn.query(&sql, params).await?;
@@ -1171,8 +1257,8 @@ pub async fn skill_upsert(
 ) -> Result<()> {
     let norm_entity = crate::normalize::normalize_key(entity);
     conn.execute(
-        crate::backend::turso::constant::SQL_UPSERT_SKILL,
-        turso::params![norm_entity, body, source, version],
+        crate::backend::libsql::constant::SQL_UPSERT_SKILL,
+        libsql::params![norm_entity, body, source, version],
     )
     .await?;
     Ok(())
@@ -1182,8 +1268,8 @@ pub async fn skill_body(conn: &Connection, entity: &str) -> Result<Option<String
     let norm_entity = crate::normalize::normalize_key(entity);
     let mut rows = conn
         .query(
-            crate::backend::turso::constant::SQL_SELECT_SKILL_BODY,
-            turso::params![norm_entity],
+            crate::backend::libsql::constant::SQL_SELECT_SKILL_BODY,
+            libsql::params![norm_entity],
         )
         .await?;
     if let Some(row) = rows.next().await? {
@@ -1196,7 +1282,7 @@ pub async fn skill_body(conn: &Connection, entity: &str) -> Result<Option<String
 
 pub async fn list_skills(conn: &Connection) -> Result<Vec<SkillRow>> {
     let mut rows = conn
-        .query(crate::backend::turso::constant::SQL_LIST_SKILLS, ())
+        .query(crate::backend::libsql::constant::SQL_LIST_SKILLS, ())
         .await?;
     let mut results = Vec::new();
     while let Some(row) = rows.next().await? {
@@ -1215,7 +1301,6 @@ pub async fn list_skills(conn: &Connection) -> Result<Vec<SkillRow>> {
 mod tests {
     use super::*;
     use tempfile::tempdir;
-    use turso::Builder;
 
     fn ent(name: &str, ty: &str) -> crate::model::EntityOutput {
         crate::model::EntityOutput {
@@ -1237,8 +1322,6 @@ mod tests {
         }
     }
 
-    /// Two epics under a project, one sharing a decision, plus a rationale chain.
-    /// Mirrors the real graph shape the scope rule was designed against.
     fn scope_fixture() -> crate::model::Graph {
         crate::model::Graph {
             entities: vec![
@@ -1259,10 +1342,8 @@ mod tests {
                 rel("proj:a:task-2", "proj:a", "part_of"),
                 rel("proj:b", "proj", "part_of"),
                 rel("proj:b:task-1", "proj:b", "part_of"),
-                // task-2 of epic a cites a decision, which extends a root decision
                 rel("proj:a:task-2", "proj:decision:x", "depends_on"),
                 rel("proj:decision:x", "proj:decision:root", "extends"),
-                // a pitfall shared by both epics
                 rel("proj:a:task-1", "proj:pitfall:shared", "depends_on"),
                 rel("proj:b:task-1", "proj:pitfall:shared", "depends_on"),
             ],
@@ -1275,7 +1356,6 @@ mod tests {
         let keep = scope_subgraph(&g, &["proj:b".to_string()], false);
         assert!(keep.contains("proj:b"));
         assert!(keep.contains("proj:b:task-1"));
-        // sibling epic must not be pulled in
         assert!(!keep.contains("proj:a"));
         assert!(!keep.contains("proj"));
     }
@@ -1285,8 +1365,8 @@ mod tests {
         let g = scope_fixture();
         let keep = scope_subgraph(&g, &["proj:a".to_string()], false);
         assert!(keep.contains("proj:a:task-2"));
-        assert!(keep.contains("proj:decision:x")); // cited leaf included
-        assert!(!keep.contains("proj:decision:root")); // rationale hop NOT followed
+        assert!(keep.contains("proj:decision:x"));
+        assert!(!keep.contains("proj:decision:root"));
     }
 
     #[test]
@@ -1302,7 +1382,6 @@ mod tests {
         let g = scope_fixture();
         let keep = scope_subgraph(&g, &["proj:a".to_string()], false);
         assert!(keep.contains("proj:pitfall:shared"));
-        // the pitfall is a leaf; epic b (which also cites it) must not be pulled
         assert!(!keep.contains("proj:b"));
         assert!(!keep.contains("proj:b:task-1"));
     }
@@ -1313,14 +1392,12 @@ mod tests {
         let keep = scope_subgraph(&g, &["proj:a".to_string(), "proj:b".to_string()], false);
         assert!(keep.contains("proj:a:task-1"));
         assert!(keep.contains("proj:b:task-1"));
-        // project bridge still excluded — roots are named explicitly, not via `proj`
         assert!(!keep.contains("proj"));
     }
 
     #[test]
     fn scope_type_guard_excludes_preferences() {
         let mut g = scope_fixture();
-        // even a stray edge into a preference must not export it
         g.relations
             .push(rel("proj:a:task-1", "UserPreferences", "depends_on"));
         let keep = scope_subgraph(&g, &["proj:a".to_string()], false);
@@ -1343,13 +1420,23 @@ mod tests {
         }
         let (_db, conn) = init_db().await.unwrap();
 
-        // Turso-native FTS index should exist.
+        // FTS5 table should exist
         let mut rows = conn
             .query("SELECT name FROM sqlite_master WHERE name='topics_fts'", ())
             .await
             .unwrap();
         let row = rows.next().await.unwrap();
         assert!(row.is_some(), "topics_fts table missing");
+
+        let mut rows = conn
+            .query(
+                "SELECT name FROM sqlite_master WHERE name='asobi_obs_fts'",
+                (),
+            )
+            .await
+            .unwrap();
+        let row = rows.next().await.unwrap();
+        assert!(row.is_some(), "asobi_obs_fts table missing");
     }
 
     #[tokio::test]
@@ -1360,7 +1447,7 @@ mod tests {
             std::env::set_var(ENV_DATABASE_URL, db_path.to_str().unwrap());
         }
 
-        let legacy_db = Builder::new_local(db_path.to_str().unwrap())
+        let legacy_db = libsql::Builder::new_local(db_path.to_str().unwrap())
             .build()
             .await
             .unwrap();
@@ -1438,8 +1525,6 @@ mod tests {
         }
         let (_db, conn) = init_db().await.unwrap();
 
-        // Seed a row with a fixed, distinguishable created_at so a reset would
-        // be detectable even within the same wall-clock second.
         conn.execute(
             "INSERT INTO topics (id, title, file_path, body, created_at) \
              VALUES ('t1', 'Old Title', '/old', 'old body', '2000-01-01 00:00:00')",
@@ -1448,7 +1533,6 @@ mod tests {
         .await
         .unwrap();
 
-        // Re-upsert the same id with new content.
         upsert_topic(&conn, "t1", "New Title", "/new", "new body")
             .await
             .unwrap();
@@ -1465,10 +1549,8 @@ mod tests {
         let body: String = row.get(1).unwrap();
         let created_at: String = row.get(2).unwrap();
 
-        // Update was applied...
         assert_eq!(title, "New Title");
         assert_eq!(body, "new body");
-        // ...but created_at must be preserved (INSERT OR REPLACE would reset it).
         assert_eq!(created_at, "2000-01-01 00:00:00");
     }
 
@@ -1504,10 +1586,16 @@ mod tests {
         )
         .await;
 
-        // Turso FTS token matching does not provide SQLite FTS5 porter stemming.
+        // FTS5 porter stemming: "running" (query) should match "running" (indexed) —
+        // and this is also where libsql regains real porter stemming over turso's
+        // token-matching approximation, so "run" would stem-match "running" too.
         let graph = search_nodes(&conn, "running").await.unwrap();
         assert_eq!(graph.entities.len(), 1);
         assert_eq!(graph.entities[0].name, "async-patterns");
+
+        let stemmed = search_nodes(&conn, "run").await.unwrap();
+        assert_eq!(stemmed.entities.len(), 1);
+        assert_eq!(stemmed.entities[0].name, "async-patterns");
     }
 
     #[tokio::test]
@@ -1521,7 +1609,6 @@ mod tests {
         }
         let (_db, conn) = init_db().await.unwrap();
 
-        // Entity with no observations — FTS finds nothing, LIKE fallback finds by name
         seed_entity(&conn, "user-preferences", "preference", &[]).await;
 
         let graph = search_nodes(&conn, "user-preferences").await.unwrap();
@@ -1540,7 +1627,6 @@ mod tests {
         }
         let (_db, conn) = init_db().await.unwrap();
 
-        // "alpha" has both query words; "beta" has only one — alpha should rank first
         seed_entity(&conn, "alpha", "project", &["async tokio runtime patterns"]).await;
         seed_entity(&conn, "beta", "project", &["tokio scheduler"]).await;
 
@@ -1600,7 +1686,6 @@ mod tests {
         }
         let (_db, conn) = init_db().await.unwrap();
 
-        // Seed some entities
         seed_entity(&conn, "task-1", "task", &["fix bug"]).await;
         truth_upsert(&conn, "task-1", "status", "READY")
             .await
@@ -1625,7 +1710,6 @@ mod tests {
             .await
             .unwrap();
 
-        // 1. Search with status=READY
         let g1 = search_nodes_with_limit(
             &conn,
             "",
@@ -1640,7 +1724,6 @@ mod tests {
         assert!(names1.contains("task-1"));
         assert!(names1.contains("task-3"));
 
-        // 2. Search status=READY and priority=high
         let g2 = search_nodes_with_limit(
             &conn,
             "",
@@ -1657,7 +1740,6 @@ mod tests {
         assert_eq!(names2.len(), 1);
         assert!(names2.contains("task-1"));
 
-        // 3. Search status=READY with a query term "test"
         let g3 = search_nodes_with_limit(
             &conn,
             "test",
@@ -1683,11 +1765,9 @@ mod tests {
         }
         let (_db, conn) = init_db().await.unwrap();
 
-        // Check empty stats
         let s = stats(&conn).await.unwrap();
         assert_eq!(s, (0, 0, 0));
 
-        // Seed some data
         seed_entity(&conn, "entity1", "project", &["obs1", "obs2"]).await;
         seed_entity(&conn, "entity2", "project", &["obs3"]).await;
         create_relations(
@@ -1701,14 +1781,11 @@ mod tests {
         .await
         .unwrap();
 
-        // Check populated stats
         let s = stats(&conn).await.unwrap();
         assert_eq!(s, (2, 1, 3));
 
-        // Test reset
         reset(&conn).await.unwrap();
 
-        // Check empty stats again
         let s = stats(&conn).await.unwrap();
         assert_eq!(s, (0, 0, 0));
 
@@ -1720,7 +1797,7 @@ mod tests {
         .unwrap();
         conn.execute(
             "INSERT INTO chunks (id, topic_id, chunk_idx, text, source, embedding) VALUES ('chunk', 'topic', 0, 'text', 'source', vector32(?1))",
-            turso::params![serde_json::to_string(&vec![0.0f32; 384]).unwrap()],
+            libsql::params![serde_json::to_string(&vec![0.0f32; 384]).unwrap()],
         )
         .await
         .unwrap();
@@ -1868,7 +1945,6 @@ mod tests {
             .await
             .unwrap();
 
-        // Check if the truth was deleted.
         let mut rows = conn
             .query("SELECT COUNT(*) FROM asobi_truths", ())
             .await
@@ -1991,7 +2067,6 @@ mod tests {
             .await
             .unwrap();
 
-        // 1. Test read-graph (should be lazy)
         let graph_read = read_graph(&conn).await.unwrap();
         let entity_read = &graph_read.entities[0];
         assert!(entity_read.observations.is_empty());
@@ -1999,7 +2074,6 @@ mod tests {
         assert_eq!(entity_read.truths.len(), 1);
         assert_eq!(entity_read.truths.get("k1").unwrap(), "v1");
 
-        // 2. Test search (should be lazy)
         let graph_search = search_nodes(&conn, "test").await.unwrap();
         let entity_search = &graph_search.entities[0];
         assert!(entity_search.observations.is_empty());
@@ -2007,7 +2081,6 @@ mod tests {
         assert_eq!(entity_search.truths.len(), 1);
         assert_eq!(entity_search.truths.get("k1").unwrap(), "v1");
 
-        // 3. Test show (should be eager)
         let graph_open = open_nodes(&conn, vec!["test-entity".to_string()])
             .await
             .unwrap();
@@ -2034,7 +2107,6 @@ mod tests {
             .await
             .unwrap();
 
-        // 1. Upsert skill
         skill_upsert(
             &conn,
             "skill:test-skill",
@@ -2045,21 +2117,18 @@ mod tests {
         .await
         .unwrap();
 
-        // 2. show should return the body
         let graph = open_nodes(&conn, vec!["skill:test-skill".to_string()])
             .await
             .unwrap();
         let entity = &graph.entities[0];
         assert_eq!(entity.body.as_deref(), Some("body content 1"));
 
-        // 3. graph and search should NOT return the body
         let graph_read = read_graph(&conn).await.unwrap();
         assert!(graph_read.entities[0].body.is_none());
 
         let graph_search = search_nodes(&conn, "skill").await.unwrap();
         assert!(graph_search.entities[0].body.is_none());
 
-        // 4. Second upsert should replace the body
         skill_upsert(
             &conn,
             "skill:test-skill",
@@ -2074,7 +2143,6 @@ mod tests {
             .unwrap();
         assert_eq!(graph_2.entities[0].body.as_deref(), Some("body content 2"));
 
-        // 5. list_skills should list name + description + version + source + installed_at
         let skills = list_skills(&conn).await.unwrap();
         assert_eq!(skills.len(), 1);
         assert_eq!(skills[0].entity_name, "skill:test-skill");
@@ -2082,7 +2150,6 @@ mod tests {
         assert_eq!(skills[0].version, "1.0.1");
         assert_eq!(skills[0].source, "source-1");
 
-        // 6. delete-entities cascades skills
         delete_entities(&conn, vec!["skill:test-skill".to_string()])
             .await
             .unwrap();

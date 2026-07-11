@@ -1,7 +1,9 @@
-//! Turso backend: the SQLite-dialect implementation of the `api::v1` contract.
+//! libsql backend: the SQLite-dialect implementation of the `api::v1` contract,
+//! restoring FTS5 (porter stemming, bm25 ranking) and the F32_BLOB +
+//! `libsql_vector_idx` vector index that predate the turso port.
 //!
 //! All SQL, schema, indexes, and driver handling live here and below (see
-//! `crate::backend::turso::db` / `crate::backend::turso::tx`); the API layer above never sees a connection.
+//! `crate::backend::libsql::db` / `crate::backend::libsql::tx`); the API layer above never sees a connection.
 
 pub mod constant;
 pub mod db;
@@ -21,37 +23,37 @@ fn be(e: anyhow::Error) -> ApiError {
     ApiError::Backend(e.to_string())
 }
 
-pub struct TursoBackend {
-    db: turso::Database,
-    conn: turso::Connection,
+pub struct LibsqlBackend {
+    db: libsql::Database,
+    conn: libsql::Connection,
 }
 
-impl TursoBackend {
+impl LibsqlBackend {
     pub async fn open() -> crate::Result<Self> {
-        let (db, conn) = crate::backend::turso::db::init_db().await?;
+        let (db, conn) = crate::backend::libsql::db::init_db().await?;
         Ok(Self { db, conn })
     }
 
-    pub fn from_parts(db: turso::Database, conn: turso::Connection) -> Self {
+    pub fn from_parts(db: libsql::Database, conn: libsql::Connection) -> Self {
         Self { db, conn }
     }
 
-    pub fn into_parts(self) -> (turso::Database, turso::Connection) {
+    pub fn into_parts(self) -> (libsql::Database, libsql::Connection) {
         (self.db, self.conn)
     }
 
-    pub fn database(&self) -> &turso::Database {
+    pub fn database(&self) -> &libsql::Database {
         &self.db
     }
 
-    pub fn connection(&self) -> &turso::Connection {
+    pub fn connection(&self) -> &libsql::Connection {
         &self.conn
     }
 }
 
-impl GraphStore for TursoBackend {
+impl GraphStore for LibsqlBackend {
     async fn create_entities(&self, entities: Vec<EntityInput>) -> ApiResult<()> {
-        crate::backend::turso::db::create_entities(&self.conn, entities)
+        crate::backend::libsql::db::create_entities(&self.conn, entities)
             .await
             .map_err(be)
     }
@@ -61,31 +63,31 @@ impl GraphStore for TursoBackend {
         observations: Vec<ObservationInput>,
         limit: usize,
     ) -> ApiResult<()> {
-        crate::backend::turso::db::add_observations(&self.conn, observations, limit)
+        crate::backend::libsql::db::add_observations(&self.conn, observations, limit)
             .await
             .map_err(be)
     }
 
     async fn create_relations(&self, relations: Vec<RelationInput>) -> ApiResult<()> {
-        crate::backend::turso::db::create_relations(&self.conn, relations)
+        crate::backend::libsql::db::create_relations(&self.conn, relations)
             .await
             .map_err(be)
     }
 
     async fn delete_entities(&self, names: Vec<String>) -> ApiResult<()> {
-        crate::backend::turso::db::delete_entities(&self.conn, names)
+        crate::backend::libsql::db::delete_entities(&self.conn, names)
             .await
             .map_err(be)
     }
 
     async fn delete_observations(&self, deletions: Vec<ObservationDeletion>) -> ApiResult<()> {
-        crate::backend::turso::db::delete_observations(&self.conn, deletions)
+        crate::backend::libsql::db::delete_observations(&self.conn, deletions)
             .await
             .map_err(be)
     }
 
     async fn delete_observation_by_id(&self, entity_name: &str, id: i64) -> ApiResult<()> {
-        crate::backend::turso::db::delete_observation_by_id(&self.conn, entity_name, id)
+        crate::backend::libsql::db::delete_observation_by_id(&self.conn, entity_name, id)
             .await
             .map_err(be)
     }
@@ -96,7 +98,7 @@ impl GraphStore for TursoBackend {
         id: i64,
         new_content: &str,
     ) -> ApiResult<()> {
-        crate::backend::turso::db::update_observation_by_id(
+        crate::backend::libsql::db::update_observation_by_id(
             &self.conn,
             entity_name,
             id,
@@ -112,7 +114,7 @@ impl GraphStore for TursoBackend {
         old_content: &str,
         new_content: &str,
     ) -> ApiResult<()> {
-        crate::backend::turso::db::update_observation(
+        crate::backend::libsql::db::update_observation(
             &self.conn,
             entity_name,
             old_content,
@@ -123,43 +125,43 @@ impl GraphStore for TursoBackend {
     }
 
     async fn delete_relations(&self, relations: Vec<RelationInput>) -> ApiResult<()> {
-        crate::backend::turso::db::delete_relations(&self.conn, relations)
+        crate::backend::libsql::db::delete_relations(&self.conn, relations)
             .await
             .map_err(be)
     }
 
     async fn truth_upsert(&self, entity: &str, key: &str, value: &str) -> ApiResult<()> {
-        crate::backend::turso::db::truth_upsert(&self.conn, entity, key, value)
+        crate::backend::libsql::db::truth_upsert(&self.conn, entity, key, value)
             .await
             .map_err(be)
     }
 
     async fn truth_delete(&self, entity: &str, key: &str) -> ApiResult<()> {
-        crate::backend::turso::db::truth_delete(&self.conn, entity, key)
+        crate::backend::libsql::db::truth_delete(&self.conn, entity, key)
             .await
             .map_err(be)
     }
 
     async fn read_graph(&self) -> ApiResult<Graph> {
-        crate::backend::turso::db::read_graph(&self.conn)
+        crate::backend::libsql::db::read_graph(&self.conn)
             .await
             .map_err(be)
     }
 
     async fn read_graph_full(&self) -> ApiResult<Graph> {
-        crate::backend::turso::db::read_graph_eager(&self.conn)
+        crate::backend::libsql::db::read_graph_eager(&self.conn)
             .await
             .map_err(be)
     }
 
     async fn read_graph_scoped(&self, scope: &[String], rationale: bool) -> ApiResult<Graph> {
-        crate::backend::turso::db::read_graph_scoped(&self.conn, scope, rationale)
+        crate::backend::libsql::db::read_graph_scoped(&self.conn, scope, rationale)
             .await
             .map_err(be)
     }
 
     async fn open_nodes(&self, req: OpenNodes) -> ApiResult<Graph> {
-        crate::backend::turso::db::open_nodes_detailed(
+        crate::backend::libsql::db::open_nodes_detailed(
             &self.conn,
             req.names,
             req.with_ids,
@@ -170,9 +172,9 @@ impl GraphStore for TursoBackend {
     }
 }
 
-impl SearchStore for TursoBackend {
+impl SearchStore for LibsqlBackend {
     async fn search_nodes(&self, query: SearchQuery) -> ApiResult<Graph> {
-        crate::backend::turso::db::search_nodes_with_limit(
+        crate::backend::libsql::db::search_nodes_with_limit(
             &self.conn,
             &query.query,
             query.limit,
@@ -183,9 +185,9 @@ impl SearchStore for TursoBackend {
     }
 }
 
-impl MaintenanceStore for TursoBackend {
+impl MaintenanceStore for LibsqlBackend {
     async fn stats(&self) -> ApiResult<Stats> {
-        let (entities, relations, observations) = crate::backend::turso::db::stats(&self.conn)
+        let (entities, relations, observations) = crate::backend::libsql::db::stats(&self.conn)
             .await
             .map_err(be)?;
         Ok(Stats {
@@ -196,13 +198,13 @@ impl MaintenanceStore for TursoBackend {
     }
 
     async fn stats_per_entity(&self) -> ApiResult<Vec<(String, usize)>> {
-        crate::backend::turso::db::stats_per_entity(&self.conn)
+        crate::backend::libsql::db::stats_per_entity(&self.conn)
             .await
             .map_err(be)
     }
 
     async fn reset(&self) -> ApiResult<()> {
-        crate::backend::turso::db::reset(&self.conn)
+        crate::backend::libsql::db::reset(&self.conn)
             .await
             .map_err(be)
     }
@@ -211,7 +213,7 @@ impl MaintenanceStore for TursoBackend {
         // Document/vector operations are available when the optional document
         // tier is compiled; snapshot support remains a later task.
         Ok(BackendCapabilities {
-            backend: "turso".to_string(),
+            backend: "libsql".to_string(),
             keyword_search: true,
             documents: cfg!(feature = "documents"),
             vectors: cfg!(feature = "documents"),
@@ -223,21 +225,23 @@ impl MaintenanceStore for TursoBackend {
     async fn health(&self) -> ApiResult<BackendHealth> {
         let reachable = self.conn.query("SELECT 1", ()).await.is_ok();
         Ok(BackendHealth {
-            backend: "turso".to_string(),
+            backend: "libsql".to_string(),
             reachable,
             detail: None,
         })
     }
 }
 
-// Documents/vector tier — implemented in v0.5 task-4 (turso vector32 +
-// vector_distance_cos). Until then the backend reports the capability as absent
-// and rejects the calls explicitly rather than silently no-op'ing.
-impl DocumentStore for TursoBackend {
+// Documents/vector tier — porter-stemmed FTS5 topic search plus F32_BLOB +
+// `libsql_vector_idx` chunk search, restored from the pre-turso libsql
+// implementation. Until the `documents` feature is compiled the backend
+// reports the capability as absent and rejects the calls explicitly rather
+// than silently no-op'ing.
+impl DocumentStore for LibsqlBackend {
     async fn upsert_topic(&self, topic: TopicSnapshot) -> ApiResult<()> {
         #[cfg(feature = "documents")]
         {
-            return crate::backend::turso::db::upsert_topic(
+            return crate::backend::libsql::db::upsert_topic(
                 &self.conn,
                 &topic.id,
                 &topic.title,
@@ -257,7 +261,7 @@ impl DocumentStore for TursoBackend {
     async fn delete_topic(&self, id: &str) -> ApiResult<()> {
         #[cfg(feature = "documents")]
         {
-            return crate::backend::turso::db::delete_topic(&self.conn, id)
+            return crate::backend::libsql::db::delete_topic(&self.conn, id)
                 .await
                 .map_err(be);
         }
@@ -273,7 +277,7 @@ impl DocumentStore for TursoBackend {
         {
             let chunks = chunks
                 .into_iter()
-                .map(|chunk| crate::backend::turso::vector::Chunk {
+                .map(|chunk| crate::backend::libsql::vector::Chunk {
                     id: chunk.id,
                     topic_id: chunk.topic_id,
                     chunk_idx: chunk.chunk_idx,
@@ -282,7 +286,7 @@ impl DocumentStore for TursoBackend {
                     vector: chunk.embedding,
                 })
                 .collect();
-            return crate::backend::turso::vector::VectorStore::new(self.conn.clone())
+            return crate::backend::libsql::vector::VectorStore::new(self.conn.clone())
                 .insert_chunks(chunks)
                 .await
                 .map_err(be);
@@ -301,7 +305,7 @@ impl DocumentStore for TursoBackend {
     ) -> ApiResult<Vec<DocumentSearchResult>> {
         #[cfg(feature = "documents")]
         {
-            let results = crate::backend::turso::vector::VectorStore::new(self.conn.clone())
+            let results = crate::backend::libsql::vector::VectorStore::new(self.conn.clone())
                 .search(embedding, limit)
                 .await
                 .map_err(be)?;
@@ -326,7 +330,7 @@ impl DocumentStore for TursoBackend {
     async fn delete_chunks_by_topic(&self, topic_id: &str) -> ApiResult<()> {
         #[cfg(feature = "documents")]
         {
-            return crate::backend::turso::vector::VectorStore::new(self.conn.clone())
+            return crate::backend::libsql::vector::VectorStore::new(self.conn.clone())
                 .delete_by_topic(topic_id)
                 .await
                 .map_err(be);
@@ -339,7 +343,7 @@ impl DocumentStore for TursoBackend {
     }
 
     async fn search_topics(&self, query: &str, limit: usize) -> ApiResult<Vec<SearchResult>> {
-        let rows = crate::backend::turso::db::search_fts(&self.conn, query, limit)
+        let rows = crate::backend::libsql::db::search_fts(&self.conn, query, limit)
             .await
             .map_err(be)?;
         Ok(rows
@@ -365,11 +369,11 @@ impl DocumentStore for TursoBackend {
         let params = ids
             .iter()
             .cloned()
-            .map(turso::Value::from)
+            .map(libsql::Value::from)
             .collect::<Vec<_>>();
         let mut rows = self
             .conn
-            .query(&sql, turso::params_from_iter(params))
+            .query(&sql, libsql::params_from_iter(params))
             .await
             .map_err(|error| ApiError::Backend(error.to_string()))?;
         let mut results = Vec::new();

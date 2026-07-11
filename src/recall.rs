@@ -1,7 +1,4 @@
-use crate::{
-    api::v1::{DocumentStore, SearchStore},
-    embed::EmbeddingProvider,
-};
+use crate::{api::v1::DocumentStore, embed::EmbeddingProvider};
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -19,7 +16,6 @@ pub struct RecallResult {
 pub async fn recall(
     query: &str,
     document_store: &impl DocumentStore,
-    search_store: &impl SearchStore,
     embedder: &impl EmbeddingProvider,
     top_k: usize,
 ) -> Result<Vec<RecallResult>> {
@@ -31,7 +27,7 @@ pub async fn recall(
 
     // --- Turso FTS keyword search (weight 0.3) ---
     let safe_query = query.replace('"', "\"\"");
-    let fts_results = search_store
+    let fts_results = document_store
         .search_topics(&format!("\"{}\"", safe_query), top_k * 2)
         .await
         .unwrap_or_else(|e| {
@@ -92,7 +88,7 @@ pub async fn recall(
         .map(|(topic_id, _)| topic_id.clone())
         .collect();
     for chunk in missing_ids.chunks(500) {
-        for result in search_store.topics_by_id(chunk).await? {
+        for result in document_store.topics_by_id(chunk).await? {
             if let Some((_, _, _, title, path)) = scores.get_mut(&result.id) {
                 *title = result.title;
                 *path = result.file_path;
@@ -171,9 +167,7 @@ mod tests {
         .await
         .unwrap();
 
-        let results = recall("pinning", &backend, &backend, &embedder, 5)
-            .await
-            .unwrap();
+        let results = recall("pinning", &backend, &embedder, 5).await.unwrap();
         assert!(!results.is_empty(), "expected at least one result");
         assert!(results[0].title.contains("Pinning"));
     }

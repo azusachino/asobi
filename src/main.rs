@@ -464,8 +464,7 @@ async fn run_cli(cli: Cli) -> Result<()> {
                 Commands::Query { query, limit, json } => {
                     info!("Searching: {}...", query);
                     let results =
-                        asobi::recall::recall(&query, &backend, &backend, embedder.as_ref(), limit)
-                            .await?;
+                        asobi::recall::recall(&query, &backend, embedder.as_ref(), limit).await?;
                     if json {
                         println!("{}", serde_json::to_string_pretty(&results)?);
                     } else if results.is_empty() {

@@ -14,7 +14,9 @@ ROOT = Path(__file__).resolve().parents[1]
 BIN = ROOT / "target" / "debug" / "asobi"
 
 
-def run(args: list[str], env: dict[str, str], expect_success: bool = True) -> subprocess.CompletedProcess[str]:
+def run(
+    args: list[str], env: dict[str, str], expect_success: bool = True
+) -> subprocess.CompletedProcess[str]:
     result = subprocess.run(
         [str(BIN), *args],
         cwd=ROOT,
@@ -45,7 +47,11 @@ def main() -> None:
         assert capabilities["apiVersion"] == 1
         assert capabilities["capabilities"]["backend"] == "turso"
         assert capabilities["capabilities"]["keywordSearch"] is True
-        assert capabilities["health"] == {"backend": "turso", "reachable": True, "detail": None}
+        assert capabilities["health"] == {
+            "backend": "turso",
+            "reachable": True,
+            "detail": None,
+        }
 
         run(["new", "turso-project", "project"], env)
         run(["obs", "turso-project", "Turso native FTS verification"], env)
