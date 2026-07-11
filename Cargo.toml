@@ -59,6 +59,7 @@ fastembed = { version = "5", optional = true }
 
 # Database & Vector Store
 libsql = "0.6"
+turso = { version = "0.6.1", features = ["fts"] }
 
 
 [dev-dependencies]

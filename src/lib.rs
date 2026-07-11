@@ -24,5 +24,6 @@ pub mod model;
 pub mod normalize;
 pub mod paths;
 pub mod skills;
+pub mod turso;
 pub use anyhow::{Result, anyhow, bail};
 pub use tokio::task::JoinHandle;
