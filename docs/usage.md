@@ -115,32 +115,34 @@ asobi stats                                # Quick count of entities, relations,
 asobi graph | jq '.entities[] | select(.entityType == "session")'
 ```
 
-**Backup, Restore, and Reset:**
+### Backup, restore, and portable export
+
+| Goal | Command | Includes |
+| --- | --- | --- |
+| Portable handoff | `asobi export -o graph.json` | Entities, observations, truths, relations |
+| Scoped handoff | `asobi export --scope "proj:epic" -o epic.json` | One epic subtree |
+| Full libSQL archive | `asobi backup` | Complete database, including skills and documents |
 
 ```bash
-asobi export -o backup.json                # Export the entire graph to JSON
-asobi export --scope "proj:epic" -o epic.json   # Export only one epic's subgraph
-asobi import backup.json                   # Import entities and relations from a JSON backup
-asobi backup                               # Full libSQL snapshot; default keeps newest 3
-asobi backup --keep 5                      # Change default-directory retention
-asobi backup -o /secure/path/asobi.db      # Explicit path; never overwrites an existing file
-asobi restore /secure/path/asobi.db        # Validate and ask before replacing live data
-asobi restore /secure/path/asobi.db --force  # Skip the confirmation prompt
-asobi reset                                # Interactively clear the entire graph (use --force to bypass)
+asobi import graph.json
+asobi backup                       # backups/asobi-<timestamp>.db; keep newest 3
+asobi backup --keep 5
+asobi backup -o /secure/asobi.db   # explicit path; never overwrites
+asobi restore /secure/asobi.db     # validate, save current DB, then prompt
+asobi restore /secure/asobi.db --force
 ```
 
-JSON export/import preserves graph entities, observations, truths, and relations and is the portable format for teammate or cross-backend handoff. Physical `backup`/`restore` preserves the complete selected libSQL database, including installed skill bodies and document data. A default backup is written beside the live database under `backups/asobi-<timestamp>.db`; `--keep` retention applies only to that managed directory.
+- `--keep` applies only to managed snapshots, not an explicit `-o` path.
+- Snapshots are integrity-checked and owner-only on Unix.
+- Restore writes `backups/pre-restore-*.db`, closes live handles, atomically replaces the database, and removes stale WAL sidecars.
+- Turso does not support physical backup/restore; use JSON export/import instead.
 
-Backup uses `VACUUM INTO`, verifies database integrity, writes owner-only files on Unix, and refuses to overwrite an existing destination. Restore validates the source before destructive work, creates a timestamped `backups/pre-restore-*.db` safety snapshot of the current database, closes live handles, atomically replaces the database, and removes stale `-wal`/`-shm` sidecars. The experimental Turso backend reports physical backup/restore as unsupported.
+Scoped export is designed for handing an epic to another agent:
 
-**Scoped export (hand one epic to a teammate):** `export --scope <entity>` restricts the
-export to the subgraph rooted at the named entities — each root, its `part_of` children
-(transitively), and the `depends_on` targets they cite (one hop, not followed further). The
-flag is repeatable for multiple roots, and `--rationale` additionally pulls one hop of
-`supersedes`/`extends` off the cited decisions. Volatile local state (`session`) and the
-importer's own globals (`preference`, `standard`) are always excluded, so importing a bundle
-never clobbers the recipient's preferences. The output is an ordinary graph JSON, so the
-recipient runs `asobi import epic.json` unchanged.
+- Includes each root, transitive `part_of` children, and one-hop `depends_on` targets.
+- `--rationale` adds one hop of `supersedes`/`extends` from cited decisions.
+- Excludes `session`, `preference`, and `standard` entities.
+- Produces ordinary JSON consumed by `asobi import`.
 
 ```bash
 asobi export --scope "proj:epic" --scope "proj:other-epic" -o bundle.json

@@ -206,14 +206,17 @@ Three-step maintenance sweep:
 ### Physical backup and restore
 
 ```bash
-asobi backup                              # default timestamped snapshot; keeps newest 3
-asobi backup --keep 5                     # retention applies to the default backup directory
-asobi backup -o /secure/path/asobi.db     # explicit destination; refuses to overwrite
-asobi restore /secure/path/asobi.db       # validates, then asks before replacing live data
-asobi restore /secure/path/asobi.db --force
+asobi backup                          # timestamped snapshot; keep newest 3
+asobi backup --keep 5                 # retention for managed snapshots
+asobi backup -o /secure/asobi.db      # explicit path; never overwrites
+asobi restore /secure/asobi.db        # validate, save current DB, then prompt
+asobi restore /secure/asobi.db --force
 ```
 
-Physical backup/restore is a full-fidelity archive of the selected libSQL database, including graph state, installed skill bodies, and document data. Snapshots are integrity-checked and owner-only on Unix. Before restore, Asobi creates a timestamped `pre-restore-*.db` safety snapshot, closes the live database handles, atomically replaces the database, and clears stale WAL sidecars. The experimental Turso backend does not support this capability. Use JSON `export`/`import` instead for portable cross-backend or teammate handoff.
+- **Includes:** graph state, skill bodies, and document data.
+- **Safety:** integrity check, owner-only snapshot, `pre-restore-*.db`, closed handles, atomic replacement, stale sidecar cleanup.
+- **Scope:** libSQL only. Use JSON `export`/`import` for teammate, machine, or backend handoff.
+- **Retention:** `--keep` applies only to managed snapshots under `backups/`, not an explicit `-o` path.
 
 ---
 

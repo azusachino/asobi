@@ -1,28 +1,25 @@
 # Changelog
 
-## v0.5.0 — Storage Backend Boundary & Scoped Export
+## v0.5.0 — Storage Backends, Scoped Export, and Better Recall
 
-### Added
-- **Scoped subgraph export (`export --scope <entity>`)**: Restrict `export` to the subgraph rooted at one or more entities — each root, its `part_of` children (transitively), and the `depends_on` targets they cite (one hop) — for handing a single epic to a teammate without exporting the whole graph. `--rationale` additionally follows one hop of `supersedes`/`extends` off the cited leaves. Volatile/global entities (`session`, `preference`, `standard`) are never included, so an imported bundle cannot clobber the importer's own preferences. Output is the same JSON shape as a full export, so `import` consumes it unchanged.
-- **Storage backend boundary (`api::v1`)**: A stable set of capability traits (`GraphStore`, `SearchStore`, `DocumentStore`, `SkillStore`, `MaintenanceStore`, plus optional `SnapshotStore`/`BackupStore`/`DocumentMaintenanceStore`) with a `Storage` composite and an `AsobiRuntime` composition root. The application layer (CLI, skills, ingest, recall, compact) depends only on these contracts and never names a provider, driver, SQL, or state-file — enforced by the `scripts/verify_storage_boundary.py` gate. See `docs/specs/2026-07-11-storage-composition-adr.md`.
+### Highlights
 
-### Changed
-- **libSQL is the default backend; Turso is an experimental opt-in.** Turso is compiled and selectable only behind `--features turso-experimental` and chosen at runtime with `ASOBI_BACKEND=turso`; the default build, tests, and `make check` ship libSQL alone. Each provider owns its own state-file name (libSQL `asobi.db`, Turso `asobi.turso.db`), so the two never share a database file. `make check-turso` runs the feature-gated Turso matrix.
-- The Turso backend is a **stable subset**: it is driven with only Turso's stable feature set (no experimental multi-process WAL or experimental index method). Keyword search is therefore a correct substring scan rather than native FTS — unranked and unstemmed, but returns the right rows, with `keyword_search` reported true. libSQL keeps full SQLite FTS5 (BM25 ranking, porter stemming) and the `libsql_vector_idx` ANN index; both backends use index-less `vector32`/`vector_distance_cos` for document vectors. Avoiding the experimental engine paths fixed a `turso_core` FTS `Drop` panic that crashed the backend under write load (e.g. `reset`) and cut reset time on 1k entities from ~11.6s to ~0.24s.
-- Bumped `clap` (4.5 → 4.6) and `toml` (0.8 → 1) and refreshed the lockfile to the latest compatible transitive versions.
-- Removed legacy journal-mode and busy-timeout environment overrides; the storage backend owns WAL coordination and bounded retry behavior.
-- **Slimmed the libSQL dependency to local-embedded only.** asobi opens databases exclusively via `Builder::new_local`, so libSQL is now pulled in with `default-features = false, features = ["core"]`, dropping its `replication`/`remote`/`sync`/`tls` stack. This removes 52 transitive crates — the entire gRPC/HTTP/TLS surface (`tonic`, `tonic-web`, `axum`, `hyper`, `h2`, `prost`, `rustls`, `tower`, `tower-http`, `libsql_replication`, …) — for a leaner build and dependency tree. No API or behavior change.
-- **Upgraded the document-tier embedding model to `gte-base-en-v1.5` (int8-quantized)** (was `all-MiniLM-L6-v2`). GTE's training corpus is far richer in technical/programming text, so semantic `recall` over engineering notes and Markdown ranks the relevant chunk higher, and its 8192-token window no longer truncates long chunks at 256 tokens. The quantized build keeps the full model's 768-dim output at roughly a third of the download (~150 MB vs ~530 MB for fp32). Embedding dimension grows 384 → 768; the libSQL `chunks.embedding` column is now `F32_BLOB(768)`. **Migration:** the schema version is bumped (1 → 2) and existing document DBs automatically **drop and recreate the `chunks` table on first open** — already-ingested content must be **re-`ingest`ed** (the graph tier — entities, observations, truths, relations — is untouched). Only affects builds using `--features documents`.
+- **Scoped export:** `export --scope <entity>` creates a portable bundle for one epic and its task subtree. Add `--rationale` to include its cited decision chain.
+- **Backend boundary:** the CLI uses a versioned storage API. libSQL is the supported default; Turso is an experimental opt-in.
+- **Better recall:** the document tier uses quantized `gte-base-en-v1.5` embeddings.
+- **Smaller build:** the default libSQL dependency contains only its local embedded core.
 
-### Fixed
+### Current behavior
 
-- **Preserved libSQL physical backup/restore across the storage-boundary refactor.** `backup` again creates an integrity-checked, owner-only `VACUUM INTO` snapshot, and `restore` consumes the live provider so all database handles close before the atomic file replacement. Restore validates the source, creates a `pre-restore-*.db` safety snapshot, and removes stale WAL sidecars. libSQL reports `fileBackup: true`; the experimental Turso backend reports physical backup as unsupported. JSON `export`/`import` remains the portable cross-backend handoff format.
+- libSQL is the default backend with ranked, stemmed FTS5 search and physical backup/restore.
+- Turso is selected with `--features turso-experimental` and `ASOBI_BACKEND=turso`. It uses substring search, an isolated `asobi.turso.db`, and no physical backup/restore.
+- JSON `export`/`import` is the portable handoff format across machines and backends.
+- Physical restore validates the snapshot, saves the current database, closes live handles, atomically replaces the file, and clears stale WAL sidecars.
+- Storage manages concurrency settings; legacy journal-mode and busy-timeout overrides are unavailable.
 
-### Tests
-- Rewrote application-layer tests (skills, ingest, recall, `import_graph`) to run through the `Storage` composite and `api::v1` traits, so they exercise the default backend without reaching into a provider. Storage-layer regression tests (normalization, graph edge cases, neighbor expansion, bench isolation) run against libSQL; genuinely Turso-specific suites are gated behind `turso-experimental`.
-- Added a `scope_subgraph` unit suite and an end-to-end `export --scope` CLI check (leaf-termination, shared-pitfall isolation, `--rationale`, multi-root union, type guard, round-trip import).
-- Added CLI coverage for `unlink` and strengthened the full export/import check into a round-trip fidelity guard over entities, truths, and relations.
-- Added libSQL backup/restore unit coverage and a CLI backup → reset → restore gate covering overwrite refusal, graph/truth/relation fidelity, and the pre-restore safety snapshot.
+### Upgrade note
+
+Document embeddings are 768-dimensional. Existing document chunks are dropped automatically on first open and must be re-ingested. Graph data is unchanged.
 
 ## v0.4.1 — Review Hardening & Performance
 

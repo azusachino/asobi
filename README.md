@@ -78,9 +78,7 @@ asobi rm-obs "my-project" 1 --id
 - `asobi truth <name> <key> <value>` / `rm-truth <name> <key>` — manage truths.
 - `asobi skills install <src> --all` / `update` / `skills` / `skills show <name>` — manage skills (`--all` and `update` sync, pruning skills dropped upstream; `--select` is additive).
 - `asobi stats` / `export -o graph.json` / `import graph.json` / `reset` — inspect & manage.
-- `asobi backup [-o snapshot.db] [--keep 3]` / `restore snapshot.db [--force]` — create and restore a full-fidelity physical libSQL snapshot. Restore validates the snapshot and saves the current database before replacing it.
-
-JSON `export`/`import` is the portable handoff format between backends. Physical `backup`/`restore` preserves the complete local database, including installed skill bodies and document data, but is supported only by the default libSQL backend; the experimental Turso backend reports it as unsupported.
+- `asobi backup` / `restore <snapshot> [--force]` — full-fidelity libSQL snapshots; see the [usage guide](docs/usage.md#backup-restore-and-portable-export).
 
 ## 🔒 Sandboxed Environments
 
