@@ -1,8 +1,6 @@
 // Environment Variables
 pub const ENV_DATABASE_URL: &str = "ASOBI_DATABASE_URL";
 pub const ENV_OBSERVATION_LIMIT: &str = "ASOBI_OBSERVATION_LIMIT";
-pub const ENV_BUSY_TIMEOUT: &str = "ASOBI_BUSY_TIMEOUT";
-pub const ENV_JOURNAL_MODE: &str = "ASOBI_JOURNAL_MODE";
 
 /// Per-entity observation cap when neither `ASOBI_OBSERVATION_LIMIT` nor
 /// `asobi.toml` overrides it. Appending past it evicts the oldest rows. Truths
@@ -11,8 +9,6 @@ pub const DEFAULT_OBSERVATION_LIMIT: usize = 200;
 
 // Pragmas
 pub const PRAGMA_FOREIGN_KEYS_ON: &str = "PRAGMA foreign_keys = ON";
-pub const PRAGMA_JOURNAL_MODE_WAL: &str = "PRAGMA journal_mode = WAL";
-pub const PRAGMA_SYNCHRONOUS_NORMAL: &str = "PRAGMA synchronous = NORMAL";
 
 // Table schema statements
 pub const SCHEMA_CREATE_TOPICS: &str = "CREATE TABLE IF NOT EXISTS topics (

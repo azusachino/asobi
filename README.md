@@ -24,7 +24,7 @@ Keep memory, track session state, and share context across conversations — sto
 - **Knowledge graph** — entities, append-only (capped) observations, and directed relations.
 - **Truths** — durable `key→value` facts per entity for current state (`status`, `version`); status-as-truth makes a board a single `search --where status=…`.
 - **Fast search** — `search` over Turso FTS (relevance scoring) with a substring fallback, plus `--where key=value` truth filters (the query term is optional).
-- **Concurrency-safe** — WAL + `busy_timeout`, so a lead agent and dispatched sub-agents can write the same graph without lock errors.
+- **Concurrency-safe** — Turso multi-process WAL with bounded startup and write retries, so lead and dispatched agents can share a graph.
 - **Lazy reads** — `graph`/`search` return truths + counts; `show` returns the full body. Cheap to load, cheap on tokens.
 - **Skills** — install reusable agent instructions from a git repo or local path.
 - **Document tier** (optional, `--features documents`) — `ingest` + semantic `query` over Markdown.
@@ -65,7 +65,7 @@ asobi obs "my-project" "Decided to use WAL mode for concurrency"
 asobi truth "my-project" "status" "in-progress"
 asobi search "WAL"
 asobi show "my-project" --with-ids
-asobi update-obs "my-project" 1 "Decided to use WAL mode + busy_timeout for concurrency" --id
+asobi update-obs "my-project" 1 "Decided to use Turso multi-process WAL for concurrency" --id
 asobi rm-obs "my-project" 1 --id
 
 ```
@@ -80,7 +80,7 @@ asobi rm-obs "my-project" 1 --id
 
 ## 🔒 Sandboxed Environments
 
-When running in sandboxed or restricted environments (such as Codex, Nix build sandboxes, or containerized runners), you might need to use a project-local workspace (`asobi init --local`), configure custom database paths (`ASOBI_HOME`, `ASOBI_DATABASE_URL`), adjust busy lock timeouts (`ASOBI_BUSY_TIMEOUT`), or force rollback journal mode (`ASOBI_JOURNAL_MODE=DELETE`) if shared memory (`-shm`) creation is unsupported on the underlying filesystem.
+When running in sandboxed or restricted environments (such as Codex, Nix build sandboxes, or containerized runners), use a project-local workspace (`asobi init --local`) or configure custom database paths (`ASOBI_HOME`, `ASOBI_DATABASE_URL`). Turso manages WAL coordination and retry behavior; legacy journal-mode and busy-timeout overrides are not supported.
 
 See the [Running in Sandboxed Environments](docs/usage.md#running-in-sandboxed-environments-codex-etc) section in the Usage Guide for more details.
 

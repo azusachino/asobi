@@ -93,7 +93,7 @@ def main() -> None:
             [
                 "obs",
                 "project-a",
-                "Uses libSQL with FTS5 porter stemming for graph recall.",
+                "Uses Turso native FTS for graph recall.",
             ],
             env,
         )
@@ -126,8 +126,8 @@ def main() -> None:
             }
         ]
 
-        stemmed = graph(["search", "stem"], env)
-        assert "project-a" in entity_names(stemmed)
+        keyword_match = graph(["search", "Turso"], env)
+        assert "project-a" in entity_names(keyword_match)
 
         for idx in range(5):
             run(["new", f"limit-{idx}", "project"], env)

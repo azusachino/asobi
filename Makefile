@@ -4,10 +4,10 @@
 help:
 	@echo "Available tasks:"
 	@echo "  build         - Compile the Asobi CLI and library"
-	@echo "  build-documents - Compile with libSQL/fastembed document commands"
+	@echo "  build-documents - Compile with Turso/fastembed document commands"
 	@echo "  run           - Run the Asobi CLI via cargo"
 	@echo "  test          - Run all Rust tests"
-	@echo "  test-documents - Run tests with libSQL/fastembed document feature"
+	@echo "  test-documents - Run tests with Turso/fastembed document feature"
 	@echo "  test-scripts  - Run uv-managed graph-tier CLI integration checks"
 	@echo "  test-documents-scripts - Run uv-managed document-tier CLI checks"
 	@echo "  fmt           - Format Rust, Python, JSON, and YAML code"

@@ -1,14 +1,14 @@
 # Asobi
 
-Persistent **knowledge graph CLI** for humans and LLM agents — entities, observations, truths, and relations in a local libSQL file, with optional semantic recall over ingested Markdown.
+Persistent **knowledge graph CLI** for humans and LLM agents — entities, observations, truths, and relations in a local Turso database, with optional semantic recall over ingested Markdown.
 
 ## Stack
 
-Rust (edition 2024) on `tokio`; `clap` CLI, `tracing` logs (stderr, `RUST_LOG`). Storage: libSQL (graph + FTS5 + vectors) in one `.asobi/` (project-local) or XDG db. Document tier (`fastembed`, `walkdir`, `text-splitter`) is gated behind `--features documents`. Python 3.14 scripts via `uv`.
+Rust (edition 2024) on `tokio`; `clap` CLI, `tracing` logs (stderr, `RUST_LOG`). Storage: Turso (graph + native FTS + vectors) in one `.asobi/` (project-local) or XDG db. Document tier (`fastembed`, `walkdir`, `text-splitter`) is gated behind `--features documents`. Python 3.14 scripts via `uv`.
 
 ## Layout
 
-- `src/main.rs` — CLI dispatch · `src/db.rs` — schema, graph CRUD, FTS5 · `src/model.rs` — graph I/O types
+- `src/main.rs` — CLI dispatch · `src/backend/turso/db.rs` — schema, graph CRUD, native FTS · `src/model.rs` — graph I/O types
 - `src/paths.rs` — workspace resolution (project-local > XDG) · `src/init.rs` — `asobi init` · `src/skills.rs` — skills install/parse
 - `src/ingest.rs`, `src/chunk.rs`, `src/embed/`, `src/vector.rs`, `src/recall.rs` — document tier
 - `src/compact.rs`, `src/digest.rs`, `src/backup.rs` — maintenance · `docs/` — reference · `scripts/` — `uv` utilities

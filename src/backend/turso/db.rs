@@ -4,7 +4,7 @@ use std::env;
 use turso::{Connection, Database};
 
 pub const DEFAULT_SEARCH_LIMIT: usize = 100;
-pub use crate::backend::turso::constant::{ENV_BUSY_TIMEOUT, ENV_DATABASE_URL, ENV_JOURNAL_MODE};
+pub use crate::backend::turso::constant::ENV_DATABASE_URL;
 
 pub const SCHEMA_VERSION: i64 = 1;
 
@@ -27,23 +27,7 @@ pub async fn init_db() -> Result<(Database, Connection)> {
             db_path
         ))?;
 
-    let timeout_ms = env::var(ENV_BUSY_TIMEOUT)
-        .ok()
-        .and_then(|v| v.parse::<u64>().ok())
-        .unwrap_or(15000);
-    let busy_timeout_pragma = format!("PRAGMA busy_timeout = {}", timeout_ms);
-
-    // Apply basic connection pragmas needed for every connection.
-    // Set busy timeout FIRST so subsequent pragmas and queries respect it.
-    {
-        let mut rows = conn.query(&busy_timeout_pragma, ()).await?;
-        let _ = rows.next().await?;
-    }
-
-    for pragma in [
-        crate::backend::turso::constant::PRAGMA_FOREIGN_KEYS_ON,
-        crate::backend::turso::constant::PRAGMA_SYNCHRONOUS_NORMAL,
-    ] {
+    for pragma in [crate::backend::turso::constant::PRAGMA_FOREIGN_KEYS_ON] {
         let mut rows = conn.query(pragma, ()).await?;
         let _ = rows.next().await?;
     }
@@ -61,30 +45,6 @@ pub async fn init_db() -> Result<(Database, Connection)> {
 
     if current_version == SCHEMA_VERSION {
         return Ok((db, conn));
-    }
-
-    // If it does NOT match, set up the journal mode since journal_mode cannot be changed inside a transaction.
-    let journal_mode = env::var(ENV_JOURNAL_MODE)
-        .unwrap_or_else(|_| "WAL".to_string())
-        .to_uppercase();
-    let journal_mode_pragma = format!("PRAGMA journal_mode = {}", journal_mode);
-
-    let run_journal_mode = async {
-        {
-            let mut rows = conn.query(&journal_mode_pragma, ()).await?;
-            let _ = rows.next().await?;
-        }
-        Ok::<(), turso::Error>(())
-    };
-
-    if let Err(e) = run_journal_mode.await {
-        tracing::warn!(
-            "Failed to set journal_mode to '{}': {:?}. Falling back to DELETE.",
-            journal_mode,
-            e
-        );
-        let mut rows = conn.query("PRAGMA journal_mode = DELETE", ()).await?;
-        let _ = rows.next().await?;
     }
 
     // Determine if migration is needed before starting transaction to allow setting foreign keys accordingly.
@@ -869,7 +829,7 @@ async fn load_relations(
         let mut params = Vec::new();
         // Since we use the same array twice in the query logic, we only pass params once, wait!
         // The query "from_entity IN ({0}) OR to_entity IN ({0})" uses the placeholders twice.
-        // It's technically better to use different placeholders, but libsql bindings map "?" sequentially.
+        // It's technically better to use different placeholders, but Turso bindings map "?" sequentially.
         // So we need to push the parameters twice!
         for name in chunk {
             params.push(turso::Value::from(name.clone()));

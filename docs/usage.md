@@ -346,14 +346,7 @@ You can override Asobi's home or database locations using environment variables:
 - **`ASOBI_HOME`**: Changes the base directory under which Asobi looks for configuration, data, and topics (e.g. `ASOBI_HOME=/tmp/asobi`).
 - **`ASOBI_DATABASE_URL`**: Specifies the direct path to the database file itself (e.g. `ASOBI_DATABASE_URL=/tmp/asobi-custom.db`).
 
-### Custom Busy Timeout
-In slow or resource-constrained sandboxes, standard file locks might take longer to release. You can increase the busy timeout (default is `15000` milliseconds) using:
-- **`ASOBI_BUSY_TIMEOUT`**: The database lock busy timeout in milliseconds (e.g. `ASOBI_BUSY_TIMEOUT=30000`).
-
-### Custom Journal Mode (Shared Memory Fallback)
-By default, Asobi uses WAL (Write-Ahead Logging) mode for performance and concurrency. WAL mode requires creating `-shm` (shared memory) and `-wal` files alongside the `.db` file. 
-
-In some sandboxed environments (such as Codex or certain restricted Docker setups), the underlying filesystem does not support shared memory creation, leading to initialization failures (e.g. `disk I/O error` or `permission denied`).
-
-To run Asobi successfully in these environments, switch the journal mode to `DELETE`:
-- **`ASOBI_JOURNAL_MODE=DELETE`**: Falls back to rollback-journal mode, which does not require shared memory (`-shm`) files.
+### Turso concurrency
+Turso uses experimental multi-process WAL with bounded retries for startup and
+immediate write transactions. Legacy `ASOBI_BUSY_TIMEOUT` and
+`ASOBI_JOURNAL_MODE` overrides are not supported.

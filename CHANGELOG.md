@@ -7,6 +7,8 @@
 
 ### Changed
 - Bumped `clap` (4.5 → 4.6) and `toml` (0.8 → 1) and refreshed the lockfile to the latest compatible transitive versions. The turso storage-engine migration (replacing libsql; FTS + vector + multi-process concurrency reworked onto turso's model) is the main body of v0.5 and lands in this release — see the `asobi:v0.5` epic for the task breakdown.
+- Replaced SQLite FTS5/triggers with Turso native FTS indexes and replaced the libSQL vector index with exact `vector32`/`vector_distance_cos` search. Turso's native FTS does not provide porter stemming.
+- Removed legacy journal-mode and busy-timeout environment overrides; Turso owns multi-process WAL coordination and bounded retry behavior.
 
 ### Tests
 - Added a `scope_subgraph` unit suite and an end-to-end `export --scope` CLI check (leaf-termination, shared-pitfall isolation, `--rationale`, multi-root union, type guard, round-trip import).
