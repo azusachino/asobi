@@ -341,6 +341,68 @@ mod tests {
         assert!(!should_sync("skill"));
     }
 
+    #[tokio::test]
+    async fn test_find_duplicate_clusters_round_trips_vector32_blob() {
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("compact-vectors.db");
+        unsafe {
+            std::env::set_var(
+                crate::backend::turso::db::ENV_DATABASE_URL,
+                db_path.to_str().unwrap(),
+            );
+        }
+        let (_db, conn) = crate::backend::turso::db::init_db().await.unwrap();
+        conn.execute(
+            "INSERT INTO topics (id, title, file_path, body) VALUES ('topic-a', 'A', 'a.md', ''), ('topic-b', 'B', 'b.md', '')",
+            (),
+        )
+        .await
+        .unwrap();
+
+        let dim = 384;
+        let mut vector = vec![0.0f32; dim];
+        vector[0] = 1.0;
+        let store = crate::backend::turso::vector::VectorStore::new(conn.clone());
+        store
+            .insert_chunks(vec![
+                crate::backend::turso::vector::Chunk {
+                    id: "chunk-a".into(),
+                    topic_id: "topic-a".into(),
+                    chunk_idx: 0,
+                    text: "a".into(),
+                    source: "a.md".into(),
+                    vector: vector.clone(),
+                },
+                crate::backend::turso::vector::Chunk {
+                    id: "chunk-b".into(),
+                    topic_id: "topic-b".into(),
+                    chunk_idx: 0,
+                    text: "b".into(),
+                    source: "b.md".into(),
+                    vector: vector.clone(),
+                },
+            ])
+            .await
+            .unwrap();
+
+        let mut rows = conn
+            .query("SELECT embedding FROM chunks WHERE id = 'chunk-a'", ())
+            .await
+            .unwrap();
+        let blob: Vec<u8> = rows.next().await.unwrap().unwrap().get(0).unwrap();
+        let decoded: Vec<f32> = blob
+            .chunks_exact(4)
+            .map(|chunk| f32::from_le_bytes(chunk.try_into().unwrap()))
+            .collect();
+        assert_eq!(decoded.len(), dim);
+        assert_eq!(decoded[0], 1.0);
+        assert_eq!(decoded[1], 0.0);
+
+        let clusters = find_duplicate_clusters(&store, &conn, 0.99).await.unwrap();
+        assert_eq!(clusters.len(), 1);
+        assert_eq!(clusters[0], vec!["topic-a", "topic-b"]);
+    }
+
     fn entity(name: &str, entity_type: &str) -> EntityOutput {
         EntityOutput {
             name: name.to_string(),
