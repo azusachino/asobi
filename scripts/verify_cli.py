@@ -241,6 +241,31 @@ def main() -> None:
         restored = graph(["show", "project-a"], env)
         assert truths(restored, "project-a") == {"edition": "2024"}
 
+        # Physical backup -> mutation -> restore must preserve the complete
+        # libSQL database. This is distinct from the portable JSON snapshot
+        # above and guards the BackupStore CLI wiring.
+        snapshot_file = Path(tmp) / "snapshot.db"
+        run(["backup", "--output", str(snapshot_file)], env)
+        assert snapshot_file.is_file()
+
+        duplicate = run_expect_failure(["backup", "--output", str(snapshot_file)], env)
+        assert "already exists" in duplicate.stderr
+
+        run(["reset", "--force"], env)
+        assert graph(["graph"], env)["entities"] == []
+
+        run(["restore", str(snapshot_file), "--force"], env)
+        physically_restored = graph(["graph"], env)
+        assert entity_names(physically_restored) == entity_names(restored_graph)
+        assert {
+            (r["from"], r["to"], r["relationType"])
+            for r in physically_restored["relations"]
+        } == pre_rels
+        assert truths(physically_restored, "project-a") == {"edition": "2024"}
+
+        safety_backups = list((Path(tmp) / "backups").glob("pre-restore-*.db"))
+        assert len(safety_backups) == 1
+
     with tempfile.TemporaryDirectory(prefix="asobi-corrupt-") as tmp:
         db_path = Path(tmp) / "corrupt.db"
         db_path.write_bytes(b"not a sqlite database")

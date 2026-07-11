@@ -5,6 +5,7 @@
 //! All SQL, schema, indexes, and driver handling live here and below (see
 //! `crate::storage::libsql::db` / `crate::storage::libsql::tx`); the API layer above never sees a connection.
 
+pub mod backup;
 pub mod constant;
 pub mod db;
 pub mod tx;
@@ -12,10 +13,10 @@ pub mod tx;
 pub mod vector;
 
 use crate::api::v1::{
-    ApiError, ApiResult, BackendCapabilities, BackendHealth, DocumentChunk,
-    DocumentMaintenanceStore, DocumentSearchResult, DocumentStore, GraphStore, MaintenanceStore,
-    OpenNodes, SearchQuery, SearchResult, SearchStore, SkillRecord, SkillStore, Stats,
-    TopicSnapshot,
+    ApiError, ApiResult, BackendCapabilities, BackendHealth, BackupReceipt, BackupRequest,
+    BackupStore, DocumentChunk, DocumentMaintenanceStore, DocumentSearchResult, DocumentStore,
+    GraphStore, MaintenanceStore, OpenNodes, SearchQuery, SearchResult, SearchStore, SkillRecord,
+    SkillStore, Stats, TopicSnapshot,
 };
 use crate::model::{EntityInput, Graph, ObservationDeletion, ObservationInput, RelationInput};
 
@@ -27,16 +28,22 @@ fn be(e: anyhow::Error) -> ApiError {
 pub struct LibsqlStore {
     db: libsql::Database,
     conn: libsql::Connection,
+    db_path: std::path::PathBuf,
 }
 
 impl LibsqlStore {
     pub async fn open() -> crate::Result<Self> {
+        let db_path = backup::effective_db_path();
         let (db, conn) = crate::storage::libsql::db::init_db().await?;
-        Ok(Self { db, conn })
+        Ok(Self { db, conn, db_path })
     }
 
     pub fn from_parts(db: libsql::Database, conn: libsql::Connection) -> Self {
-        Self { db, conn }
+        Self {
+            db,
+            conn,
+            db_path: backup::effective_db_path(),
+        }
     }
 
     pub fn into_parts(self) -> (libsql::Database, libsql::Connection) {
@@ -49,6 +56,27 @@ impl LibsqlStore {
 
     pub fn connection(&self) -> &libsql::Connection {
         &self.conn
+    }
+}
+
+impl BackupStore for LibsqlStore {
+    async fn backup(&self, request: BackupRequest) -> ApiResult<BackupReceipt> {
+        let destination =
+            (!request.destination.as_os_str().is_empty()).then_some(request.destination);
+        let path = backup::backup(&self.conn, &self.db_path, destination, request.keep)
+            .await
+            .map_err(be)?;
+        Ok(BackupReceipt {
+            path,
+            backend: "libsql".to_string(),
+        })
+    }
+
+    async fn restore(self, source: std::path::PathBuf, force: bool) -> ApiResult<()> {
+        let Self { db, conn, db_path } = self;
+        backup::restore(db, conn, &db_path, &source, force)
+            .await
+            .map_err(be)
     }
 }
 
@@ -219,7 +247,7 @@ impl MaintenanceStore for LibsqlStore {
             documents: cfg!(feature = "documents"),
             vectors: cfg!(feature = "documents"),
             logical_snapshots: true,
-            file_backup: false,
+            file_backup: true,
         })
     }
 

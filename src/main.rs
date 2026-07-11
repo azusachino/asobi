@@ -424,6 +424,13 @@ async fn run_cli(cli: Cli) -> Result<()> {
 
     let paths = AsobiPaths::resolve();
     let runtime = AsobiRuntime::open_default().await?;
+    if let Commands::Restore { ref file, force } = cli.command {
+        runtime
+            .into_storage()
+            .restore(std::path::PathBuf::from(file), force)
+            .await?;
+        return Ok(());
+    }
     let backend = runtime.storage();
 
     // Vector store + embedder are only initialised for commands that need them.
@@ -847,11 +854,7 @@ async fn run_cli(cli: Cli) -> Result<()> {
                 .await?;
             info!("Backup written to {}", receipt.path.display());
         }
-        Commands::Restore { file, force } => {
-            backend
-                .restore(std::path::PathBuf::from(file), force)
-                .await?;
-        }
+        Commands::Restore { .. } => unreachable!("restore handled before borrowing storage"),
         Commands::Skills { subcommand } => {
             use std::io::IsTerminal;
             match subcommand {

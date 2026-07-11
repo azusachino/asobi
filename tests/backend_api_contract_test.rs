@@ -97,6 +97,7 @@ async fn storage_default_selects_libsql() {
     let storage = Storage::open_default().await.unwrap();
     let capabilities = storage.capabilities().await.unwrap();
     assert_eq!(capabilities.backend, "libsql");
+    assert!(capabilities.file_backup);
 }
 
 #[cfg(feature = "turso-experimental")]
@@ -119,6 +120,7 @@ async fn turso_reports_optional_capabilities_explicitly() {
     assert_eq!(capabilities.documents, cfg!(feature = "documents"));
     assert_eq!(capabilities.vectors, cfg!(feature = "documents"));
     assert!(capabilities.logical_snapshots);
+    assert!(!capabilities.file_backup);
 
     let result = backend
         .insert_chunks(vec![DocumentChunk {

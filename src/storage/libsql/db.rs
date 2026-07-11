@@ -15,14 +15,6 @@ pub const SCHEMA_VERSION: i64 = 2;
 
 pub async fn init_db() -> Result<(Database, Connection)> {
     let paths = crate::paths::AsobiPaths::resolve();
-    if !paths.data_dir.exists() {
-        std::fs::create_dir_all(&paths.data_dir)
-            .with_context(|| format!(
-                "failed to create database directory at '{}'. Hint: run 'asobi init --local' or set ASOBI_HOME to a writable directory.",
-                paths.data_dir.display()
-            ))?;
-    }
-
     let db_path = env::var(ENV_DATABASE_URL).unwrap_or_else(|_| {
         paths
             .data_dir
@@ -31,11 +23,24 @@ pub async fn init_db() -> Result<(Database, Connection)> {
             .unwrap()
             .to_string()
     });
-    let (db, conn) = crate::storage::libsql::tx::open_local(std::path::Path::new(&db_path))
+    init_db_at(std::path::Path::new(&db_path)).await
+}
+
+pub(crate) async fn init_db_at(db_path: &std::path::Path) -> Result<(Database, Connection)> {
+    if let Some(parent) = db_path.parent() {
+        std::fs::create_dir_all(parent).with_context(|| {
+            format!(
+                "failed to create database directory at '{}'. Hint: run 'asobi init --local' or set ASOBI_HOME to a writable directory.",
+                parent.display()
+            )
+        })?;
+    }
+
+    let (db, conn) = crate::storage::libsql::tx::open_local(db_path)
         .await
         .with_context(|| format!(
             "failed to build/open database file at '{}'. Hint: run 'asobi init --local' or set ASOBI_HOME to a writable directory.",
-            db_path
+            db_path.display()
         ))?;
 
     let timeout_ms = env::var(crate::storage::libsql::constant::ENV_BUSY_TIMEOUT)

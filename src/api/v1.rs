@@ -272,7 +272,11 @@ pub trait SnapshotStore {
 /// across backends; callers must use `SnapshotStore` for handoff.
 pub trait BackupStore {
     async fn backup(&self, request: BackupRequest) -> ApiResult<BackupReceipt>;
-    async fn restore(&self, source: std::path::PathBuf, force: bool) -> ApiResult<()>;
+    /// Restore consumes the provider so every live database handle can be
+    /// closed before an on-disk database is replaced.
+    async fn restore(self, source: std::path::PathBuf, force: bool) -> ApiResult<()>
+    where
+        Self: Sized;
 }
 
 /// Storage operation needed by compact's duplicate-topic report.  Markdown

@@ -88,12 +88,20 @@ impl SkillStore for Storage {
 }
 
 impl BackupStore for Storage {
-    async fn backup(&self, _request: BackupRequest) -> ApiResult<BackupReceipt> {
-        Err(crate::api::v1::ApiError::Unsupported("physical backup"))
+    async fn backup(&self, request: BackupRequest) -> ApiResult<BackupReceipt> {
+        match self {
+            Self::Libsql(store) => store.backup(request).await,
+            #[cfg(feature = "turso-experimental")]
+            Self::Turso(_) => Err(crate::api::v1::ApiError::Unsupported("physical backup")),
+        }
     }
 
-    async fn restore(&self, _source: std::path::PathBuf, _force: bool) -> ApiResult<()> {
-        Err(crate::api::v1::ApiError::Unsupported("physical restore"))
+    async fn restore(self, source: std::path::PathBuf, force: bool) -> ApiResult<()> {
+        match self {
+            Self::Libsql(store) => (*store).restore(source, force).await,
+            #[cfg(feature = "turso-experimental")]
+            Self::Turso(_) => Err(crate::api::v1::ApiError::Unsupported("physical restore")),
+        }
     }
 }
 

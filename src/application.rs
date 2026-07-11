@@ -47,6 +47,10 @@ impl AsobiRuntime {
         &self.storage
     }
 
+    pub fn into_storage(self) -> Storage {
+        self.storage
+    }
+
     pub async fn capabilities(&self) -> ApiResult<BackendCapabilities> {
         self.storage.capabilities().await
     }
