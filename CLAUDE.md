@@ -25,7 +25,7 @@ Graph: `new` (`--obs` seeds at creation), `obs`, `link`, `rm`, `rm-obs`, `unlink
 
 Standard Rust naming; `anyhow` at boundaries, `thiserror` in core. Tests single-threaded (shared `ASOBI_DATABASE_URL`), embedded in modules. Formatters: `rustfmt`, `prettier` (JSON/YAML), `ruff`. No clippy warnings, no skipped formatters.
 
-DB schema is `asobi_*` (migrated in place from the legacy `mcp_*` on open). The connection opens with WAL + `synchronous=NORMAL` + `busy_timeout` so a lead and dispatched sub-agents can write concurrently. **Status-as-truth**: an entity's `status` lives in a truth (current state), observations hold transition notes — so a board is a single `search --where status=…`.
+DB schema is `asobi_*` (migrated in place from the legacy `mcp_*` on open). Turso uses experimental multi-process WAL; database opening and `BEGIN IMMEDIATE` writes have bounded retry handling for transient lock contention. **Status-as-truth**: an entity's `status` lives in a truth (current state), observations hold transition notes — so a board is a single `search --where status=…`.
 
 ## Bash hygiene (HARD RULE)
 

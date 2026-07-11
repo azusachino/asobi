@@ -83,16 +83,12 @@ fn test_concurrency_lock_storm() {
                 };
 
                 let output = output.expect("failed to execute asobi command");
-                if !output.status.success() {
-                    eprintln!(
-                        "--- COMMAND FAILED in thread {} iteration {} ---\nSTDOUT:\n{}\nSTDERR:\n{}\n-------------------------------------",
-                        i,
-                        j,
-                        String::from_utf8_lossy(&output.stdout),
-                        String::from_utf8_lossy(&output.stderr)
-                    );
-                    panic!("Command failed");
-                }
+                assert!(
+                    output.status.success(),
+                    "command failed in thread {i} iteration {j}\nstdout:\n{}\nstderr:\n{}",
+                    String::from_utf8_lossy(&output.stdout),
+                    String::from_utf8_lossy(&output.stderr)
+                );
             }
         });
         handles.push(handle);

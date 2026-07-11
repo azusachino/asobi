@@ -7,17 +7,34 @@ use anyhow::{Context, Result};
 use turso::{Builder, Connection, Database, Error};
 
 const MAX_TRANSACTION_RETRIES: usize = 8;
+const MAX_OPEN_RETRIES: usize = 32;
 
 pub async fn open_local(path: &Path) -> Result<(Database, Connection)> {
     let path = path
         .to_str()
         .context("Turso database path must be valid UTF-8")?;
-    let db = Builder::new_local(path)
-        .experimental_multiprocess_wal(true)
-        .experimental_index_method(true)
-        .build()
-        .await
-        .with_context(|| format!("failed to open Turso database at '{}'", path))?;
+    let mut retries = 0;
+    let db = loop {
+        match Builder::new_local(path)
+            .experimental_multiprocess_wal(true)
+            .experimental_index_method(true)
+            .build()
+            .await
+        {
+            Ok(db) => break db,
+            Err(error)
+                if (is_retryable(&error) || error.to_string().contains("Locking error"))
+                    && retries < MAX_OPEN_RETRIES =>
+            {
+                retries += 1;
+                tokio::time::sleep(Duration::from_millis(50 * (retries as u64).min(5))).await;
+            }
+            Err(error) => {
+                return Err(error)
+                    .with_context(|| format!("failed to open Turso database at '{}'", path));
+            }
+        }
+    };
     let conn = db
         .connect()
         .context("failed to connect to Turso database")?;

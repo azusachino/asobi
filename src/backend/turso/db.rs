@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use std::collections::HashMap;
 use std::env;
-use turso::{Builder, Connection, Database};
+use turso::{Connection, Database};
 
 pub const DEFAULT_SEARCH_LIMIT: usize = 100;
 pub use crate::backend::turso::constant::{ENV_BUSY_TIMEOUT, ENV_DATABASE_URL, ENV_JOURNAL_MODE};
@@ -20,16 +20,12 @@ pub async fn init_db() -> Result<(Database, Connection)> {
 
     let db_path = env::var(ENV_DATABASE_URL)
         .unwrap_or_else(|_| paths.db_path().to_str().unwrap().to_string());
-    let db = Builder::new_local(&db_path)
-        .experimental_multiprocess_wal(true)
-        .experimental_index_method(true)
-        .build()
+    let (db, conn) = crate::backend::turso::tx::open_local(std::path::Path::new(&db_path))
         .await
         .with_context(|| format!(
             "failed to build/open database file at '{}'. Hint: run 'asobi init --local' or set ASOBI_HOME to a writable directory.",
             db_path
         ))?;
-    let conn = db.connect()?;
 
     let timeout_ms = env::var(ENV_BUSY_TIMEOUT)
         .ok()
@@ -1244,6 +1240,7 @@ pub async fn list_skills(conn: &Connection) -> Result<Vec<SkillRow>> {
 mod tests {
     use super::*;
     use tempfile::tempdir;
+    use turso::Builder;
 
     fn ent(name: &str, ty: &str) -> crate::model::EntityOutput {
         crate::model::EntityOutput {
