@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
-use libsql::{Builder, Connection, Database};
 use std::collections::HashMap;
 use std::env;
+use turso::{Builder, Connection, Database};
 
 pub const DEFAULT_SEARCH_LIMIT: usize = 100;
 pub use crate::constant::{ENV_BUSY_TIMEOUT, ENV_DATABASE_URL, ENV_JOURNAL_MODE};
@@ -76,7 +76,7 @@ pub async fn init_db() -> Result<(Database, Connection)> {
             let mut rows = conn.query(&journal_mode_pragma, ()).await?;
             let _ = rows.next().await?;
         }
-        Ok::<(), libsql::Error>(())
+        Ok::<(), turso::Error>(())
     };
 
     if let Err(e) = run_journal_mode.await {
@@ -130,10 +130,6 @@ pub async fn init_db() -> Result<(Database, Connection)> {
         conn.execute(crate::constant::SCHEMA_CREATE_TOPICS, ())
             .await?;
 
-        // FTS5 for full-text keyword search
-        conn.execute(crate::constant::SCHEMA_CREATE_TOPICS_FTS, ())
-            .await?;
-
         conn.execute(crate::constant::SCHEMA_CREATE_SESSIONS, ())
             .await?;
 
@@ -183,38 +179,6 @@ pub async fn init_db() -> Result<(Database, Connection)> {
         conn.execute(crate::constant::SCHEMA_CREATE_IDX_CHUNKS_TOPIC_ID, ())
             .await?;
 
-        // Vector index - metric=cosine is default
-        conn.execute(crate::constant::SCHEMA_CREATE_IDX_CHUNKS_VECTOR, ())
-            .await?;
-
-        // Triggers to keep FTS5 in sync with topics
-        conn.execute(crate::constant::SCHEMA_CREATE_TRIGGER_TOPICS_AI, ())
-            .await?;
-        conn.execute(crate::constant::SCHEMA_CREATE_TRIGGER_TOPICS_AD, ())
-            .await?;
-        conn.execute(crate::constant::SCHEMA_CREATE_TRIGGER_TOPICS_AU, ())
-            .await?;
-
-        // FTS5 for graph observation search (porter stemming, BM25 ranking)
-        conn.execute(crate::constant::SCHEMA_CREATE_ASOBI_OBS_FTS, ())
-            .await?;
-
-        // Triggers to keep asobi_obs_fts in sync with asobi_observations
-        conn.execute(crate::constant::SCHEMA_CREATE_TRIGGER_ASOBI_OBS_AI, ())
-            .await?;
-        conn.execute(crate::constant::SCHEMA_CREATE_TRIGGER_ASOBI_OBS_AD, ())
-            .await?;
-        conn.execute(crate::constant::SCHEMA_CREATE_TRIGGER_ASOBI_OBS_AU, ())
-            .await?;
-
-        if needs_migration {
-            conn.execute(
-                "INSERT INTO asobi_obs_fts(asobi_obs_fts) VALUES('rebuild')",
-                (),
-            )
-            .await?;
-        }
-
         let version_pragma = format!("PRAGMA user_version = {}", SCHEMA_VERSION);
         conn.execute(&version_pragma, ()).await?;
 
@@ -251,7 +215,7 @@ pub async fn search_fts(
     let mut rows = conn
         .query(
             crate::constant::SQL_SEARCH_FTS,
-            libsql::params![query, limit as i64],
+            turso::params![query, limit as i64],
         )
         .await?;
     let mut results = Vec::new();
@@ -275,14 +239,14 @@ pub async fn upsert_topic(
 ) -> Result<()> {
     conn.execute(
         crate::constant::SQL_UPSERT_TOPIC,
-        libsql::params![id, title, file_path, body],
+        turso::params![id, title, file_path, body],
     )
     .await?;
     Ok(())
 }
 
 pub async fn delete_topic(conn: &Connection, id: &str) -> Result<()> {
-    conn.execute("DELETE FROM topics WHERE id = ?1", libsql::params![id])
+    conn.execute("DELETE FROM topics WHERE id = ?1", turso::params![id])
         .await?;
     Ok(())
 }
@@ -291,28 +255,31 @@ pub async fn create_entities(
     conn: &Connection,
     entities: Vec<crate::model::EntityInput>,
 ) -> Result<()> {
-    let tx = conn
-        .transaction_with_behavior(libsql::TransactionBehavior::Immediate)
-        .await?;
-    for mut ent in entities {
-        ent.name = crate::normalize::normalize_key(&ent.name);
-        let inserted = tx
-            .execute(
-                crate::constant::SQL_INSERT_ENTITY,
-                libsql::params![ent.name.clone(), ent.entity_type],
-            )
-            .await?;
-        if inserted == 1 {
-            for obs in ent.observations {
-                tx.execute(
-                    crate::constant::SQL_INSERT_OBSERVATION,
-                    libsql::params![ent.name.clone(), obs],
-                )
-                .await?;
+    crate::turso::immediate_transaction(conn, |tx| {
+        let entities = entities.clone();
+        Box::pin(async move {
+            for mut ent in entities {
+                ent.name = crate::normalize::normalize_key(&ent.name);
+                let inserted = tx
+                    .execute(
+                        crate::constant::SQL_INSERT_ENTITY,
+                        turso::params![ent.name.clone(), ent.entity_type],
+                    )
+                    .await?;
+                if inserted == 1 {
+                    for obs in ent.observations {
+                        tx.execute(
+                            crate::constant::SQL_INSERT_OBSERVATION,
+                            turso::params![ent.name.clone(), obs],
+                        )
+                        .await?;
+                    }
+                }
             }
-        }
-    }
-    tx.commit().await?;
+            Ok(())
+        })
+    })
+    .await?;
     Ok(())
 }
 
@@ -321,27 +288,30 @@ pub async fn add_observations(
     observations: Vec<crate::model::ObservationInput>,
     limit: usize,
 ) -> Result<()> {
-    let tx = conn
-        .transaction_with_behavior(libsql::TransactionBehavior::Immediate)
-        .await?;
-    for mut obs_batch in observations {
-        obs_batch.entity_name = crate::normalize::normalize_key(&obs_batch.entity_name);
-        for content in obs_batch.contents {
-            tx.execute(
-                crate::constant::SQL_INSERT_OBSERVATION,
-                libsql::params![obs_batch.entity_name.clone(), content],
-            )
-            .await?;
-        }
-        if limit > 0 {
-            tx.execute(
-                crate::constant::SQL_EVICT_OBSERVATIONS,
-                libsql::params![obs_batch.entity_name.clone(), limit as i64],
-            )
-            .await?;
-        }
-    }
-    tx.commit().await?;
+    crate::turso::immediate_transaction(conn, |tx| {
+        let observations = observations.clone();
+        Box::pin(async move {
+            for mut obs_batch in observations {
+                obs_batch.entity_name = crate::normalize::normalize_key(&obs_batch.entity_name);
+                for content in obs_batch.contents {
+                    tx.execute(
+                        crate::constant::SQL_INSERT_OBSERVATION,
+                        turso::params![obs_batch.entity_name.clone(), content],
+                    )
+                    .await?;
+                }
+                if limit > 0 {
+                    tx.execute(
+                        crate::constant::SQL_EVICT_OBSERVATIONS,
+                        turso::params![obs_batch.entity_name.clone(), limit as i64],
+                    )
+                    .await?;
+                }
+            }
+            Ok(())
+        })
+    })
+    .await?;
     Ok(())
 }
 
@@ -349,45 +319,51 @@ pub async fn create_relations(
     conn: &Connection,
     relations: Vec<crate::model::RelationInput>,
 ) -> Result<()> {
-    let tx = conn
-        .transaction_with_behavior(libsql::TransactionBehavior::Immediate)
-        .await?;
-    for mut rel in relations {
-        rel.from = crate::normalize::normalize_key(&rel.from);
-        rel.to = crate::normalize::normalize_key(&rel.to);
-        tx.execute(
-            crate::constant::SQL_INSERT_RELATION,
-            libsql::params![rel.from, rel.to, rel.relation_type],
-        )
-        .await?;
-    }
-    tx.commit().await?;
+    crate::turso::immediate_transaction(conn, |tx| {
+        let relations = relations.clone();
+        Box::pin(async move {
+            for mut rel in relations {
+                rel.from = crate::normalize::normalize_key(&rel.from);
+                rel.to = crate::normalize::normalize_key(&rel.to);
+                tx.execute(
+                    crate::constant::SQL_INSERT_RELATION,
+                    turso::params![rel.from, rel.to, rel.relation_type],
+                )
+                .await?;
+            }
+            Ok(())
+        })
+    })
+    .await?;
     Ok(())
 }
 
 pub async fn delete_entities(conn: &Connection, names: Vec<String>) -> Result<()> {
-    let tx = conn
-        .transaction_with_behavior(libsql::TransactionBehavior::Immediate)
-        .await?;
-    for name in names {
-        let norm_name = crate::normalize::normalize_key(&name);
-        tx.execute(
-            crate::constant::SQL_DELETE_ENTITY,
-            libsql::params![norm_name.clone()],
-        )
-        .await?;
-        tx.execute(
-            "DELETE FROM topics WHERE id = ?1",
-            libsql::params![norm_name.clone()],
-        )
-        .await?;
-        tx.execute(
-            "DELETE FROM chunks WHERE topic_id = ?1",
-            libsql::params![norm_name],
-        )
-        .await?;
-    }
-    tx.commit().await?;
+    crate::turso::immediate_transaction(conn, |tx| {
+        let names = names.clone();
+        Box::pin(async move {
+            for name in names {
+                let norm_name = crate::normalize::normalize_key(&name);
+                tx.execute(
+                    crate::constant::SQL_DELETE_ENTITY,
+                    turso::params![norm_name.clone()],
+                )
+                .await?;
+                tx.execute(
+                    "DELETE FROM topics WHERE id = ?1",
+                    turso::params![norm_name.clone()],
+                )
+                .await?;
+                tx.execute(
+                    "DELETE FROM chunks WHERE topic_id = ?1",
+                    turso::params![norm_name],
+                )
+                .await?;
+            }
+            Ok(())
+        })
+    })
+    .await?;
     Ok(())
 }
 
@@ -395,20 +371,23 @@ pub async fn delete_observations(
     conn: &Connection,
     deletions: Vec<crate::model::ObservationDeletion>,
 ) -> Result<()> {
-    let tx = conn
-        .transaction_with_behavior(libsql::TransactionBehavior::Immediate)
-        .await?;
-    for mut del in deletions {
-        del.entity_name = crate::normalize::normalize_key(&del.entity_name);
-        for obs in del.observations {
-            tx.execute(
-                crate::constant::SQL_DELETE_OBSERVATION,
-                libsql::params![del.entity_name.clone(), obs],
-            )
-            .await?;
-        }
-    }
-    tx.commit().await?;
+    crate::turso::immediate_transaction(conn, |tx| {
+        let deletions = deletions.clone();
+        Box::pin(async move {
+            for mut del in deletions {
+                del.entity_name = crate::normalize::normalize_key(&del.entity_name);
+                for obs in del.observations {
+                    tx.execute(
+                        crate::constant::SQL_DELETE_OBSERVATION,
+                        turso::params![del.entity_name.clone(), obs],
+                    )
+                    .await?;
+                }
+            }
+            Ok(())
+        })
+    })
+    .await?;
     Ok(())
 }
 
@@ -417,7 +396,7 @@ pub async fn delete_observation_by_id(conn: &Connection, entity_name: &str, id: 
     let affected = conn
         .execute(
             crate::constant::SQL_DELETE_OBSERVATION_BY_ID,
-            libsql::params![id, norm_name],
+            turso::params![id, norm_name],
         )
         .await?;
     if affected == 0 {
@@ -440,7 +419,7 @@ pub async fn update_observation_by_id(
     let affected = conn
         .execute(
             crate::constant::SQL_UPDATE_OBSERVATION_BY_ID,
-            libsql::params![id, new_content, norm_name],
+            turso::params![id, new_content, norm_name],
         )
         .await?;
     if affected == 0 {
@@ -462,7 +441,7 @@ pub async fn update_observation(
     let norm_name = crate::normalize::normalize_key(entity_name);
     conn.execute(
         crate::constant::SQL_UPDATE_OBSERVATION,
-        libsql::params![norm_name, old_content, new_content],
+        turso::params![norm_name, old_content, new_content],
     )
     .await?;
     Ok(())
@@ -472,19 +451,22 @@ pub async fn delete_relations(
     conn: &Connection,
     relations: Vec<crate::model::RelationInput>,
 ) -> Result<()> {
-    let tx = conn
-        .transaction_with_behavior(libsql::TransactionBehavior::Immediate)
-        .await?;
-    for mut rel in relations {
-        rel.from = crate::normalize::normalize_key(&rel.from);
-        rel.to = crate::normalize::normalize_key(&rel.to);
-        tx.execute(
-            crate::constant::SQL_DELETE_RELATION,
-            libsql::params![rel.from, rel.to, rel.relation_type],
-        )
-        .await?;
-    }
-    tx.commit().await?;
+    crate::turso::immediate_transaction(conn, |tx| {
+        let relations = relations.clone();
+        Box::pin(async move {
+            for mut rel in relations {
+                rel.from = crate::normalize::normalize_key(&rel.from);
+                rel.to = crate::normalize::normalize_key(&rel.to);
+                tx.execute(
+                    crate::constant::SQL_DELETE_RELATION,
+                    turso::params![rel.from, rel.to, rel.relation_type],
+                )
+                .await?;
+            }
+            Ok(())
+        })
+    })
+    .await?;
     Ok(())
 }
 
@@ -666,13 +648,13 @@ pub async fn search_nodes_with_limit(
                 i * 2 + 1,
                 i * 2 + 2
             ));
-            params.push(libsql::Value::from(k.clone()));
-            params.push(libsql::Value::from(v.clone()));
+            params.push(turso::Value::from(k.clone()));
+            params.push(turso::Value::from(v.clone()));
         }
         sql.push_str(" GROUP BY entity_name HAVING COUNT(DISTINCT key) = ?");
-        params.push(libsql::Value::from(filters.len() as i64));
+        params.push(turso::Value::from(filters.len() as i64));
 
-        let mut rows = conn.query(&sql, libsql::params_from_iter(params)).await?;
+        let mut rows = conn.query(&sql, turso::params_from_iter(params)).await?;
         while let Some(row) = rows.next().await? {
             filtered_names.insert(row.get::<String>(0)?);
         }
@@ -692,7 +674,7 @@ pub async fn search_nodes_with_limit(
             let mut rows = conn
                 .query(
                     "SELECT name FROM asobi_entities LIMIT ?1",
-                    libsql::params![limit as i64],
+                    turso::params![limit as i64],
                 )
                 .await?;
             while let Some(row) = rows.next().await? {
@@ -710,7 +692,7 @@ pub async fn search_nodes_with_limit(
             let mut rows = conn
                 .query(
                     crate::constant::SQL_SEARCH_OBSERVATIONS_FTS,
-                    libsql::params![query, fts_fetch_limit],
+                    turso::params![query, fts_fetch_limit],
                 )
                 .await?;
             let mut names = Vec::new();
@@ -746,7 +728,7 @@ pub async fn search_nodes_with_limit(
             let mut rows = conn
                 .query(
                     crate::constant::SQL_SEARCH_ENTITIES_LIKE,
-                    libsql::params![pattern, like_limit],
+                    turso::params![pattern, like_limit],
                 )
                 .await?;
             while let Some(row) = rows.next().await? {
@@ -850,10 +832,10 @@ async fn load_relations(
         // It's technically better to use different placeholders, but libsql bindings map "?" sequentially.
         // So we need to push the parameters twice!
         for name in chunk {
-            params.push(libsql::Value::from(name.clone()));
+            params.push(turso::Value::from(name.clone()));
         }
         for name in chunk {
-            params.push(libsql::Value::from(name.clone()));
+            params.push(turso::Value::from(name.clone()));
         }
 
         let mut rel_rows = conn.query(&sql, params).await?;
@@ -890,7 +872,7 @@ async fn load_entities_lazy(
         let params = chunk
             .iter()
             .cloned()
-            .map(libsql::Value::from)
+            .map(turso::Value::from)
             .collect::<Vec<_>>();
 
         let mut rows = conn.query(&entity_sql, params.clone()).await?;
@@ -959,7 +941,7 @@ async fn load_entities_eager_detailed(
         let params = chunk
             .iter()
             .cloned()
-            .map(libsql::Value::from)
+            .map(turso::Value::from)
             .collect::<Vec<_>>();
 
         let mut rows = conn.query(&entity_sql, params.clone()).await?;
@@ -1086,7 +1068,7 @@ pub async fn truth_upsert(conn: &Connection, entity: &str, key: &str, value: &st
     let norm_entity = crate::normalize::normalize_key(entity);
     conn.execute(
         crate::constant::SQL_UPSERT_TRUTH,
-        libsql::params![norm_entity, key, value],
+        turso::params![norm_entity, key, value],
     )
     .await?;
     Ok(())
@@ -1096,7 +1078,7 @@ pub async fn truth_delete(conn: &Connection, entity: &str, key: &str) -> Result<
     let norm_entity = crate::normalize::normalize_key(entity);
     conn.execute(
         crate::constant::SQL_DELETE_TRUTH,
-        libsql::params![norm_entity, key],
+        turso::params![norm_entity, key],
     )
     .await?;
     Ok(())
@@ -1127,7 +1109,7 @@ pub async fn select_truths(
         let params = chunk
             .iter()
             .cloned()
-            .map(libsql::Value::from)
+            .map(turso::Value::from)
             .collect::<Vec<_>>();
 
         let mut rows = conn.query(&sql, params).await?;
@@ -1164,7 +1146,7 @@ pub async fn skill_upsert(
     let norm_entity = crate::normalize::normalize_key(entity);
     conn.execute(
         crate::constant::SQL_UPSERT_SKILL,
-        libsql::params![norm_entity, body, source, version],
+        turso::params![norm_entity, body, source, version],
     )
     .await?;
     Ok(())
@@ -1175,7 +1157,7 @@ pub async fn skill_body(conn: &Connection, entity: &str) -> Result<Option<String
     let mut rows = conn
         .query(
             crate::constant::SQL_SELECT_SKILL_BODY,
-            libsql::params![norm_entity],
+            turso::params![norm_entity],
         )
         .await?;
     if let Some(row) = rows.next().await? {
@@ -1742,7 +1724,7 @@ mod tests {
         .unwrap();
         conn.execute(
             "INSERT INTO chunks (id, topic_id, chunk_idx, text, source, embedding) VALUES ('chunk', 'topic', 0, 'text', 'source', vector32(?1))",
-            libsql::params![serde_json::to_string(&vec![0.0f32; 384]).unwrap()],
+            turso::params![serde_json::to_string(&vec![0.0f32; 384]).unwrap()],
         )
         .await
         .unwrap();

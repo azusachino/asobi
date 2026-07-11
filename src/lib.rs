@@ -1,6 +1,8 @@
 //! Asobi — Knowledge Graph & Document Memory
 
 // Graph + optional Document/Vector (libSQL) tiers
+pub mod api;
+pub mod backend;
 pub mod backup;
 #[cfg(feature = "documents")]
 pub mod chunk;

@@ -14,7 +14,7 @@ fn set_db(path: &std::path::Path) {
     unsafe { std::env::set_var(db::ENV_DATABASE_URL, path.to_str().unwrap()) };
 }
 
-async fn seed(conn: &libsql::Connection, name: &str) {
+async fn seed(conn: &turso::Connection, name: &str) {
     db::create_entities(
         conn,
         vec![EntityInput {

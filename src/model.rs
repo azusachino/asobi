@@ -28,7 +28,7 @@ pub struct ObservationInput {
     pub contents: Vec<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct ObservationDeletion {
     pub entity_name: String,

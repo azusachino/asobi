@@ -1,4 +1,6 @@
 use anyhow::Result;
+use asobi::api::GraphStore;
+use asobi::backend::TursoBackend;
 #[cfg(feature = "documents")]
 use asobi::embed::EmbeddingProvider;
 use asobi::paths::AsobiPaths;
@@ -244,7 +246,7 @@ pub const ENV_TOPICS_DIR: &str = "ASOBI_TOPICS_DIR";
 
 #[cfg(feature = "documents")]
 async fn init_vector(
-    conn: libsql::Connection,
+    conn: turso::Connection,
     paths: &AsobiPaths,
 ) -> Result<(
     asobi::vector::VectorStore,
@@ -433,6 +435,8 @@ async fn run_cli(cli: Cli) -> Result<()> {
 
     let paths = AsobiPaths::resolve();
     let (db, conn) = asobi::db::init_db().await?;
+    let backend = TursoBackend::from_parts(db, conn);
+    let conn = backend.connection();
 
     // Vector store + embedder are only initialised for commands that need them.
     // Graph-only operations (new, graph, etc.) skip the heavy
@@ -529,10 +533,10 @@ async fn run_cli(cli: Cli) -> Result<()> {
                 })
                 .collect();
             let names: Vec<String> = entities.iter().map(|e| e.name.clone()).collect();
-            asobi::db::create_entities(&conn, entities).await?;
+            backend.create_entities(entities).await?;
             info!("{} entit{} created.", names.len(), plural(names.len()));
             if json {
-                emit_nodes(&conn, names).await?;
+                emit_nodes(&backend, names).await?;
             }
         }
         Commands::Link { triples } => {
@@ -555,10 +559,10 @@ async fn run_cli(cli: Cli) -> Result<()> {
                 .flat_map(|r| [r.from.clone(), r.to.clone()])
                 .collect();
             let count = relations.len();
-            asobi::db::create_relations(&conn, relations).await?;
+            backend.create_relations(relations).await?;
             info!("{} relation{} created.", count, suffix(count));
             if json {
-                emit_nodes(&conn, involved).await?;
+                emit_nodes(&backend, involved).await?;
             }
         }
         Commands::Obs { name, contents } => {
@@ -571,37 +575,37 @@ async fn run_cli(cli: Cli) -> Result<()> {
                         .observation_limit
                         .unwrap_or(asobi::constant::DEFAULT_OBSERVATION_LIMIT),
                 );
-            asobi::db::add_observations(
-                &conn,
-                vec![asobi::model::ObservationInput {
-                    entity_name: name.clone(),
-                    contents,
-                }],
-                limit,
-            )
-            .await?;
+            backend
+                .add_observations(
+                    vec![asobi::model::ObservationInput {
+                        entity_name: name.clone(),
+                        contents,
+                    }],
+                    limit,
+                )
+                .await?;
             info!("Observation added.");
             if json {
-                emit_nodes(&conn, vec![name]).await?;
+                emit_nodes(&backend, vec![name]).await?;
             }
         }
         Commands::Truth { name, key, value } => {
-            asobi::db::truth_upsert(&conn, &name, &key, &value).await?;
+            backend.truth_upsert(&name, &key, &value).await?;
             info!("Truth added.");
             if json {
-                emit_nodes(&conn, vec![name]).await?;
+                emit_nodes(&backend, vec![name]).await?;
             }
         }
         Commands::RmTruth { name, key } => {
-            asobi::db::truth_delete(&conn, &name, &key).await?;
+            backend.truth_delete(&name, &key).await?;
             info!("Truth deleted.");
             if json {
-                emit_nodes(&conn, vec![name]).await?;
+                emit_nodes(&backend, vec![name]).await?;
             }
         }
         Commands::Rm { names } => {
             let deleted = names.clone();
-            asobi::db::delete_entities(&conn, names).await?;
+            backend.delete_entities(names).await?;
             info!("Entities deleted.");
             if json {
                 println!(
@@ -618,20 +622,18 @@ async fn run_cli(cli: Cli) -> Result<()> {
                         content
                     )
                 })?;
-                asobi::db::delete_observation_by_id(&conn, &name, parsed_id).await?;
+                backend.delete_observation_by_id(&name, parsed_id).await?;
             } else {
-                asobi::db::delete_observations(
-                    &conn,
-                    vec![asobi::model::ObservationDeletion {
+                backend
+                    .delete_observations(vec![asobi::model::ObservationDeletion {
                         entity_name: name.clone(),
                         observations: vec![content],
-                    }],
-                )
-                .await?;
+                    }])
+                    .await?;
             }
             info!("Observations deleted.");
             if json {
-                emit_nodes(&conn, vec![name]).await?;
+                emit_nodes(&backend, vec![name]).await?;
             }
         }
         Commands::UpdateObs {
@@ -647,13 +649,17 @@ async fn run_cli(cli: Cli) -> Result<()> {
                         old_content
                     )
                 })?;
-                asobi::db::update_observation_by_id(&conn, &name, parsed_id, &new_content).await?;
+                backend
+                    .update_observation_by_id(&name, parsed_id, &new_content)
+                    .await?;
             } else {
-                asobi::db::update_observation(&conn, &name, &old_content, &new_content).await?;
+                backend
+                    .update_observation(&name, &old_content, &new_content)
+                    .await?;
             }
             info!("Observation updated.");
             if json {
-                emit_nodes(&conn, vec![name]).await?;
+                emit_nodes(&backend, vec![name]).await?;
             }
         }
         Commands::Unlink {
@@ -661,22 +667,20 @@ async fn run_cli(cli: Cli) -> Result<()> {
             to,
             relation_type,
         } => {
-            asobi::db::delete_relations(
-                &conn,
-                vec![asobi::model::RelationInput {
+            backend
+                .delete_relations(vec![asobi::model::RelationInput {
                     from: from.clone(),
                     to: to.clone(),
                     relation_type,
-                }],
-            )
-            .await?;
+                }])
+                .await?;
             info!("Relations deleted.");
             if json {
-                emit_nodes(&conn, vec![from, to]).await?;
+                emit_nodes(&backend, vec![from, to]).await?;
             }
         }
         Commands::Graph => {
-            let graph = asobi::db::read_graph(&conn).await?;
+            let graph = backend.read_graph().await?;
             println!("{}", serde_json::to_string_pretty(&graph)?);
         }
         Commands::Search {
@@ -693,9 +697,9 @@ async fn run_cli(cli: Cli) -> Result<()> {
                 }
             }
             let query_str = query.unwrap_or_default();
-            let graph =
-                asobi::db::search_nodes_with_limit(&conn, &query_str, limit, &parsed_filters)
-                    .await?;
+            let graph = backend
+                .search_nodes(&query_str, limit, &parsed_filters)
+                .await?;
             println!("{}", serde_json::to_string_pretty(&graph)?);
         }
         Commands::Show {
@@ -703,7 +707,9 @@ async fn run_cli(cli: Cli) -> Result<()> {
             expand,
             with_ids,
         } => {
-            let graph = asobi::db::open_nodes_detailed(&conn, names, with_ids, &expand).await?;
+            let graph = backend
+                .open_nodes_detailed(names, with_ids, &expand)
+                .await?;
             println!("{}", serde_json::to_string_pretty(&graph)?);
         }
         Commands::Stats { per_entity } => {
@@ -717,7 +723,7 @@ async fn run_cli(cli: Cli) -> Result<()> {
                 "unknown".to_string()
             };
 
-            let (entities, relations, observations) = asobi::db::stats(&conn).await?;
+            let (entities, relations, observations) = backend.stats().await?;
             if json {
                 let mut stats_json = serde_json::json!({
                     "entities": entities,
@@ -738,7 +744,7 @@ async fn run_cli(cli: Cli) -> Result<()> {
                                 .unwrap_or(asobi::constant::DEFAULT_OBSERVATION_LIMIT),
                         );
 
-                    let list = asobi::db::stats_per_entity(&conn).await?;
+                    let list = backend.stats_per_entity().await?;
                     let detailed: Vec<serde_json::Value> = list
                         .iter()
                         .map(|(name, count)| {
@@ -779,7 +785,7 @@ async fn run_cli(cli: Cli) -> Result<()> {
                                 .unwrap_or(asobi::constant::DEFAULT_OBSERVATION_LIMIT),
                         );
 
-                    let list = asobi::db::stats_per_entity(&conn).await?;
+                    let list = backend.stats_per_entity().await?;
                     if !list.is_empty() {
                         println!("\nEntities by Observation Count:");
                         for (name, count) in &list {
@@ -808,9 +814,9 @@ async fn run_cli(cli: Cli) -> Result<()> {
             rationale,
         } => {
             let graph = if scope.is_empty() {
-                asobi::db::read_graph_eager(&conn).await?
+                backend.read_graph_eager().await?
             } else {
-                asobi::db::read_graph_scoped(&conn, &scope, rationale).await?
+                backend.read_graph_scoped(&scope, rationale).await?
             };
             let json = serde_json::to_string_pretty(&graph)?;
             if let Some(path) = output {
@@ -827,7 +833,7 @@ async fn run_cli(cli: Cli) -> Result<()> {
 
             let had_entities = !graph.entities.is_empty();
             let had_relations = !graph.relations.is_empty();
-            import_graph(&conn, graph).await?;
+            import_graph(&backend, graph).await?;
             if had_entities {
                 info!("Imported entities, observations, and truths.");
             }
@@ -848,7 +854,7 @@ async fn run_cli(cli: Cli) -> Result<()> {
                     return Ok(());
                 }
             }
-            asobi::db::reset(&conn).await?;
+            backend.reset().await?;
             info!("Knowledge graph reset successfully.");
         }
         Commands::Backup { output, keep } => {
@@ -857,6 +863,7 @@ async fn run_cli(cli: Cli) -> Result<()> {
             info!("Backup written to {}", dest.display());
         }
         Commands::Restore { file, force } => {
+            let (db, conn) = backend.into_parts();
             asobi::backup::restore(db, conn, std::path::Path::new(&file), force).await?;
         }
         Commands::Skills { subcommand } => {
@@ -1027,11 +1034,11 @@ async fn run_cli(cli: Cli) -> Result<()> {
 
                     if !entities_to_delete.is_empty() {
                         info!("Deleting {} skill entities...", entities_to_delete.len());
-                        asobi::db::delete_entities(&conn, entities_to_delete).await?;
+                        backend.delete_entities(entities_to_delete).await?;
                         info!("Skills removed successfully.");
                     } else if target.starts_with("skill:") {
                         info!("Deleting skill entity {}...", target);
-                        asobi::db::delete_entities(&conn, vec![target.clone()]).await?;
+                        backend.delete_entities(vec![target.clone()]).await?;
                         info!("Skills removed successfully.");
                     } else {
                         anyhow::bail!("No installed skills found matching target {:?}", target);
@@ -1087,13 +1094,13 @@ async fn run_cli(cli: Cli) -> Result<()> {
 /// stdout — the `--json` echo after a mutation, so a caller can confirm the
 /// write without a second `show` round-trip. Names are normalized inside
 /// `open_nodes`, so raw user input matches what was just stored.
-async fn emit_nodes(conn: &libsql::Connection, names: Vec<String>) -> Result<()> {
-    let graph = asobi::db::open_nodes(conn, names).await?;
+async fn emit_nodes(store: &impl GraphStore, names: Vec<String>) -> Result<()> {
+    let graph = store.open_nodes(names).await?;
     println!("{}", serde_json::to_string_pretty(&graph)?);
     Ok(())
 }
 
-async fn import_graph(conn: &libsql::Connection, graph: asobi::model::Graph) -> Result<()> {
+async fn import_graph(store: &impl GraphStore, graph: asobi::model::Graph) -> Result<()> {
     let mut entities = Vec::with_capacity(graph.entities.len());
     let mut truths = Vec::new();
     for entity in graph.entities {
@@ -1112,13 +1119,13 @@ async fn import_graph(conn: &libsql::Connection, graph: asobi::model::Graph) -> 
     }
 
     if !entities.is_empty() {
-        asobi::db::create_entities(conn, entities).await?;
+        store.create_entities(entities).await?;
         for (name, key, value) in truths {
-            asobi::db::truth_upsert(conn, &name, &key, &value).await?;
+            store.truth_upsert(&name, &key, &value).await?;
         }
     }
     if !graph.relations.is_empty() {
-        asobi::db::create_relations(conn, graph.relations).await?;
+        store.create_relations(graph.relations).await?;
     }
     Ok(())
 }
@@ -1154,7 +1161,8 @@ fn print_init_report(report: &asobi::init::InitReport) {
 
 #[cfg(test)]
 mod tests {
-    use super::{import_graph, validate_git_url};
+    use super::{TursoBackend, import_graph, validate_git_url};
+    use asobi::api::GraphStore;
     use tempfile::tempdir;
 
     #[test]
@@ -1185,26 +1193,26 @@ mod tests {
                 dir.path().join("test.db").to_str().unwrap(),
             );
         }
-        let (_db, conn) = asobi::db::init_db().await.unwrap();
-        asobi::db::create_entities(
-            &conn,
-            vec![asobi::model::EntityInput {
+        let (db, conn) = asobi::db::init_db().await.unwrap();
+        let backend = TursoBackend::from_parts(db, conn);
+        backend
+            .create_entities(vec![asobi::model::EntityInput {
                 name: "project".to_string(),
                 entity_type: "task".to_string(),
                 observations: vec!["ship it".to_string()],
-            }],
-        )
-        .await
-        .unwrap();
-        asobi::db::truth_upsert(&conn, "project", "status", "READY")
+            }])
+            .await
+            .unwrap();
+        backend
+            .truth_upsert("project", "status", "READY")
             .await
             .unwrap();
 
-        let exported = asobi::db::read_graph_eager(&conn).await.unwrap();
-        asobi::db::reset(&conn).await.unwrap();
-        import_graph(&conn, exported).await.unwrap();
+        let exported = backend.read_graph_eager().await.unwrap();
+        backend.reset().await.unwrap();
+        import_graph(&backend, exported).await.unwrap();
 
-        let imported = asobi::db::read_graph_eager(&conn).await.unwrap();
+        let imported = backend.read_graph_eager().await.unwrap();
         assert_eq!(
             imported.entities[0].truths.get("status"),
             Some(&"READY".to_string())

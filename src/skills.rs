@@ -116,7 +116,7 @@ pub fn resolve_selection(
 pub async fn install_skills_from_dir<
     #[cfg(feature = "documents")] E: crate::embed::EmbeddingProvider,
 >(
-    conn: &libsql::Connection,
+    conn: &turso::Connection,
     dir_path: &Path,
     source: &str,
     version: &str,
@@ -213,51 +213,56 @@ pub async fn install_skills_from_dir<
 
         let entity_name = crate::normalize::normalize_key(&format!("skill:{}:{}", slug, name));
 
-        let tx = conn
-            .transaction_with_behavior(libsql::TransactionBehavior::Immediate)
-            .await?;
+        crate::turso::immediate_transaction(conn, |tx| {
+            let entity_name = entity_name.clone();
+            let description = description.to_string();
+            let source = source.to_string();
+            let version = version.to_string();
+            let body = body.clone();
+            Box::pin(async move {
+                // 1. Create the entity
+                tx.execute(
+                    crate::constant::SQL_INSERT_ENTITY,
+                    turso::params![entity_name.clone(), "skill".to_string()],
+                )
+                .await?;
 
-        // 1. Create the entity
-        tx.execute(
-            crate::constant::SQL_INSERT_ENTITY,
-            libsql::params![entity_name.clone(), "skill".to_string()],
-        )
-        .await?;
+                // 2. Set truths
+                tx.execute(
+                    crate::constant::SQL_UPSERT_TRUTH,
+                    turso::params![entity_name.clone(), "description".to_string(), description],
+                )
+                .await?;
+                tx.execute(
+                    crate::constant::SQL_UPSERT_TRUTH,
+                    turso::params![entity_name.clone(), "source".to_string(), source.clone()],
+                )
+                .await?;
+                tx.execute(
+                    crate::constant::SQL_UPSERT_TRUTH,
+                    turso::params![entity_name.clone(), "version".to_string(), version.clone()],
+                )
+                .await?;
+                tx.execute(
+                    crate::constant::SQL_UPSERT_TRUTH,
+                    turso::params![
+                        entity_name.clone(),
+                        "installed".to_string(),
+                        chrono::Utc::now().format("%Y-%m-%d").to_string()
+                    ],
+                )
+                .await?;
 
-        // 2. Set truths
-        tx.execute(
-            crate::constant::SQL_UPSERT_TRUTH,
-            libsql::params![entity_name.clone(), "description".to_string(), description],
-        )
+                // 3. Upsert into asobi_skills
+                tx.execute(
+                    crate::constant::SQL_UPSERT_SKILL,
+                    turso::params![entity_name, body, source, version],
+                )
+                .await?;
+                Ok(())
+            })
+        })
         .await?;
-        tx.execute(
-            crate::constant::SQL_UPSERT_TRUTH,
-            libsql::params![entity_name.clone(), "source".to_string(), source],
-        )
-        .await?;
-        tx.execute(
-            crate::constant::SQL_UPSERT_TRUTH,
-            libsql::params![entity_name.clone(), "version".to_string(), version],
-        )
-        .await?;
-        tx.execute(
-            crate::constant::SQL_UPSERT_TRUTH,
-            libsql::params![
-                entity_name.clone(),
-                "installed".to_string(),
-                chrono::Utc::now().format("%Y-%m-%d").to_string()
-            ],
-        )
-        .await?;
-
-        // 3. Upsert into asobi_skills
-        tx.execute(
-            crate::constant::SQL_UPSERT_SKILL,
-            libsql::params![entity_name.clone(), body.clone(), source, version],
-        )
-        .await?;
-
-        tx.commit().await?;
 
         // 4. Chunk and embed into document store if available
         #[cfg(feature = "documents")]

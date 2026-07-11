@@ -227,6 +227,7 @@ name = "asobi"
 version = "0.5.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "chrono",
  "clap",
  "fastembed",

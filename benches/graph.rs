@@ -157,7 +157,7 @@ fn main() {
     });
 }
 
-async fn seed_graph(conn: &libsql::Connection, entity_count: usize) {
+async fn seed_graph(conn: &turso::Connection, entity_count: usize) {
     for i in 0..entity_count {
         let rare_token = if i % 1_000 == 0 || i == 7_777 {
             " rareterm7777"

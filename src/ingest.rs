@@ -6,8 +6,8 @@ use crate::{
     vector::{Chunk, VectorStore},
 };
 use anyhow::Result;
-use libsql::Connection;
 use std::path::Path;
+use turso::Connection;
 use uuid::Uuid;
 use walkdir::WalkDir;
 

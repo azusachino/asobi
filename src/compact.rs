@@ -4,11 +4,11 @@ use crate::model::EntityOutput;
 use crate::normalize::slugify;
 use crate::vector::VectorStore;
 use anyhow::Result;
-use libsql::{Connection, params};
 use std::fmt::Write as _;
 use std::io::Write as _;
 use std::path::PathBuf;
 use std::time::{Duration, SystemTime};
+use turso::{Connection, params};
 
 pub async fn sync_graph_to_markdown(
     conn: &Connection,
@@ -241,7 +241,7 @@ pub fn prune_old_sessions(topics_root: &str, days: u32) -> Result<usize> {
 /// Returns clusters of topic IDs with pairwise cosine similarity > threshold.
 pub async fn find_duplicate_clusters(
     store: &crate::vector::VectorStore,
-    conn: &libsql::Connection,
+    conn: &turso::Connection,
     threshold: f32,
 ) -> anyhow::Result<Vec<Vec<String>>> {
     // Get all topic IDs

@@ -14,9 +14,9 @@
 //! default backup directory is pruned to the most recent `keep` snapshots.
 
 use anyhow::{Context, Result, bail};
-use libsql::{Builder, Connection, Database};
 use std::path::{Path, PathBuf};
 use tracing::{info, warn};
+use turso::{Builder, Connection, Database};
 
 use crate::constant::{
     ENV_DATABASE_URL, SQL_INTEGRITY_CHECK, SQL_TABLE_EXISTS, SQL_VACUUM_INTO_TEMPLATE,
@@ -142,10 +142,13 @@ pub async fn restore(db: Database, conn: Connection, source: &Path, force: bool)
 /// an integrity check. Rejects a wrong-file or corrupt-file mistake before any
 /// destructive step.
 async fn validate_snapshot(source: &Path) -> Result<()> {
+    let source = source
+        .to_str()
+        .context("snapshot path is not valid UTF-8")?;
     let db = Builder::new_local(source).build().await?;
     let conn = db.connect()?;
     for table in REQUIRED_TABLES {
-        let mut rows = conn.query(SQL_TABLE_EXISTS, libsql::params![table]).await?;
+        let mut rows = conn.query(SQL_TABLE_EXISTS, turso::params![table]).await?;
         if rows.next().await?.is_none() {
             bail!("missing expected table `{table}`");
         }
@@ -156,6 +159,7 @@ async fn validate_snapshot(source: &Path) -> Result<()> {
 
 /// Run `PRAGMA integrity_check` against the database at `path`.
 async fn assert_integrity(path: &Path) -> Result<()> {
+    let path = path.to_str().context("database path is not valid UTF-8")?;
     let db = Builder::new_local(path).build().await?;
     let conn = db.connect()?;
     check_integrity(&conn).await

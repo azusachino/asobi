@@ -1,5 +1,5 @@
 use anyhow::Result;
-use libsql::{Connection, params};
+use turso::{Connection, params};
 
 pub struct VectorStore {
     conn: Connection,
@@ -44,26 +44,29 @@ impl VectorStore {
     }
 
     pub async fn insert_chunks(&self, chunks: Vec<Chunk>) -> Result<()> {
-        let tx = self
-            .conn
-            .transaction_with_behavior(libsql::TransactionBehavior::Immediate)
-            .await?;
-        for chunk in chunks {
-            let vector_json = serde_json::to_string(&chunk.vector)?;
-            tx.execute(
-                crate::constant::SQL_INSERT_CHUNK,
-                params![
-                    chunk.id,
-                    chunk.topic_id,
-                    chunk.chunk_idx,
-                    chunk.text,
-                    chunk.source,
-                    vector_json
-                ],
-            )
-            .await?;
-        }
-        tx.commit().await?;
+        crate::turso::immediate_transaction(&self.conn, |tx| {
+            let chunks = chunks.clone();
+            Box::pin(async move {
+                for chunk in chunks {
+                    let vector_json = serde_json::to_string(&chunk.vector)
+                        .map_err(|error| turso::Error::Error(error.to_string()))?;
+                    tx.execute(
+                        crate::constant::SQL_INSERT_CHUNK,
+                        params![
+                            chunk.id,
+                            chunk.topic_id,
+                            chunk.chunk_idx,
+                            chunk.text,
+                            chunk.source,
+                            vector_json
+                        ],
+                    )
+                    .await?;
+                }
+                Ok(())
+            })
+        })
+        .await?;
         Ok(())
     }
 
@@ -106,10 +109,7 @@ mod tests {
     use super::*;
 
     async fn setup_test_db() -> Connection {
-        let db = libsql::Builder::new_local(":memory:")
-            .build()
-            .await
-            .unwrap();
+        let db = turso::Builder::new_local(":memory:").build().await.unwrap();
         let conn = db.connect().unwrap();
         conn.execute(
             "CREATE TABLE chunks (

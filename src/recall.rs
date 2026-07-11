@@ -1,8 +1,8 @@
 use crate::{db::search_fts, embed::EmbeddingProvider, vector::VectorStore};
 use anyhow::Result;
-use libsql::Connection;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use turso::Connection;
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -91,7 +91,7 @@ pub async fn recall(
         let params = chunk
             .iter()
             .cloned()
-            .map(libsql::Value::from)
+            .map(turso::Value::from)
             .collect::<Vec<_>>();
         let mut rows = conn.query(&sql, params).await?;
         while let Some(row) = rows.next().await? {
