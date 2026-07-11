@@ -4,18 +4,18 @@
 help:
 	@echo "Available tasks:"
 	@echo "  build         - Compile the Asobi CLI and library"
-	@echo "  build-documents - Compile with Turso/fastembed document commands"
+	@echo "  build-documents - Compile with fastembed document commands"
 	@echo "  run           - Run the Asobi CLI via cargo"
 	@echo "  test          - Run all Rust tests"
-	@echo "  test-documents - Run tests with Turso/fastembed document feature"
+	@echo "  test-documents - Run tests with the fastembed document feature"
 	@echo "  test-scripts  - Run uv-managed graph-tier CLI integration checks"
-	@echo "  test-turso-scripts - Run the Turso API/CLI integration checks"
+	@echo "  test-turso-scripts - Run experimental Turso CLI integration checks"
 	@echo "  test-documents-scripts - Run uv-managed document-tier CLI checks"
 	@echo "  verify-storage-boundary - Reject provider references outside src/storage"
 	@echo "  verify-libsql - Run the default libSQL CLI verification"
 	@echo "  verify-turso - Run the experimental Turso CLI verification"
 	@echo "  bench-libsql - Run graph benchmarks against the default build"
-	@echo "  bench-turso - Run graph benchmarks with turso-experimental (experimental backend)"
+	@echo "  bench-turso - Build the Turso graph benchmark (set ASOBI_BACKEND=turso to select it)"
 	@echo "  fmt           - Format Rust, Python, JSON, and YAML code"
 	@echo "  fmt-check     - Verify formatting without writing (gate; run fmt to fix)"
 	@echo "  lint          - Run Rust clippy and Python ruff"
@@ -63,8 +63,8 @@ verify-turso:
 bench-libsql:
 	cargo bench --bench graph
 
-# The Turso backend is experimental and not part of any gate; libSQL is the
-# supported, benchmarked default. To exercise Turso here, select it explicitly:
+# Turso is outside the default gate; libSQL is the supported default. To run
+# this benchmark against Turso rather than the default backend, select it:
 #   ASOBI_BACKEND=turso make bench-turso
 bench-turso:
 	cargo bench --features turso-experimental --bench graph
