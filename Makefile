@@ -1,4 +1,4 @@
-.PHONY: help build build-documents run test test-documents test-scripts test-documents-scripts fmt fmt-check lint check check-documents bench clean init
+.PHONY: help build build-documents run test test-documents test-scripts test-turso-scripts test-documents-scripts fmt fmt-check lint check check-documents bench clean init
 
 # Default task: Show help
 help:
@@ -9,6 +9,7 @@ help:
 	@echo "  test          - Run all Rust tests"
 	@echo "  test-documents - Run tests with Turso/fastembed document feature"
 	@echo "  test-scripts  - Run uv-managed graph-tier CLI integration checks"
+	@echo "  test-turso-scripts - Run the Turso API/CLI integration checks"
 	@echo "  test-documents-scripts - Run uv-managed document-tier CLI checks"
 	@echo "  fmt           - Format Rust, Python, JSON, and YAML code"
 	@echo "  fmt-check     - Verify formatting without writing (gate; run fmt to fix)"
@@ -37,6 +38,9 @@ test-documents:
 test-scripts:
 	uv run scripts/verify_cli.py
 
+test-turso-scripts:
+	uv run scripts/verify_cli.turso.py
+
 test-documents-scripts:
 	uv run scripts/verify_documents_cli.py
 
@@ -54,7 +58,7 @@ lint:
 	cargo clippy -- -D warnings
 	ruff check .
 
-check: fmt-check lint test test-scripts check-documents
+check: fmt-check lint test test-scripts test-turso-scripts check-documents
 
 check-documents: build-documents test-documents test-documents-scripts
 

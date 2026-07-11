@@ -147,6 +147,8 @@ enum Commands {
         #[arg(long)]
         per_entity: bool,
     },
+    /// Report the API contract and selected backend capabilities
+    Capabilities,
 
     /// Export the knowledge graph to a JSON file
     Export {
@@ -809,6 +811,18 @@ async fn run_cli(cli: Cli) -> Result<()> {
                     }
                 }
             }
+        }
+        Commands::Capabilities => {
+            let capabilities = backend.capabilities().await?;
+            let health = backend.health().await?;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&serde_json::json!({
+                    "apiVersion": asobi::api::API_VERSION,
+                    "capabilities": capabilities,
+                    "health": health,
+                }))?
+            );
         }
 
         Commands::Export {

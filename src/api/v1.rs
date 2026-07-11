@@ -15,6 +15,8 @@
 // Revisit (via `trait_variant`) only if a multi-threaded consumer needs it.
 #![allow(async_fn_in_trait)]
 
+pub const API_VERSION: u32 = 1;
+
 use crate::model::{EntityInput, Graph, ObservationDeletion, ObservationInput, RelationInput};
 
 // ---- Stable error surface -------------------------------------------------
