@@ -66,8 +66,11 @@ fastembed = { version = "5", optional = true }
 
 # Database & Vector Store
 # libSQL is the default backend; Turso is opt-in behind `turso-experimental`.
+# Local embedded use only — disable libSQL's default replication/remote/sync
+# stack (which pulls in tonic, tonic-web, axum, hyper, tower-http). asobi only
+# ever opens local databases via `Builder::new_local`.
 turso = { version = "0.6.1", features = ["fts"], optional = true }
-libsql = "0.9"
+libsql = { version = "0.9", default-features = false, features = ["core"] }
 
 
 [dev-dependencies]
