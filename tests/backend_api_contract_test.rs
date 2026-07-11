@@ -9,7 +9,7 @@ fn turso_satisfies_the_versioned_backend_contract() {
 }
 
 #[tokio::test]
-async fn turso_reports_unimplemented_optional_capabilities_explicitly() {
+async fn turso_reports_optional_capabilities_explicitly() {
     let dir = tempfile::tempdir().unwrap();
     let db_path = dir.path().join("api-contract.db");
     unsafe {
@@ -23,10 +23,11 @@ async fn turso_reports_unimplemented_optional_capabilities_explicitly() {
     let capabilities = backend.capabilities().await.unwrap();
     assert_eq!(capabilities.backend, "turso");
     assert!(capabilities.keyword_search);
-    assert!(!capabilities.vectors);
+    assert_eq!(capabilities.documents, cfg!(feature = "documents"));
+    assert_eq!(capabilities.vectors, cfg!(feature = "documents"));
     assert!(!capabilities.logical_snapshots);
 
-    let error = backend
+    let result = backend
         .insert_chunks(vec![DocumentChunk {
             id: "chunk".to_string(),
             topic_id: "topic".to_string(),
@@ -35,12 +36,15 @@ async fn turso_reports_unimplemented_optional_capabilities_explicitly() {
             source: "source".to_string(),
             embedding: vec![0.0; 384],
         }])
-        .await
-        .unwrap_err();
-    assert!(matches!(
-        error,
-        asobi::api::v1::ApiError::Unsupported("vectors")
-    ));
+        .await;
+    if cfg!(feature = "documents") {
+        result.unwrap();
+    } else {
+        assert!(matches!(
+            result.unwrap_err(),
+            asobi::api::v1::ApiError::Unsupported("vectors")
+        ));
+    }
 
     let health = backend.health().await.unwrap();
     assert!(health.reachable);

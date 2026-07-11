@@ -87,13 +87,11 @@ pub const SCHEMA_CREATE_CHUNKS: &str = "CREATE TABLE IF NOT EXISTS chunks (
             chunk_idx INTEGER NOT NULL,
             text      TEXT NOT NULL,
             source    TEXT NOT NULL,
-            embedding F32_BLOB(384) NOT NULL
+            embedding BLOB NOT NULL
         )";
 
 pub const SCHEMA_CREATE_IDX_CHUNKS_TOPIC_ID: &str =
     "CREATE INDEX IF NOT EXISTS idx_chunks_topic_id ON chunks(topic_id)";
-
-pub const SCHEMA_CREATE_IDX_CHUNKS_VECTOR: &str = "CREATE INDEX IF NOT EXISTS idx_chunks_vector ON chunks(libsql_vector_idx(embedding, 'metric=cosine'))";
 
 pub const SCHEMA_CREATE_ASOBI_OBS_FTS: &str = "CREATE INDEX IF NOT EXISTS asobi_obs_fts
           ON asobi_observations USING fts (content)";
@@ -195,9 +193,9 @@ pub const SQL_INSERT_CHUNK: &str = "INSERT INTO chunks (id, topic_id, chunk_idx,
 // maximally distant (1.0 → similarity 0.0).
 pub const SQL_SEARCH_CHUNKS: &str = "SELECT c.id, c.topic_id, c.text, c.source, \
              COALESCE(vector_distance_cos(c.embedding, vector32(?1)), 1.0) AS score \
-             FROM vector_top_k('idx_chunks_vector', vector32(?1), ?2) AS v \
-             JOIN chunks c ON c.rowid = v.id \
-             ORDER BY score";
+             FROM chunks c \
+             ORDER BY score \
+             LIMIT ?2";
 
 pub const SQL_DELETE_CHUNKS_BY_TOPIC: &str = "DELETE FROM chunks WHERE topic_id = ?1";
 

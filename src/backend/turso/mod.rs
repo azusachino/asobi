@@ -264,13 +264,13 @@ impl MaintenanceStore for TursoBackend {
     }
 
     async fn capabilities(&self) -> ApiResult<BackendCapabilities> {
-        // documents/vectors/snapshots flip on once tasks 3-4 + the snapshot
-        // path land on turso; keyword_search + file_backup are already real.
+        // Document/vector operations are available when the optional document
+        // tier is compiled; snapshot support remains a later task.
         Ok(BackendCapabilities {
             backend: "turso".to_string(),
             keyword_search: true,
-            documents: false,
-            vectors: false,
+            documents: cfg!(feature = "documents"),
+            vectors: cfg!(feature = "documents"),
             logical_snapshots: false,
             file_backup: true,
         })

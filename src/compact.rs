@@ -273,7 +273,7 @@ pub async fn find_duplicate_clusters(
 
         if let Some(row) = rows.next().await? {
             let blob: Vec<u8> = row.get(0)?;
-            // F32_BLOB is stored as little-endian f32s
+            // Turso vector32 values are stored as little-endian f32s.
             let vector: Vec<f32> = blob
                 .chunks_exact(4)
                 .map(|c| f32::from_le_bytes(c.try_into().unwrap()))

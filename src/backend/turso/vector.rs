@@ -118,14 +118,8 @@ mod tests {
                 chunk_idx INTEGER NOT NULL,
                 text      TEXT NOT NULL,
                 source    TEXT NOT NULL,
-                embedding F32_BLOB(384) NOT NULL
+                embedding BLOB NOT NULL
             )",
-            (),
-        )
-        .await
-        .unwrap();
-        conn.execute(
-            "CREATE INDEX idx_chunks_vector ON chunks(libsql_vector_idx(embedding, 'metric=cosine'))",
             (),
         )
         .await
