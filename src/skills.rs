@@ -562,7 +562,7 @@ mod tests {
                 self.0
             }
         }
-        let embedder = FakeEmbedder(384);
+        let embedder = FakeEmbedder(768);
 
         // 5. Clone and install passing vector context
         let clone_temp_dir = tempdir().unwrap();

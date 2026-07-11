@@ -1736,7 +1736,7 @@ mod tests {
         .unwrap();
         conn.execute(
             "INSERT INTO chunks (id, topic_id, chunk_idx, text, source, embedding) VALUES ('chunk', 'topic', 0, 'text', 'source', vector32(?1))",
-            turso::params![serde_json::to_string(&vec![0.0f32; 384]).unwrap()],
+            turso::params![serde_json::to_string(&vec![0.0f32; 768]).unwrap()],
         )
         .await
         .unwrap();

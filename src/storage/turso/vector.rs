@@ -27,8 +27,8 @@ pub struct SearchResult {
 
 impl VectorStore {
     pub fn new(conn: Connection) -> Self {
-        // Default dim=384 for all-MiniLML6V2
-        Self::new_with_dim(conn, 384)
+        // Default dim=768 for gte-base-en-v1.5
+        Self::new_with_dim(conn, 768)
     }
 
     pub fn new_with_dim(conn: Connection, dim: usize) -> Self {
@@ -141,9 +141,9 @@ mod tests {
     #[tokio::test]
     async fn test_insert_and_search() {
         let conn = setup_test_db().await;
-        let store = VectorStore::new_with_dim(conn, 384);
+        let store = VectorStore::new_with_dim(conn, 768);
 
-        let dim = 384;
+        let dim = 768;
         let chunks: Vec<Chunk> = (0..5).map(|i| make_chunk(i, dim)).collect();
         store.insert_chunks(chunks).await.unwrap();
 
@@ -155,8 +155,8 @@ mod tests {
     #[tokio::test]
     async fn test_delete_by_topic() {
         let conn = setup_test_db().await;
-        let store = VectorStore::new_with_dim(conn, 384);
-        let dim = 384;
+        let store = VectorStore::new_with_dim(conn, 768);
+        let dim = 768;
         store.insert_chunks(vec![make_chunk(0, dim)]).await.unwrap();
         store.delete_by_topic("topic-1").await.unwrap();
         let results = store.search(&vec![0.0f32; dim], 10).await.unwrap();
@@ -166,7 +166,7 @@ mod tests {
     #[tokio::test]
     async fn test_search_scores_by_similarity() {
         let conn = setup_test_db().await;
-        let dim = 384;
+        let dim = 768;
         let store = VectorStore::new_with_dim(conn, dim);
 
         // chunk "a": aligned with first component [1, 0, 0, ...]

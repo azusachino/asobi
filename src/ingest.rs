@@ -168,7 +168,7 @@ mod tests {
         .unwrap();
 
         let storage = Storage::open_default().await.unwrap();
-        let embedder = FakeEmbedder(384);
+        let embedder = FakeEmbedder(768);
 
         ingest_file(
             dir.path().join("rust-pinning.md").as_path(),
@@ -201,7 +201,7 @@ mod tests {
         }
 
         let storage = Storage::open_default().await.unwrap();
-        let embedder = FakeEmbedder(384);
+        let embedder = FakeEmbedder(768);
 
         let count = ingest_dir(dir.path(), &storage, &embedder).await.unwrap();
         assert_eq!(count, 3);

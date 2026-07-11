@@ -87,7 +87,7 @@ pub const SCHEMA_CREATE_CHUNKS: &str = "CREATE TABLE IF NOT EXISTS chunks (
             chunk_idx INTEGER NOT NULL,
             text      TEXT NOT NULL,
             source    TEXT NOT NULL,
-            embedding F32_BLOB(384) NOT NULL
+            embedding F32_BLOB(768) NOT NULL
         )";
 
 pub const SCHEMA_CREATE_IDX_CHUNKS_TOPIC_ID: &str =

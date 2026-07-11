@@ -127,7 +127,7 @@ async fn turso_reports_optional_capabilities_explicitly() {
             chunk_idx: 0,
             text: "text".to_string(),
             source: "source".to_string(),
-            embedding: vec![0.0; 384],
+            embedding: vec![0.0; 768],
         }])
         .await;
     if cfg!(feature = "documents") {
@@ -169,7 +169,7 @@ async fn libsql_reports_optional_capabilities_explicitly() {
             chunk_idx: 0,
             text: "text".to_string(),
             source: "source".to_string(),
-            embedding: vec![0.0; 384],
+            embedding: vec![0.0; 768],
         }])
         .await;
     if cfg!(feature = "documents") {

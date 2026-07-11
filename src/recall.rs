@@ -153,7 +153,7 @@ mod tests {
         writeln!(f, "---\ntitle: Rust Pinning\nslug: rust-pinning\n---\n\nPinning is a mechanism to prevent moves.").unwrap();
 
         let storage = Storage::open_default().await.unwrap();
-        let embedder = FakeEmbedder(384);
+        let embedder = FakeEmbedder(768);
 
         ingest_file(
             dir.path().join("rust-pinning.md").as_path(),
@@ -166,6 +166,96 @@ mod tests {
         let results = recall("pinning", &storage, &embedder, 5).await.unwrap();
         assert!(!results.is_empty(), "expected at least one result");
         assert!(results[0].title.contains("Pinning"));
+    }
+
+    // End-to-end proof that the real embedding model does semantic recall, not
+    // just keyword matching. Each query below shares NO salient words with its
+    // target document, so only a working embedding model can rank it first. This
+    // is the release gate for any future model swap — it downloads the model
+    // once into a stable cache and reuses it on subsequent runs.
+    #[tokio::test]
+    async fn test_recall_ranks_paraphrase_with_real_model() {
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("real_model.db");
+        unsafe {
+            std::env::set_var(crate::paths::ENV_DATABASE_URL, db_path.to_str().unwrap());
+        }
+
+        // Shared, stable weight cache: downloaded once per machine, reused across
+        // runs and across the other document-tier tests.
+        let cache_dir = std::env::temp_dir().join("asobi-fastembed-test-cache");
+
+        let docs = [
+            (
+                "storage-concurrency.md",
+                "Storage Concurrency",
+                "The libSQL backend coordinates parallel writers using write-ahead \
+                 logging. When several processes modify the database at the same \
+                 moment, a bounded retry loop absorbs transient lock contention.",
+            ),
+            (
+                "network-resilience.md",
+                "Network Resilience",
+                "Outbound HTTP requests use exponential backoff with jitter. A failed \
+                 call is retried a few times before surfacing an error, smoothing over \
+                 brief upstream outages and rate-limit responses.",
+            ),
+            (
+                "semantic-recall.md",
+                "Semantic Recall",
+                "Ingested Markdown is chunked and each chunk is turned into a dense \
+                 vector by an embedding model. Queries are embedded the same way and \
+                 matched by cosine distance.",
+            ),
+        ];
+        for (file, title, body) in &docs {
+            let mut f = std::fs::File::create(dir.path().join(file)).unwrap();
+            writeln!(f, "---\ntitle: {title}\n---\n\n{body}").unwrap();
+        }
+
+        let storage = Storage::open_default().await.unwrap();
+        let embedder = crate::embed::FastEmbedProvider::new(cache_dir).unwrap();
+        for (file, _, _) in &docs {
+            ingest_file(dir.path().join(file).as_path(), &storage, &embedder)
+                .await
+                .unwrap();
+        }
+
+        // (paraphrase query with no shared keywords, expected top title)
+        let cases = [
+            (
+                "how do I stop simultaneous updates from clobbering each other",
+                "Storage Concurrency",
+            ),
+            (
+                "recovering from a flaky remote service that times out",
+                "Network Resilience",
+            ),
+            (
+                "finding documents by meaning instead of exact wording",
+                "Semantic Recall",
+            ),
+        ];
+        for (query, expected_title) in cases {
+            let results = recall(query, &storage, &embedder, 3).await.unwrap();
+            assert!(!results.is_empty(), "no results for query: {query}");
+            assert_eq!(
+                results[0].title,
+                expected_title,
+                "query {query:?} should rank {expected_title:?} first, got {:?} (scores: {:?})",
+                results[0].title,
+                results
+                    .iter()
+                    .map(|r| (&r.title, r.score))
+                    .collect::<Vec<_>>(),
+            );
+            if results.len() > 1 {
+                assert!(
+                    results[0].score > results[1].score,
+                    "top score for {query:?} should beat the runner-up",
+                );
+            }
+        }
     }
 
     #[test]

@@ -7,7 +7,11 @@ pub const DEFAULT_SEARCH_LIMIT: usize = 100;
 pub const DEFAULT_DATABASE_FILENAME: &str = "asobi.db";
 pub use crate::storage::libsql::constant::ENV_DATABASE_URL;
 
-pub const SCHEMA_VERSION: i64 = 1;
+// v2: document embedding model changed to gte-base-en-v1.5, so the `chunks`
+// embedding column moved from F32_BLOB(384) to F32_BLOB(768). Old chunks are
+// re-ingestable and incompatible with the new model, so the migration drops and
+// recreates the table (see the setup block below).
+pub const SCHEMA_VERSION: i64 = 2;
 
 pub async fn init_db() -> Result<(Database, Connection)> {
     let paths = crate::paths::AsobiPaths::resolve();
@@ -205,7 +209,12 @@ pub async fn init_db() -> Result<(Database, Connection)> {
         )
         .await?;
 
-        // Document Tier (Vectors)
+        // Document Tier (Vectors). The embedding column is dimension-typed
+        // (F32_BLOB(768)); a pre-v2 database has a 384-wide column, so drop any
+        // existing chunks table (and its dependent vector index) and recreate it
+        // at the new dimension. Chunks are a rebuildable cache — the user
+        // re-ingests. On a fresh database this DROP is a no-op.
+        conn.execute("DROP TABLE IF EXISTS chunks", ()).await?;
         conn.execute(crate::storage::libsql::constant::SCHEMA_CREATE_CHUNKS, ())
             .await?;
 
@@ -1504,6 +1513,89 @@ mod tests {
         assert_eq!(graph.entities[0].name, "legacy");
     }
 
+    // A pre-v2 database has a 384-wide `chunks.embedding` column (all-MiniLM-L6-v2).
+    // Opening it under the v2 schema (gte-base-en-v1.5, 768-dim) must drop and
+    // recreate the table at the new dimension: old chunks are gone, the column is
+    // 768-wide, and user_version advances to SCHEMA_VERSION.
+    #[tokio::test]
+    async fn test_chunks_recreated_at_new_dim_on_v2_migration() {
+        let dir = tempdir().unwrap();
+        let db_path = dir.path().join("pre_v2.db");
+        unsafe {
+            std::env::set_var(ENV_DATABASE_URL, db_path.to_str().unwrap());
+        }
+
+        let legacy_db = libsql::Builder::new_local(db_path.to_str().unwrap())
+            .build()
+            .await
+            .unwrap();
+        let legacy_conn = legacy_db.connect().unwrap();
+        legacy_conn
+            .execute(
+                "CREATE TABLE chunks (
+                    id        TEXT PRIMARY KEY,
+                    topic_id  TEXT NOT NULL,
+                    chunk_idx INTEGER NOT NULL,
+                    text      TEXT NOT NULL,
+                    source    TEXT NOT NULL,
+                    embedding F32_BLOB(384) NOT NULL
+                )",
+                (),
+            )
+            .await
+            .unwrap();
+        legacy_conn
+            .execute(
+                "INSERT INTO chunks (id, topic_id, chunk_idx, text, source, embedding) \
+                 VALUES ('stale', 'topic', 0, 'old', 'old.md', vector32(?1))",
+                libsql::params![serde_json::to_string(&vec![0.0f32; 384]).unwrap()],
+            )
+            .await
+            .unwrap();
+        legacy_conn
+            .execute("PRAGMA user_version = 1", ())
+            .await
+            .unwrap();
+        drop(legacy_conn);
+        drop(legacy_db);
+
+        let (_db, conn) = init_db().await.unwrap();
+
+        // Old 384-dim chunk was dropped, not carried over.
+        let mut rows = conn.query("SELECT COUNT(*) FROM chunks", ()).await.unwrap();
+        let count: i64 = rows.next().await.unwrap().unwrap().get(0).unwrap();
+        assert_eq!(count, 0, "stale pre-v2 chunk should be dropped");
+
+        // Embedding column is now 768-wide.
+        let mut info = conn.query("PRAGMA table_info(chunks)", ()).await.unwrap();
+        let mut embedding_type = None;
+        while let Some(row) = info.next().await.unwrap() {
+            let name: String = row.get(1).unwrap();
+            if name == "embedding" {
+                embedding_type = Some(row.get::<String>(2).unwrap());
+            }
+        }
+        assert_eq!(
+            embedding_type.as_deref(),
+            Some("F32_BLOB(768)"),
+            "chunks.embedding should be recreated at dim 768"
+        );
+
+        // Schema version advanced.
+        let mut ver = conn.query("PRAGMA user_version", ()).await.unwrap();
+        let version: i64 = ver.next().await.unwrap().unwrap().get(0).unwrap();
+        assert_eq!(version, SCHEMA_VERSION);
+
+        // A fresh 768-dim chunk inserts cleanly against the new column.
+        conn.execute(
+            "INSERT INTO chunks (id, topic_id, chunk_idx, text, source, embedding) \
+             VALUES ('fresh', 'topic', 0, 'new', 'new.md', vector32(?1))",
+            libsql::params![serde_json::to_string(&vec![0.0f32; 768]).unwrap()],
+        )
+        .await
+        .unwrap();
+    }
+
     #[tokio::test]
     async fn test_fts_search_finds_topic() {
         let dir = tempdir().unwrap();
@@ -1804,7 +1896,7 @@ mod tests {
         .unwrap();
         conn.execute(
             "INSERT INTO chunks (id, topic_id, chunk_idx, text, source, embedding) VALUES ('chunk', 'topic', 0, 'text', 'source', vector32(?1))",
-            libsql::params![serde_json::to_string(&vec![0.0f32; 384]).unwrap()],
+            libsql::params![serde_json::to_string(&vec![0.0f32; 768]).unwrap()],
         )
         .await
         .unwrap();
