@@ -1,7 +1,7 @@
 # ADR: storage composition and naming
 
-**Date:** 2026-07-11  
-**Status:** Accepted  
+**Date:** 2026-07-11
+**Status:** Accepted
 **Epic:** `asobi:backend-boundary-v1`
 
 ## Decision
