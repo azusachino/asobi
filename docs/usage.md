@@ -119,11 +119,26 @@ asobi graph | jq '.entities[] | select(.entityType == "session")'
 
 ```bash
 asobi export -o backup.json                # Export the entire graph to JSON
+asobi export --scope "proj:epic" -o epic.json   # Export only one epic's subgraph
 asobi import backup.json                   # Import entities and relations from a JSON backup
 asobi reset                                # Interactively clear the entire graph (use --force to bypass)
 ```
 
 JSON export/import preserves graph entities, observations, truths, and relations. For a full-fidelity archive that also preserves installed skill bodies and database state, use `backup`/`restore`.
+
+**Scoped export (hand one epic to a teammate):** `export --scope <entity>` restricts the
+export to the subgraph rooted at the named entities — each root, its `part_of` children
+(transitively), and the `depends_on` targets they cite (one hop, not followed further). The
+flag is repeatable for multiple roots, and `--rationale` additionally pulls one hop of
+`supersedes`/`extends` off the cited decisions. Volatile local state (`session`) and the
+importer's own globals (`preference`, `standard`) are always excluded, so importing a bundle
+never clobbers the recipient's preferences. The output is an ordinary graph JSON, so the
+recipient runs `asobi import epic.json` unchanged.
+
+```bash
+asobi export --scope "proj:epic" --scope "proj:other-epic" -o bundle.json
+asobi export --scope "proj:epic" --rationale -o bundle.json
+```
 
 **Manage truths (structured key-value attributes):**
 

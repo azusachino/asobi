@@ -1,5 +1,17 @@
 # Changelog
 
+## v0.5.0 — Turso Migration & Scoped Export
+
+### Added
+- **Scoped subgraph export (`export --scope <entity>`)**: Restrict `export` to the subgraph rooted at one or more entities — each root, its `part_of` children (transitively), and the `depends_on` targets they cite (one hop) — for handing a single epic to a teammate without exporting the whole graph. `--rationale` additionally follows one hop of `supersedes`/`extends` off the cited leaves. Volatile/global entities (`session`, `preference`, `standard`) are never included, so an imported bundle cannot clobber the importer's own preferences. Output is the same JSON shape as a full export, so `import` consumes it unchanged.
+
+### Changed
+- Bumped `clap` (4.5 → 4.6) and `toml` (0.8 → 1) and refreshed the lockfile to the latest compatible transitive versions. The turso storage-engine migration (replacing libsql; FTS + vector + multi-process concurrency reworked onto turso's model) is the main body of v0.5 and lands in this release — see the `asobi:v0.5` epic for the task breakdown.
+
+### Tests
+- Added a `scope_subgraph` unit suite and an end-to-end `export --scope` CLI check (leaf-termination, shared-pitfall isolation, `--rationale`, multi-root union, type guard, round-trip import).
+- Added CLI coverage for `unlink` and strengthened the full export/import check into a round-trip fidelity guard over entities, truths, and relations.
+
 ## v0.4.1 — Review Hardening & Performance
 
 ### Fixed

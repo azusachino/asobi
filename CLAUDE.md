@@ -15,7 +15,7 @@ Rust (edition 2024) on `tokio`; `clap` CLI, `tracing` logs (stderr, `RUST_LOG`).
 
 ## CLI
 
-Graph: `new` (`--obs` seeds at creation), `obs`, `link`, `rm`, `rm-obs`, `unlink`, `graph`, `search` (`--where key=value` truth filters; query term optional), `show`. Truths: `truth`, `rm-truth`. Plus `skills`, `ingest`, `query` (`--json`/`--limit`), `compact`, `init`, `backup`, `restore`, `stats`, `export`, `import`, `reset`. Full reference: [`SKILL.md`](SKILL.md), [`docs/usage.md`](docs/usage.md).
+Graph: `new` (`--obs` seeds at creation), `obs`, `link`, `rm`, `rm-obs`, `unlink`, `graph`, `search` (`--where key=value` truth filters; query term optional), `show`. Truths: `truth`, `rm-truth`. Plus `skills`, `ingest`, `query` (`--json`/`--limit`), `compact`, `init`, `backup`, `restore`, `stats`, `export` (`--scope <entity>` for a single-epic subgraph bundle, `--rationale` for the decision chain), `import`, `reset`. Full reference: [`SKILL.md`](SKILL.md), [`docs/usage.md`](docs/usage.md).
 
 ## Make
 

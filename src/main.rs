@@ -151,6 +151,15 @@ enum Commands {
         /// Path to the output JSON file
         #[arg(short, long)]
         output: Option<String>,
+        /// Restrict the export to the subgraph rooted at these entities
+        /// (repeatable). Pulls each root, its `part_of` children (transitively),
+        /// and the `depends_on` targets they cite. Omit to export the whole graph.
+        #[arg(long)]
+        scope: Vec<String>,
+        /// With --scope, also follow one hop of `supersedes`/`extends` off the
+        /// cited leaves (the rationale chain behind a decision).
+        #[arg(long)]
+        rationale: bool,
     },
     /// Import a knowledge graph from a JSON file
     Import {
@@ -793,8 +802,16 @@ async fn run_cli(cli: Cli) -> Result<()> {
             }
         }
 
-        Commands::Export { output } => {
-            let graph = asobi::db::read_graph_eager(&conn).await?;
+        Commands::Export {
+            output,
+            scope,
+            rationale,
+        } => {
+            let graph = if scope.is_empty() {
+                asobi::db::read_graph_eager(&conn).await?
+            } else {
+                asobi::db::read_graph_scoped(&conn, &scope, rationale).await?
+            };
             let json = serde_json::to_string_pretty(&graph)?;
             if let Some(path) = output {
                 std::fs::write(&path, json)?;

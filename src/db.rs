@@ -544,6 +544,102 @@ pub async fn read_graph_eager(conn: &Connection) -> Result<crate::model::Graph> 
     })
 }
 
+/// Entity types that are never included in a scoped export: volatile local state
+/// (`session`) and the importer's own global preferences (`preference`,
+/// `standard`), which must not be clobbered by an imported bundle.
+const SCOPE_EXCLUDED_TYPES: [&str; 3] = ["session", "preference", "standard"];
+
+/// Compute the entity-name set for a scoped export rooted at `roots`:
+/// each root, its `part_of` children (transitively, inward), and the
+/// `depends_on` targets those cite (one hop, leaf — not followed further).
+/// With `rationale`, also pull one hop of `supersedes`/`extends` off the cited
+/// leaves. Pure over the loaded [`Graph`] so it is unit-testable without a DB.
+pub(crate) fn scope_subgraph(
+    graph: &crate::model::Graph,
+    roots: &[String],
+    rationale: bool,
+) -> std::collections::HashSet<String> {
+    use std::collections::HashSet;
+
+    let existing: HashSet<&str> = graph.entities.iter().map(|e| e.name.as_str()).collect();
+    let mut keep: HashSet<String> = roots
+        .iter()
+        .map(|r| crate::normalize::normalize_key(r))
+        .filter(|r| existing.contains(r.as_str()))
+        .collect();
+
+    // 1. Inward, transitive: pull any `part_of` child of an entity already kept.
+    loop {
+        let mut added = false;
+        for r in &graph.relations {
+            if r.relation_type == "part_of" && keep.contains(&r.to) && !keep.contains(&r.from) {
+                keep.insert(r.from.clone());
+                added = true;
+            }
+        }
+        if !added {
+            break;
+        }
+    }
+
+    // 2. Outward, one hop, leaf: the decisions/pitfalls the kept set cites.
+    let leaves: Vec<String> = graph
+        .relations
+        .iter()
+        .filter(|r| r.relation_type == "depends_on" && keep.contains(&r.from))
+        .map(|r| r.to.clone())
+        .collect();
+    keep.extend(leaves.iter().cloned());
+
+    // 3. Optional rationale hop off those leaves.
+    if rationale {
+        let leafset: HashSet<&String> = leaves.iter().collect();
+        for r in &graph.relations {
+            if matches!(r.relation_type.as_str(), "supersedes" | "extends")
+                && leafset.contains(&r.from)
+            {
+                keep.insert(r.to.clone());
+            }
+        }
+    }
+
+    // 4. Type guard: never export volatile local or importer-global entities.
+    let excluded: HashSet<&str> = graph
+        .entities
+        .iter()
+        .filter(|e| SCOPE_EXCLUDED_TYPES.contains(&e.entity_type.as_str()))
+        .map(|e| e.name.as_str())
+        .collect();
+    keep.retain(|n| !excluded.contains(n.as_str()));
+
+    keep
+}
+
+/// Read only the subgraph rooted at `roots` (see [`scope_subgraph`]). Loads the
+/// graph eagerly and filters in memory — the graph is small, so this keeps the
+/// traversal a pure function rather than recursive SQL. A relation is kept only
+/// when both endpoints survive, so the result imports cleanly.
+pub async fn read_graph_scoped(
+    conn: &Connection,
+    roots: &[String],
+    rationale: bool,
+) -> Result<crate::model::Graph> {
+    let full = read_graph_eager(conn).await?;
+    let keep = scope_subgraph(&full, roots, rationale);
+    Ok(crate::model::Graph {
+        entities: full
+            .entities
+            .into_iter()
+            .filter(|e| keep.contains(&e.name))
+            .collect(),
+        relations: full
+            .relations
+            .into_iter()
+            .filter(|r| keep.contains(&r.from) && keep.contains(&r.to))
+            .collect(),
+    })
+}
+
 pub async fn search_nodes(conn: &Connection, query: &str) -> Result<crate::model::Graph> {
     search_nodes_with_limit(conn, query, DEFAULT_SEARCH_LIMIT, &[]).await
 }
@@ -1109,6 +1205,123 @@ pub async fn list_skills(conn: &Connection) -> Result<Vec<SkillRow>> {
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    fn ent(name: &str, ty: &str) -> crate::model::EntityOutput {
+        crate::model::EntityOutput {
+            name: name.to_string(),
+            entity_type: ty.to_string(),
+            observations: Vec::new(),
+            truths: std::collections::BTreeMap::new(),
+            observation_count: 0,
+            body: None,
+            observations_detailed: None,
+        }
+    }
+
+    fn rel(from: &str, to: &str, ty: &str) -> crate::model::RelationInput {
+        crate::model::RelationInput {
+            from: from.to_string(),
+            to: to.to_string(),
+            relation_type: ty.to_string(),
+        }
+    }
+
+    /// Two epics under a project, one sharing a decision, plus a rationale chain.
+    /// Mirrors the real graph shape the scope rule was designed against.
+    fn scope_fixture() -> crate::model::Graph {
+        crate::model::Graph {
+            entities: vec![
+                ent("proj", "project"),
+                ent("proj:a", "task"),
+                ent("proj:a:task-1", "task"),
+                ent("proj:a:task-2", "task"),
+                ent("proj:b", "task"),
+                ent("proj:b:task-1", "task"),
+                ent("proj:decision:x", "concept"),
+                ent("proj:decision:root", "concept"),
+                ent("proj:pitfall:shared", "concept"),
+                ent("UserPreferences", "preference"),
+            ],
+            relations: vec![
+                rel("proj:a", "proj", "part_of"),
+                rel("proj:a:task-1", "proj:a", "part_of"),
+                rel("proj:a:task-2", "proj:a", "part_of"),
+                rel("proj:b", "proj", "part_of"),
+                rel("proj:b:task-1", "proj:b", "part_of"),
+                // task-2 of epic a cites a decision, which extends a root decision
+                rel("proj:a:task-2", "proj:decision:x", "depends_on"),
+                rel("proj:decision:x", "proj:decision:root", "extends"),
+                // a pitfall shared by both epics
+                rel("proj:a:task-1", "proj:pitfall:shared", "depends_on"),
+                rel("proj:b:task-1", "proj:pitfall:shared", "depends_on"),
+            ],
+        }
+    }
+
+    #[test]
+    fn scope_pulls_epic_and_part_of_children() {
+        let g = scope_fixture();
+        let keep = scope_subgraph(&g, &["proj:b".to_string()], false);
+        assert!(keep.contains("proj:b"));
+        assert!(keep.contains("proj:b:task-1"));
+        // sibling epic must not be pulled in
+        assert!(!keep.contains("proj:a"));
+        assert!(!keep.contains("proj"));
+    }
+
+    #[test]
+    fn scope_includes_cited_leaves_but_stops_there() {
+        let g = scope_fixture();
+        let keep = scope_subgraph(&g, &["proj:a".to_string()], false);
+        assert!(keep.contains("proj:a:task-2"));
+        assert!(keep.contains("proj:decision:x")); // cited leaf included
+        assert!(!keep.contains("proj:decision:root")); // rationale hop NOT followed
+    }
+
+    #[test]
+    fn scope_rationale_follows_one_extends_hop() {
+        let g = scope_fixture();
+        let keep = scope_subgraph(&g, &["proj:a".to_string()], true);
+        assert!(keep.contains("proj:decision:x"));
+        assert!(keep.contains("proj:decision:root"));
+    }
+
+    #[test]
+    fn scope_shared_pitfall_does_not_drag_sibling() {
+        let g = scope_fixture();
+        let keep = scope_subgraph(&g, &["proj:a".to_string()], false);
+        assert!(keep.contains("proj:pitfall:shared"));
+        // the pitfall is a leaf; epic b (which also cites it) must not be pulled
+        assert!(!keep.contains("proj:b"));
+        assert!(!keep.contains("proj:b:task-1"));
+    }
+
+    #[test]
+    fn scope_unions_multiple_roots() {
+        let g = scope_fixture();
+        let keep = scope_subgraph(&g, &["proj:a".to_string(), "proj:b".to_string()], false);
+        assert!(keep.contains("proj:a:task-1"));
+        assert!(keep.contains("proj:b:task-1"));
+        // project bridge still excluded — roots are named explicitly, not via `proj`
+        assert!(!keep.contains("proj"));
+    }
+
+    #[test]
+    fn scope_type_guard_excludes_preferences() {
+        let mut g = scope_fixture();
+        // even a stray edge into a preference must not export it
+        g.relations
+            .push(rel("proj:a:task-1", "UserPreferences", "depends_on"));
+        let keep = scope_subgraph(&g, &["proj:a".to_string()], false);
+        assert!(!keep.contains("UserPreferences"));
+    }
+
+    #[test]
+    fn scope_ignores_unknown_roots() {
+        let g = scope_fixture();
+        let keep = scope_subgraph(&g, &["proj:does-not-exist".to_string()], false);
+        assert!(keep.is_empty());
+    }
 
     #[tokio::test]
     async fn test_init_creates_all_tables() {
