@@ -5,7 +5,7 @@ use asobi::api::{
 };
 use asobi::application::AsobiRuntime;
 use asobi::paths::AsobiPaths;
-use asobi::response::{ErrorKind, ResponseError, emit, emit_err};
+use asobi::response::{ErrorKind, Response, ResponseError, emit, emit_err};
 use clap::{Parser, Subcommand};
 use schemars::JsonSchema;
 use serde::Serialize;
@@ -238,6 +238,12 @@ enum Commands {
     },
     /// Report the API contract and selected backend capabilities
     Capabilities,
+    /// Emit JSON Schema for the versioned response envelope and command data
+    Schema {
+        /// Restrict output to one command's response schema
+        #[arg(long)]
+        command: Option<String>,
+    },
 
     /// Export the knowledge graph to a JSON file
     Export {
@@ -501,6 +507,11 @@ async fn main() {
 }
 
 async fn run_cli(cli: Cli) -> Result<()> {
+    if let Commands::Schema { command } = cli.command {
+        emit_schema(command.as_deref())?;
+        return Ok(());
+    }
+
     // `init` is special: it runs before any DB or config resolution, since
     // its job is to create the workspace those subsystems need.
     if let Commands::Init { local } = cli.command {
@@ -1203,6 +1214,71 @@ async fn emit_nodes(store: &impl GraphStore, names: Vec<String>) -> Result<()> {
         })
         .await?;
     emit(graph)?;
+    Ok(())
+}
+
+fn schema_for_response<T: JsonSchema>() -> serde_json::Value {
+    let mut schema = serde_json::to_value(schemars::schema_for!(Response<T>))
+        .expect("response schemas must serialize to JSON");
+    schema["properties"]["schemaVersion"] = serde_json::json!({
+        "const": asobi::response::RESPONSE_SCHEMA_VERSION,
+        "type": "integer",
+    });
+    schema["properties"]["ok"] = serde_json::json!({ "const": true });
+    schema["required"] = serde_json::json!(["schemaVersion", "ok", "data"]);
+    schema
+}
+
+fn emit_schema(command: Option<&str>) -> Result<()> {
+    let mut commands = std::collections::BTreeMap::new();
+    for name in [
+        "capabilities",
+        "export",
+        "graph",
+        "history",
+        "link",
+        "new",
+        "obs",
+        "rm",
+        "rm-obs",
+        "rm-truth",
+        "search",
+        "show",
+        "stats",
+        "truth",
+        "unlink",
+        "update-obs",
+    ] {
+        let schema = match name {
+            "capabilities" => schema_for_response::<CapabilitiesReceipt>(),
+            "rm" => schema_for_response::<DeletedReceipt>(),
+            "stats" => schema_for_response::<StatsReceipt>(),
+            "history" => schema_for_response::<Vec<asobi::api::v1::TruthVersion>>(),
+            _ => schema_for_response::<asobi::model::Graph>(),
+        };
+        commands.insert(name, schema);
+    }
+
+    #[cfg(feature = "documents")]
+    commands.insert(
+        "query",
+        schema_for_response::<Vec<asobi::recall::RecallResult>>(),
+    );
+
+    if let Some(command) = command {
+        let schema = commands
+            .get(command)
+            .ok_or_else(|| anyhow::anyhow!("unknown schema command: {command}"))?;
+        println!("{}", serde_json::to_string_pretty(schema)?);
+    } else {
+        let index = serde_json::json!({
+            "responseSchemaVersion": asobi::response::RESPONSE_SCHEMA_VERSION,
+            "envelope": schema_for_response::<asobi::model::Graph>(),
+            "commands": commands,
+        });
+        println!("{}", serde_json::to_string_pretty(&index)?);
+    }
+
     Ok(())
 }
 

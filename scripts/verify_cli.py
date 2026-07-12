@@ -88,8 +88,23 @@ def truths(payload: dict, name: str) -> dict[str, str]:
     return {}
 
 
+def schema_checks(env: dict[str, str]) -> None:
+    index = json.loads(run(["schema"], env).stdout)
+    assert index["responseSchemaVersion"] == 1
+    assert "commands" in index
+    assert "graph" in index["commands"]
+    assert "properties" in index["commands"]["graph"]
+
+    graph_schema = json.loads(run(["schema", "--command", "graph"], env).stdout)
+    properties = graph_schema["properties"]
+    assert properties["schemaVersion"]["const"] == 1
+    assert properties["ok"]["const"] is True
+    assert "data" in properties
+
+
 def main() -> None:
     subprocess.run(["cargo", "build"], cwd=ROOT, check=True)
+    schema_checks(os.environ.copy())
 
     with tempfile.TemporaryDirectory(prefix="asobi-cli-") as tmp:
         env = os.environ.copy()
