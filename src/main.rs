@@ -8,19 +8,49 @@ use asobi::paths::AsobiPaths;
 use clap::{Parser, Subcommand};
 #[cfg(feature = "documents")]
 use std::sync::Arc;
-use tracing::{info, warn};
+use tracing::{Event, Subscriber, info, warn};
 use tracing_subscriber::EnvFilter;
+use tracing_subscriber::fmt::format::{FormatEvent, FormatFields, Writer};
 use tracing_subscriber::fmt::time::FormatTime;
+use tracing_subscriber::registry::LookupSpan;
 
 /// Timestamp logs in the machine's local timezone instead of tracing's default
 /// UTC. Reuses the `chrono` dependency (already pulled in for backup/compact) so
 /// this adds no crates and avoids tracing-subscriber's `local-time` feature,
 /// whose `time`-crate offset lookup is unsound in a multithreaded process.
+#[derive(Debug, Clone, Copy, Default)]
 struct LocalTimer;
 
 impl FormatTime for LocalTimer {
-    fn format_time(&self, w: &mut tracing_subscriber::fmt::format::Writer<'_>) -> std::fmt::Result {
+    fn format_time(&self, w: &mut Writer<'_>) -> std::fmt::Result {
         write!(w, "{}", chrono::Local::now().format("%Y-%m-%d %H:%M:%S"))
+    }
+}
+
+/// Compact stderr formatter without `tracing-subscriber`'s padded level field.
+///
+/// The stock compact formatter emits a leading space for four-character levels
+/// such as `INFO`, in addition to the separator after the timestamp. Keeping
+/// the level unpadded makes log lines consistent while retaining the compact
+/// formatter's timestamp, level, and message shape.
+#[derive(Debug, Clone, Copy, Default)]
+struct CompactLogFormat;
+
+impl<S, N> FormatEvent<S, N> for CompactLogFormat
+where
+    S: Subscriber + for<'a> LookupSpan<'a>,
+    N: for<'a> FormatFields<'a> + 'static,
+{
+    fn format_event(
+        &self,
+        ctx: &tracing_subscriber::fmt::FmtContext<'_, S, N>,
+        mut writer: Writer<'_>,
+        event: &Event<'_>,
+    ) -> std::fmt::Result {
+        LocalTimer.format_time(&mut writer)?;
+        write!(writer, " {} ", event.metadata().level())?;
+        ctx.format_fields(writer.by_ref(), event)?;
+        writeln!(writer)
     }
 }
 
@@ -286,8 +316,7 @@ fn init_tracing() {
             EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
         )
         .with_target(false)
-        .with_timer(LocalTimer)
-        .compact()
+        .event_format(CompactLogFormat)
         .init();
 }
 
