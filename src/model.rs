@@ -28,7 +28,7 @@ pub struct ObservationInput {
     pub contents: Vec<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct ObservationDeletion {
     pub entity_name: String,
@@ -57,7 +57,7 @@ pub struct EntityOutput {
     pub observations_detailed: Option<Vec<DetailedObservation>>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct Graph {
     pub entities: Vec<EntityOutput>,

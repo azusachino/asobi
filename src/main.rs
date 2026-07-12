@@ -1,6 +1,9 @@
 use anyhow::Result;
-#[cfg(feature = "documents")]
-use asobi::embed::EmbeddingProvider;
+use asobi::api::{
+    BackupStore, GraphStore, MaintenanceStore, OpenNodes, SearchQuery, SearchStore, SkillStore,
+    Stats,
+};
+use asobi::application::AsobiRuntime;
 use asobi::paths::AsobiPaths;
 use clap::{Parser, Subcommand};
 #[cfg(feature = "documents")]
@@ -77,6 +80,12 @@ enum Commands {
     },
     /// Delete a specific truth for an entity
     RmTruth { name: String, key: String },
+    /// Show an entity's truth change history (superseded values with validity windows)
+    History {
+        name: String,
+        /// Limit to a single truth key
+        key: Option<String>,
+    },
     /// Delete entities and their relations
     Rm { names: Vec<String> },
     /// Delete specific observations
@@ -109,7 +118,7 @@ enum Commands {
         /// Search query terms
         query: Option<String>,
         /// Maximum number of matched nodes to return
-        #[arg(long, default_value_t = asobi::db::DEFAULT_SEARCH_LIMIT)]
+        #[arg(long, default_value_t = 10)]
         limit: usize,
         /// Filter by entity truths: `--where KEY=VALUE` (repeatable)
         #[arg(long = "where", value_name = "KEY=VALUE")]
@@ -145,12 +154,23 @@ enum Commands {
         #[arg(long)]
         per_entity: bool,
     },
+    /// Report the API contract and selected backend capabilities
+    Capabilities,
 
     /// Export the knowledge graph to a JSON file
     Export {
         /// Path to the output JSON file
         #[arg(short, long)]
         output: Option<String>,
+        /// Restrict the export to the subgraph rooted at these entities
+        /// (repeatable). Pulls each root, its `part_of` children (transitively),
+        /// and the `depends_on` targets they cite. Omit to export the whole graph.
+        #[arg(long)]
+        scope: Vec<String>,
+        /// With --scope, also follow one hop of `supersedes`/`extends` off the
+        /// cited leaves (the rationale chain behind a decision).
+        #[arg(long)]
+        rationale: bool,
     },
     /// Import a knowledge graph from a JSON file
     Import {
@@ -234,27 +254,13 @@ pub const ENV_FASTEMBED_CACHE_DIR: &str = "ASOBI_FASTEMBED_CACHE_DIR";
 pub const ENV_TOPICS_DIR: &str = "ASOBI_TOPICS_DIR";
 
 #[cfg(feature = "documents")]
-async fn init_vector(
-    conn: libsql::Connection,
-    paths: &AsobiPaths,
-) -> Result<(
-    asobi::vector::VectorStore,
-    Arc<asobi::embed::FastEmbedProvider>,
-)> {
-    let store = asobi::vector::VectorStore::new(conn);
+fn init_embedder(paths: &AsobiPaths) -> Result<Arc<asobi::embed::FastEmbedProvider>> {
     let cache_dir = std::env::var(ENV_FASTEMBED_CACHE_DIR)
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|_| paths.data_dir.join("fastembed_cache"));
     let embedder: Arc<asobi::embed::FastEmbedProvider> =
         Arc::new(asobi::embed::FastEmbedProvider::new(cache_dir)?);
-    if store.dim() != embedder.dim() {
-        anyhow::bail!(
-            "Vector store dimension mismatch: store={}, embedder={}",
-            store.dim(),
-            embedder.dim()
-        );
-    }
-    Ok((store, embedder))
+    Ok(embedder)
 }
 
 /// Initialise the global tracing subscriber. Logs go to **stderr** so the
@@ -423,7 +429,15 @@ async fn run_cli(cli: Cli) -> Result<()> {
     }
 
     let paths = AsobiPaths::resolve();
-    let (db, conn) = asobi::db::init_db().await?;
+    let runtime = AsobiRuntime::open_default().await?;
+    if let Commands::Restore { ref file, force } = cli.command {
+        runtime
+            .into_storage()
+            .restore(std::path::PathBuf::from(file), force)
+            .await?;
+        return Ok(());
+    }
+    let backend = runtime.storage();
 
     // Vector store + embedder are only initialised for commands that need them.
     // Graph-only operations (new, graph, etc.) skip the heavy
@@ -431,33 +445,25 @@ async fn run_cli(cli: Cli) -> Result<()> {
     if needs_vector(&cli.command) {
         #[cfg(feature = "documents")]
         {
-            let (store, embedder) = init_vector(conn, &paths).await?;
+            let embedder = init_embedder(&paths)?;
             match cli.command {
                 Commands::Ingest { path } => {
                     let p = std::path::Path::new(&path);
                     if p.is_dir() {
                         info!("Ingesting directory: {:?}...", p);
                         let count =
-                            asobi::ingest::ingest_dir(p, store.conn(), &store, embedder.as_ref())
-                                .await?;
+                            asobi::ingest::ingest_dir(p, backend, embedder.as_ref()).await?;
                         info!("Done. Ingested {} files.", count);
                     } else {
                         info!("Ingesting file: {:?}...", p);
-                        asobi::ingest::ingest_file(p, store.conn(), &store, embedder.as_ref())
-                            .await?;
+                        asobi::ingest::ingest_file(p, backend, embedder.as_ref()).await?;
                         info!("Done.");
                     }
                 }
                 Commands::Query { query, limit, json } => {
                     info!("Searching: {}...", query);
-                    let results = asobi::recall::recall(
-                        &query,
-                        store.conn(),
-                        &store,
-                        embedder.as_ref(),
-                        limit,
-                    )
-                    .await?;
+                    let results =
+                        asobi::recall::recall(&query, backend, embedder.as_ref(), limit).await?;
                     if json {
                         println!("{}", serde_json::to_string_pretty(&results)?);
                     } else if results.is_empty() {
@@ -477,20 +483,16 @@ async fn run_cli(cli: Cli) -> Result<()> {
                     let pruned = asobi::compact::prune_old_sessions(&topics_root, older_than)?;
                     info!("Pruned {} old session files.", pruned);
 
-                    let clusters =
-                        asobi::compact::find_duplicate_clusters(&store, store.conn(), 0.85).await?;
+                    let clusters = asobi::compact::find_duplicate_clusters(backend, 0.85).await?;
                     info!("Found {} near-duplicate topic clusters.", clusters.len());
                     for (i, cluster) in clusters.iter().enumerate() {
                         info!("  Cluster {}: {}", i + 1, cluster.join(", "));
                     }
 
                     info!("Syncing Graph to Markdown...");
-                    let synced = asobi::compact::sync_graph_to_markdown(
-                        store.conn(),
-                        &store,
-                        embedder.as_ref(),
-                    )
-                    .await?;
+                    let synced =
+                        asobi::compact::sync_graph_to_markdown(backend, backend, embedder.as_ref())
+                            .await?;
                     info!("Done. Synced {} entities to Markdown.", synced);
                 }
                 _ => unreachable!(),
@@ -520,10 +522,10 @@ async fn run_cli(cli: Cli) -> Result<()> {
                 })
                 .collect();
             let names: Vec<String> = entities.iter().map(|e| e.name.clone()).collect();
-            asobi::db::create_entities(&conn, entities).await?;
+            backend.create_entities(entities).await?;
             info!("{} entit{} created.", names.len(), plural(names.len()));
             if json {
-                emit_nodes(&conn, names).await?;
+                emit_nodes(backend, names).await?;
             }
         }
         Commands::Link { triples } => {
@@ -546,53 +548,53 @@ async fn run_cli(cli: Cli) -> Result<()> {
                 .flat_map(|r| [r.from.clone(), r.to.clone()])
                 .collect();
             let count = relations.len();
-            asobi::db::create_relations(&conn, relations).await?;
+            backend.create_relations(relations).await?;
             info!("{} relation{} created.", count, suffix(count));
             if json {
-                emit_nodes(&conn, involved).await?;
+                emit_nodes(backend, involved).await?;
             }
         }
         Commands::Obs { name, contents } => {
             let paths = asobi::paths::AsobiPaths::resolve();
-            let limit = std::env::var(asobi::constant::ENV_OBSERVATION_LIMIT)
+            let limit = std::env::var("ASOBI_OBSERVATION_LIMIT")
                 .ok()
                 .and_then(|v| v.parse::<usize>().ok())
-                .unwrap_or(
-                    paths
-                        .observation_limit
-                        .unwrap_or(asobi::constant::DEFAULT_OBSERVATION_LIMIT),
-                );
-            asobi::db::add_observations(
-                &conn,
-                vec![asobi::model::ObservationInput {
-                    entity_name: name.clone(),
-                    contents,
-                }],
-                limit,
-            )
-            .await?;
+                .unwrap_or(paths.observation_limit.unwrap_or(200));
+            backend
+                .add_observations(
+                    vec![asobi::model::ObservationInput {
+                        entity_name: name.clone(),
+                        contents,
+                    }],
+                    limit,
+                )
+                .await?;
             info!("Observation added.");
             if json {
-                emit_nodes(&conn, vec![name]).await?;
+                emit_nodes(backend, vec![name]).await?;
             }
         }
         Commands::Truth { name, key, value } => {
-            asobi::db::truth_upsert(&conn, &name, &key, &value).await?;
+            backend.truth_upsert(&name, &key, &value).await?;
             info!("Truth added.");
             if json {
-                emit_nodes(&conn, vec![name]).await?;
+                emit_nodes(backend, vec![name]).await?;
             }
         }
         Commands::RmTruth { name, key } => {
-            asobi::db::truth_delete(&conn, &name, &key).await?;
+            backend.truth_delete(&name, &key).await?;
             info!("Truth deleted.");
             if json {
-                emit_nodes(&conn, vec![name]).await?;
+                emit_nodes(backend, vec![name]).await?;
             }
+        }
+        Commands::History { name, key } => {
+            let history = backend.truth_history(&name, key.as_deref()).await?;
+            println!("{}", serde_json::to_string_pretty(&history)?);
         }
         Commands::Rm { names } => {
             let deleted = names.clone();
-            asobi::db::delete_entities(&conn, names).await?;
+            backend.delete_entities(names).await?;
             info!("Entities deleted.");
             if json {
                 println!(
@@ -609,20 +611,18 @@ async fn run_cli(cli: Cli) -> Result<()> {
                         content
                     )
                 })?;
-                asobi::db::delete_observation_by_id(&conn, &name, parsed_id).await?;
+                backend.delete_observation_by_id(&name, parsed_id).await?;
             } else {
-                asobi::db::delete_observations(
-                    &conn,
-                    vec![asobi::model::ObservationDeletion {
+                backend
+                    .delete_observations(vec![asobi::model::ObservationDeletion {
                         entity_name: name.clone(),
                         observations: vec![content],
-                    }],
-                )
-                .await?;
+                    }])
+                    .await?;
             }
             info!("Observations deleted.");
             if json {
-                emit_nodes(&conn, vec![name]).await?;
+                emit_nodes(backend, vec![name]).await?;
             }
         }
         Commands::UpdateObs {
@@ -638,13 +638,17 @@ async fn run_cli(cli: Cli) -> Result<()> {
                         old_content
                     )
                 })?;
-                asobi::db::update_observation_by_id(&conn, &name, parsed_id, &new_content).await?;
+                backend
+                    .update_observation_by_id(&name, parsed_id, &new_content)
+                    .await?;
             } else {
-                asobi::db::update_observation(&conn, &name, &old_content, &new_content).await?;
+                backend
+                    .update_observation(&name, &old_content, &new_content)
+                    .await?;
             }
             info!("Observation updated.");
             if json {
-                emit_nodes(&conn, vec![name]).await?;
+                emit_nodes(backend, vec![name]).await?;
             }
         }
         Commands::Unlink {
@@ -652,22 +656,20 @@ async fn run_cli(cli: Cli) -> Result<()> {
             to,
             relation_type,
         } => {
-            asobi::db::delete_relations(
-                &conn,
-                vec![asobi::model::RelationInput {
+            backend
+                .delete_relations(vec![asobi::model::RelationInput {
                     from: from.clone(),
                     to: to.clone(),
                     relation_type,
-                }],
-            )
-            .await?;
+                }])
+                .await?;
             info!("Relations deleted.");
             if json {
-                emit_nodes(&conn, vec![from, to]).await?;
+                emit_nodes(backend, vec![from, to]).await?;
             }
         }
         Commands::Graph => {
-            let graph = asobi::db::read_graph(&conn).await?;
+            let graph = backend.read_graph().await?;
             println!("{}", serde_json::to_string_pretty(&graph)?);
         }
         Commands::Search {
@@ -684,9 +686,13 @@ async fn run_cli(cli: Cli) -> Result<()> {
                 }
             }
             let query_str = query.unwrap_or_default();
-            let graph =
-                asobi::db::search_nodes_with_limit(&conn, &query_str, limit, &parsed_filters)
-                    .await?;
+            let graph = backend
+                .search_nodes(SearchQuery {
+                    query: query_str,
+                    limit,
+                    filters: parsed_filters,
+                })
+                .await?;
             println!("{}", serde_json::to_string_pretty(&graph)?);
         }
         Commands::Show {
@@ -694,21 +700,24 @@ async fn run_cli(cli: Cli) -> Result<()> {
             expand,
             with_ids,
         } => {
-            let graph = asobi::db::open_nodes_detailed(&conn, names, with_ids, &expand).await?;
+            let graph = backend
+                .open_nodes(OpenNodes {
+                    names,
+                    with_ids,
+                    expand,
+                })
+                .await?;
             println!("{}", serde_json::to_string_pretty(&graph)?);
         }
         Commands::Stats { per_entity } => {
-            let paths = asobi::paths::AsobiPaths::resolve();
-            let db_path = std::env::var(asobi::constant::ENV_DATABASE_URL)
-                .unwrap_or_else(|_| paths.db_path().to_str().unwrap().to_string());
-            let mut rows = conn.query("PRAGMA journal_mode", ()).await?;
-            let journal_mode = if let Some(row) = rows.next().await? {
-                row.get::<String>(0)?
-            } else {
-                "unknown".to_string()
-            };
+            let db_path = "provider-managed";
+            let journal_mode = "provider-managed";
 
-            let (entities, relations, observations) = asobi::db::stats(&conn).await?;
+            let Stats {
+                entities,
+                relations,
+                observations,
+            } = backend.stats().await?;
             if json {
                 let mut stats_json = serde_json::json!({
                     "entities": entities,
@@ -720,16 +729,12 @@ async fn run_cli(cli: Cli) -> Result<()> {
 
                 if per_entity {
                     let paths = asobi::paths::AsobiPaths::resolve();
-                    let limit = std::env::var(asobi::constant::ENV_OBSERVATION_LIMIT)
+                    let limit = std::env::var("ASOBI_OBSERVATION_LIMIT")
                         .ok()
                         .and_then(|v| v.parse::<usize>().ok())
-                        .unwrap_or(
-                            paths
-                                .observation_limit
-                                .unwrap_or(asobi::constant::DEFAULT_OBSERVATION_LIMIT),
-                        );
+                        .unwrap_or(paths.observation_limit.unwrap_or(200));
 
-                    let list = asobi::db::stats_per_entity(&conn).await?;
+                    let list = backend.stats_per_entity().await?;
                     let detailed: Vec<serde_json::Value> = list
                         .iter()
                         .map(|(name, count)| {
@@ -761,16 +766,12 @@ async fn run_cli(cli: Cli) -> Result<()> {
 
                 if per_entity {
                     let paths = asobi::paths::AsobiPaths::resolve();
-                    let limit = std::env::var(asobi::constant::ENV_OBSERVATION_LIMIT)
+                    let limit = std::env::var("ASOBI_OBSERVATION_LIMIT")
                         .ok()
                         .and_then(|v| v.parse::<usize>().ok())
-                        .unwrap_or(
-                            paths
-                                .observation_limit
-                                .unwrap_or(asobi::constant::DEFAULT_OBSERVATION_LIMIT),
-                        );
+                        .unwrap_or(paths.observation_limit.unwrap_or(200));
 
-                    let list = asobi::db::stats_per_entity(&conn).await?;
+                    let list = backend.stats_per_entity().await?;
                     if !list.is_empty() {
                         println!("\nEntities by Observation Count:");
                         for (name, count) in &list {
@@ -792,13 +793,33 @@ async fn run_cli(cli: Cli) -> Result<()> {
                 }
             }
         }
+        Commands::Capabilities => {
+            let capabilities = backend.capabilities().await?;
+            let health = backend.health().await?;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&serde_json::json!({
+                    "apiVersion": asobi::api::API_VERSION,
+                    "capabilities": capabilities,
+                    "health": health,
+                }))?
+            );
+        }
 
-        Commands::Export { output } => {
-            let graph = asobi::db::read_graph_eager(&conn).await?;
+        Commands::Export {
+            output,
+            scope,
+            rationale,
+        } => {
+            let graph = if scope.is_empty() {
+                backend.read_graph_full().await?
+            } else {
+                backend.read_graph_scoped(&scope, rationale).await?
+            };
             let json = serde_json::to_string_pretty(&graph)?;
             if let Some(path) = output {
                 std::fs::write(&path, json)?;
-                asobi::backup::restrict_permissions(std::path::Path::new(&path), 0o600)?;
+                asobi::application::restrict_permissions(std::path::Path::new(&path), 0o600)?;
                 info!("Graph exported to {}", path);
             } else {
                 println!("{}", json);
@@ -810,7 +831,7 @@ async fn run_cli(cli: Cli) -> Result<()> {
 
             let had_entities = !graph.entities.is_empty();
             let had_relations = !graph.relations.is_empty();
-            import_graph(&conn, graph).await?;
+            import_graph(backend, graph).await?;
             if had_entities {
                 info!("Imported entities, observations, and truths.");
             }
@@ -831,28 +852,30 @@ async fn run_cli(cli: Cli) -> Result<()> {
                     return Ok(());
                 }
             }
-            asobi::db::reset(&conn).await?;
+            backend.reset().await?;
             info!("Knowledge graph reset successfully.");
         }
         Commands::Backup { output, keep } => {
-            let dest =
-                asobi::backup::backup(&conn, output.map(std::path::PathBuf::from), keep).await?;
-            info!("Backup written to {}", dest.display());
+            let receipt = backend
+                .backup(asobi::api::v1::BackupRequest {
+                    destination: output.map(std::path::PathBuf::from).unwrap_or_default(),
+                    keep,
+                })
+                .await?;
+            info!("Backup written to {}", receipt.path.display());
         }
-        Commands::Restore { file, force } => {
-            asobi::backup::restore(db, conn, std::path::Path::new(&file), force).await?;
-        }
+        Commands::Restore { .. } => unreachable!("restore handled before borrowing storage"),
         Commands::Skills { subcommand } => {
             use std::io::IsTerminal;
             match subcommand {
                 None => {
-                    let skills = asobi::db::list_skills(&conn).await?;
+                    let skills = backend.list_skills().await?;
                     if skills.is_empty() {
                         println!("No skills installed.");
                     } else {
                         let mut grouped: std::collections::BTreeMap<
                             String,
-                            Vec<asobi::db::SkillRow>,
+                            Vec<asobi::api::v1::SkillRecord>,
                         > = std::collections::BTreeMap::new();
                         for s in skills {
                             grouped.entry(s.source.clone()).or_default().push(s);
@@ -904,24 +927,34 @@ async fn run_cli(cli: Cli) -> Result<()> {
                     let is_tty = std::io::stdin().is_terminal();
 
                     #[cfg(feature = "documents")]
-                    let (store, embedder) = init_vector(conn.clone(), &paths).await?;
-                    #[cfg(feature = "documents")]
-                    let vector_ctx = Some((&store, embedder.as_ref()));
+                    let embedder = init_embedder(&paths)?;
 
                     // `--all` is a full sync of the source: prune skills that
                     // vanished upstream. `--select` / interactive stay additive.
                     let prune = matches!(mode, asobi::skills::SelectionMode::All);
 
-                    asobi::skills::install_skills_from_dir(
-                        &conn,
+                    #[cfg(feature = "documents")]
+                    asobi::skills::install_skills_from_store(
+                        backend,
+                        backend,
+                        embedder.as_ref(),
                         &target_path,
                         &git_url,
                         &version,
                         mode,
                         is_tty,
                         prune,
-                        #[cfg(feature = "documents")]
-                        vector_ctx,
+                    )
+                    .await?;
+                    #[cfg(not(feature = "documents"))]
+                    asobi::skills::install_skills_from_dir(
+                        backend,
+                        &target_path,
+                        &git_url,
+                        &version,
+                        mode,
+                        is_tty,
+                        prune,
                     )
                     .await?;
 
@@ -929,11 +962,9 @@ async fn run_cli(cli: Cli) -> Result<()> {
                 }
                 Some(SkillsCommands::Update { source }) => {
                     #[cfg(feature = "documents")]
-                    let (store, embedder) = init_vector(conn.clone(), &paths).await?;
-                    #[cfg(feature = "documents")]
-                    let vector_ctx = Some((&store, embedder.as_ref()));
+                    let embedder = init_embedder(&paths)?;
 
-                    let skills = asobi::db::list_skills(&conn).await?;
+                    let skills = backend.list_skills().await?;
                     let mut unique_sources = std::collections::HashSet::new();
                     for s in skills {
                         if let Some(ref filter_src) = source {
@@ -983,23 +1014,35 @@ async fn run_cli(cli: Cli) -> Result<()> {
                             (local_path.to_path_buf(), "local".to_string())
                         };
 
-                        asobi::skills::install_skills_from_dir(
-                            &conn,
+                        #[cfg(feature = "documents")]
+                        asobi::skills::install_skills_from_store(
+                            backend,
+                            backend,
+                            embedder.as_ref(),
                             &target_path,
                             &git_url,
                             &version,
                             asobi::skills::SelectionMode::All,
                             false,
                             true,
-                            #[cfg(feature = "documents")]
-                            vector_ctx,
+                        )
+                        .await?;
+                        #[cfg(not(feature = "documents"))]
+                        asobi::skills::install_skills_from_dir(
+                            backend,
+                            &target_path,
+                            &git_url,
+                            &version,
+                            asobi::skills::SelectionMode::All,
+                            false,
+                            true,
                         )
                         .await?;
                         info!("Successfully updated skills from {}.", src);
                     }
                 }
                 Some(SkillsCommands::Remove { target }) => {
-                    let skills = asobi::db::list_skills(&conn).await?;
+                    let skills = backend.list_skills().await?;
                     let mut entities_to_delete = Vec::new();
                     for s in skills {
                         let slug = asobi::skills::derive_source_slug(&s.source);
@@ -1010,11 +1053,11 @@ async fn run_cli(cli: Cli) -> Result<()> {
 
                     if !entities_to_delete.is_empty() {
                         info!("Deleting {} skill entities...", entities_to_delete.len());
-                        asobi::db::delete_entities(&conn, entities_to_delete).await?;
+                        backend.remove_skills(entities_to_delete).await?;
                         info!("Skills removed successfully.");
                     } else if target.starts_with("skill:") {
                         info!("Deleting skill entity {}...", target);
-                        asobi::db::delete_entities(&conn, vec![target.clone()]).await?;
+                        backend.remove_skills(vec![target.clone()]).await?;
                         info!("Skills removed successfully.");
                     } else {
                         anyhow::bail!("No installed skills found matching target {:?}", target);
@@ -1023,7 +1066,7 @@ async fn run_cli(cli: Cli) -> Result<()> {
                 Some(SkillsCommands::Show { name }) => {
                     let mut entity_name = name.clone();
                     if !entity_name.starts_with("skill:") {
-                        let skills = asobi::db::list_skills(&conn).await?;
+                        let skills = backend.list_skills().await?;
                         let matches: Vec<_> = skills
                             .iter()
                             .filter(|s| {
@@ -1049,7 +1092,7 @@ async fn run_cli(cli: Cli) -> Result<()> {
                         }
                     }
 
-                    match asobi::db::skill_body(&conn, &entity_name).await? {
+                    match backend.skill_body(&entity_name).await? {
                         Some(body) => {
                             print!("{}", body);
                         }
@@ -1070,13 +1113,18 @@ async fn run_cli(cli: Cli) -> Result<()> {
 /// stdout — the `--json` echo after a mutation, so a caller can confirm the
 /// write without a second `show` round-trip. Names are normalized inside
 /// `open_nodes`, so raw user input matches what was just stored.
-async fn emit_nodes(conn: &libsql::Connection, names: Vec<String>) -> Result<()> {
-    let graph = asobi::db::open_nodes(conn, names).await?;
+async fn emit_nodes(store: &impl GraphStore, names: Vec<String>) -> Result<()> {
+    let graph = store
+        .open_nodes(OpenNodes {
+            names,
+            ..Default::default()
+        })
+        .await?;
     println!("{}", serde_json::to_string_pretty(&graph)?);
     Ok(())
 }
 
-async fn import_graph(conn: &libsql::Connection, graph: asobi::model::Graph) -> Result<()> {
+async fn import_graph(store: &impl GraphStore, graph: asobi::model::Graph) -> Result<()> {
     let mut entities = Vec::with_capacity(graph.entities.len());
     let mut truths = Vec::new();
     for entity in graph.entities {
@@ -1095,13 +1143,13 @@ async fn import_graph(conn: &libsql::Connection, graph: asobi::model::Graph) -> 
     }
 
     if !entities.is_empty() {
-        asobi::db::create_entities(conn, entities).await?;
+        store.create_entities(entities).await?;
         for (name, key, value) in truths {
-            asobi::db::truth_upsert(conn, &name, &key, &value).await?;
+            store.truth_upsert(&name, &key, &value).await?;
         }
     }
     if !graph.relations.is_empty() {
-        asobi::db::create_relations(conn, graph.relations).await?;
+        store.create_relations(graph.relations).await?;
     }
     Ok(())
 }
@@ -1138,6 +1186,8 @@ fn print_init_report(report: &asobi::init::InitReport) {
 #[cfg(test)]
 mod tests {
     use super::{import_graph, validate_git_url};
+    use asobi::api::{GraphStore, MaintenanceStore};
+    use asobi::storage::Storage;
     use tempfile::tempdir;
 
     #[test]
@@ -1164,30 +1214,29 @@ mod tests {
         let dir = tempdir().unwrap();
         unsafe {
             std::env::set_var(
-                asobi::constant::ENV_DATABASE_URL,
+                asobi::paths::ENV_DATABASE_URL,
                 dir.path().join("test.db").to_str().unwrap(),
             );
         }
-        let (_db, conn) = asobi::db::init_db().await.unwrap();
-        asobi::db::create_entities(
-            &conn,
-            vec![asobi::model::EntityInput {
+        let backend = Storage::open_default().await.unwrap();
+        backend
+            .create_entities(vec![asobi::model::EntityInput {
                 name: "project".to_string(),
                 entity_type: "task".to_string(),
                 observations: vec!["ship it".to_string()],
-            }],
-        )
-        .await
-        .unwrap();
-        asobi::db::truth_upsert(&conn, "project", "status", "READY")
+            }])
+            .await
+            .unwrap();
+        backend
+            .truth_upsert("project", "status", "READY")
             .await
             .unwrap();
 
-        let exported = asobi::db::read_graph_eager(&conn).await.unwrap();
-        asobi::db::reset(&conn).await.unwrap();
-        import_graph(&conn, exported).await.unwrap();
+        let exported = backend.read_graph_full().await.unwrap();
+        backend.reset().await.unwrap();
+        import_graph(&backend, exported).await.unwrap();
 
-        let imported = asobi::db::read_graph_eager(&conn).await.unwrap();
+        let imported = backend.read_graph_full().await.unwrap();
         assert_eq!(
             imported.entities[0].truths.get("status"),
             Some(&"READY".to_string())

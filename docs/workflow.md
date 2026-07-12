@@ -67,6 +67,7 @@ asobi truth my-project "version" "0.3.0"
 ```
 * **Why it works**: Inserts or updates the single-source-of-truth facts for `my-project`.
 * **Token/DB Efficiency**: Truths represent the current *state*, while observations represent the *history*. Keeping status in truths allows fast, token-cheap reads.
+* **Change trail**: Overwriting a truth automatically archives the prior value with its valid-time window. It stays out of the lazy reads and is consulted only on demand with `asobi history my-project [key]`.
 
 ---
 

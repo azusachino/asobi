@@ -23,8 +23,9 @@ Keep memory, track session state, and share context across conversations — sto
 
 - **Knowledge graph** — entities, append-only (capped) observations, and directed relations.
 - **Truths** — durable `key→value` facts per entity for current state (`status`, `version`); status-as-truth makes a board a single `search --where status=…`.
-- **Fast search** — `search` over FTS5 (porter stemming + BM25) with a substring fallback, plus `--where key=value` truth filters (the query term is optional).
-- **Concurrency-safe** — WAL + `busy_timeout`, so a lead agent and dispatched sub-agents can write the same graph without lock errors.
+- **Fast search** — `search` over libSQL FTS5 (BM25 relevance, porter stemming) with a substring fallback, plus `--where key=value` truth filters (the query term is optional).
+- **Concurrency-safe** — WAL-mode storage with bounded startup and write retries, so lead and dispatched agents can share a graph.
+- **Pluggable backend** — libSQL is the default; an experimental Turso backend is opt-in behind `--features turso-experimental` and keeps its own isolated state file.
 - **Lazy reads** — `graph`/`search` return truths + counts; `show` returns the full body. Cheap to load, cheap on tokens.
 - **Skills** — install reusable agent instructions from a git repo or local path.
 - **Document tier** (optional, `--features documents`) — `ingest` + semantic `query` over Markdown.
@@ -65,7 +66,7 @@ asobi obs "my-project" "Decided to use WAL mode for concurrency"
 asobi truth "my-project" "status" "in-progress"
 asobi search "WAL"
 asobi show "my-project" --with-ids
-asobi update-obs "my-project" 1 "Decided to use WAL mode + busy_timeout for concurrency" --id
+asobi update-obs "my-project" 1 "Decided to use Turso multi-process WAL for concurrency" --id
 asobi rm-obs "my-project" 1 --id
 
 ```
@@ -77,10 +78,11 @@ asobi rm-obs "my-project" 1 --id
 - `asobi truth <name> <key> <value>` / `rm-truth <name> <key>` — manage truths.
 - `asobi skills install <src> --all` / `update` / `skills` / `skills show <name>` — manage skills (`--all` and `update` sync, pruning skills dropped upstream; `--select` is additive).
 - `asobi stats` / `export -o graph.json` / `import graph.json` / `reset` — inspect & manage.
+- `asobi backup` / `restore <snapshot> [--force]` — full-fidelity libSQL snapshots; see the [usage guide](docs/usage.md#backup-restore-and-portable-export).
 
 ## 🔒 Sandboxed Environments
 
-When running in sandboxed or restricted environments (such as Codex, Nix build sandboxes, or containerized runners), you might need to use a project-local workspace (`asobi init --local`), configure custom database paths (`ASOBI_HOME`, `ASOBI_DATABASE_URL`), adjust busy lock timeouts (`ASOBI_BUSY_TIMEOUT`), or force rollback journal mode (`ASOBI_JOURNAL_MODE=DELETE`) if shared memory (`-shm`) creation is unsupported on the underlying filesystem.
+When running in sandboxed or restricted environments (such as Codex, Nix build sandboxes, or containerized runners), use a project-local workspace (`asobi init --local`) or configure custom database paths (`ASOBI_HOME`, `ASOBI_DATABASE_URL`). The storage backend manages WAL coordination and retry behavior; legacy journal-mode and busy-timeout overrides are not supported.
 
 See the [Running in Sandboxed Environments](docs/usage.md#running-in-sandboxed-environments-codex-etc) section in the Usage Guide for more details.
 
@@ -89,5 +91,5 @@ See the [Running in Sandboxed Environments](docs/usage.md#running-in-sandboxed-e
 - **Task runner**: `make` (Nix-wrapped). `make check` is the quality gate: rustfmt, Prettier, Ruff, Clippy with `-D warnings`, graph tests, document-feature tests, and both CLI verification scripts.
 - **Rust quality standard**: keep code rustfmt-clean, introduce no Clippy warnings, preserve single-threaded test isolation, and add regression coverage for behavior changes. Run `make check` before commits.
 - **Coverage**: with `cargo-tarpaulin` installed, run `cargo tarpaulin --all-features --out Html --output-dir coverage` and open `coverage/index.html`.
-- **Benchmarks**: run `make bench`; compare runs using the same `ASOBI_BENCH_SIZES` (default `1000,10000,50000`) and record the `avg=` values for the same commit and machine.
+- **Benchmarks**: run `make bench`; use [performance profiling](docs/benchmarks/profiling.md) for Criterion baselines, DHAT allocations, and SQL plans.
 - See [`docs/usage.md`](docs/usage.md) for the full CLI reference, [`docs/workflow.md`](docs/workflow.md) for the day-to-day and task dispatcher workflow, and [`docs/architecture.md`](docs/architecture.md) for design.

@@ -1,6 +1,6 @@
 [package]
 name = "asobi"
-version = "0.4.1"
+version = "0.5.0"
 edition = "2024"
 authors = ["haru <azusachino@proton.me>"]
 description = "A persistent, project-local knowledge graph CLI for AI agents."
@@ -31,20 +31,27 @@ default = []
 documents = [
     "dep:fastembed",
 ]
+# Experimental Turso backend. libSQL is the default provider; Turso is compiled
+# and selectable only when this feature is enabled. See docs/specs for the
+# backend-boundary plan.
+turso-experimental = [
+    "dep:turso",
+]
 
 [dependencies]
 # Core
 anyhow = "1"
 serde = { version = "1", features = ["derive"] }
+thiserror = "2"
 serde_json = "1"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync", "signal"] }
-uuid = { version = "1", features = ["v4"] }
+uuid = { version = "1", features = ["v7"] }
 
 
 # CLI
-clap = { version = "4.5", features = ["derive"] }
+clap = { version = "4.6", features = ["derive"] }
 walkdir = "2"
-toml = "0.8"
+toml = "1"
 
 # Logging
 tracing = "0.1"
@@ -58,10 +65,17 @@ fastembed = { version = "5", optional = true }
 
 
 # Database & Vector Store
-libsql = "0.6"
+# libSQL is the default backend; Turso is opt-in behind `turso-experimental`.
+# Local embedded use only — disable libSQL's default replication/remote/sync
+# stack (which pulls in tonic, tonic-web, axum, hyper, tower-http). asobi only
+# ever opens local databases via `Builder::new_local`.
+turso = { version = "0.6.1", features = ["fts"], optional = true }
+libsql = { version = "0.9", default-features = false, features = ["core"] }
 
 
 [dev-dependencies]
+criterion = { version = "0.7", features = ["async_tokio"] }
+dhat = "0.3"
 filetime = "0.2"
 tempfile = "3"
 
@@ -80,6 +94,23 @@ required-features = ["documents"]
 
 [[bench]]
 name = "skills"
+harness = false
+
+[[bench]]
+name = "graph_criterion"
+harness = false
+
+[[bench]]
+name = "vector_criterion"
+harness = false
+required-features = ["documents"]
+
+[[bench]]
+name = "allocations"
+harness = false
+
+[[bench]]
+name = "sql_plans"
 harness = false
 
 

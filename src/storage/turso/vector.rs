@@ -1,5 +1,5 @@
 use anyhow::Result;
-use libsql::{Connection, params};
+use turso::{Connection, params};
 
 pub struct VectorStore {
     conn: Connection,
@@ -27,8 +27,8 @@ pub struct SearchResult {
 
 impl VectorStore {
     pub fn new(conn: Connection) -> Self {
-        // Default dim=384 for all-MiniLML6V2
-        Self::new_with_dim(conn, 384)
+        // Default dim=768 for gte-base-en-v1.5
+        Self::new_with_dim(conn, 768)
     }
 
     pub fn new_with_dim(conn: Connection, dim: usize) -> Self {
@@ -44,26 +44,29 @@ impl VectorStore {
     }
 
     pub async fn insert_chunks(&self, chunks: Vec<Chunk>) -> Result<()> {
-        let tx = self
-            .conn
-            .transaction_with_behavior(libsql::TransactionBehavior::Immediate)
-            .await?;
-        for chunk in chunks {
-            let vector_json = serde_json::to_string(&chunk.vector)?;
-            tx.execute(
-                crate::constant::SQL_INSERT_CHUNK,
-                params![
-                    chunk.id,
-                    chunk.topic_id,
-                    chunk.chunk_idx,
-                    chunk.text,
-                    chunk.source,
-                    vector_json
-                ],
-            )
-            .await?;
-        }
-        tx.commit().await?;
+        crate::storage::turso::tx::immediate_transaction(&self.conn, |tx| {
+            let chunks = chunks.clone();
+            Box::pin(async move {
+                for chunk in chunks {
+                    let vector_json = serde_json::to_string(&chunk.vector)
+                        .map_err(|error| turso::Error::Error(error.to_string()))?;
+                    tx.execute(
+                        crate::storage::turso::constant::SQL_INSERT_CHUNK,
+                        params![
+                            chunk.id,
+                            chunk.topic_id,
+                            chunk.chunk_idx,
+                            chunk.text,
+                            chunk.source,
+                            vector_json
+                        ],
+                    )
+                    .await?;
+                }
+                Ok(())
+            })
+        })
+        .await?;
         Ok(())
     }
 
@@ -72,7 +75,7 @@ impl VectorStore {
         let mut rows = self
             .conn
             .query(
-                crate::constant::SQL_SEARCH_CHUNKS,
+                crate::storage::turso::constant::SQL_SEARCH_CHUNKS,
                 params![vector_json, limit as i64],
             )
             .await?;
@@ -93,7 +96,7 @@ impl VectorStore {
     pub async fn delete_by_topic(&self, topic_id: &str) -> Result<()> {
         self.conn
             .execute(
-                crate::constant::SQL_DELETE_CHUNKS_BY_TOPIC,
+                crate::storage::turso::constant::SQL_DELETE_CHUNKS_BY_TOPIC,
                 params![topic_id],
             )
             .await?;
@@ -106,10 +109,7 @@ mod tests {
     use super::*;
 
     async fn setup_test_db() -> Connection {
-        let db = libsql::Builder::new_local(":memory:")
-            .build()
-            .await
-            .unwrap();
+        let db = turso::Builder::new_local(":memory:").build().await.unwrap();
         let conn = db.connect().unwrap();
         conn.execute(
             "CREATE TABLE chunks (
@@ -118,14 +118,8 @@ mod tests {
                 chunk_idx INTEGER NOT NULL,
                 text      TEXT NOT NULL,
                 source    TEXT NOT NULL,
-                embedding F32_BLOB(384) NOT NULL
+                embedding BLOB NOT NULL
             )",
-            (),
-        )
-        .await
-        .unwrap();
-        conn.execute(
-            "CREATE INDEX idx_chunks_vector ON chunks(libsql_vector_idx(embedding, 'metric=cosine'))",
             (),
         )
         .await
@@ -147,9 +141,9 @@ mod tests {
     #[tokio::test]
     async fn test_insert_and_search() {
         let conn = setup_test_db().await;
-        let store = VectorStore::new_with_dim(conn, 384);
+        let store = VectorStore::new_with_dim(conn, 768);
 
-        let dim = 384;
+        let dim = 768;
         let chunks: Vec<Chunk> = (0..5).map(|i| make_chunk(i, dim)).collect();
         store.insert_chunks(chunks).await.unwrap();
 
@@ -161,8 +155,8 @@ mod tests {
     #[tokio::test]
     async fn test_delete_by_topic() {
         let conn = setup_test_db().await;
-        let store = VectorStore::new_with_dim(conn, 384);
-        let dim = 384;
+        let store = VectorStore::new_with_dim(conn, 768);
+        let dim = 768;
         store.insert_chunks(vec![make_chunk(0, dim)]).await.unwrap();
         store.delete_by_topic("topic-1").await.unwrap();
         let results = store.search(&vec![0.0f32; dim], 10).await.unwrap();
@@ -172,7 +166,7 @@ mod tests {
     #[tokio::test]
     async fn test_search_scores_by_similarity() {
         let conn = setup_test_db().await;
-        let dim = 384;
+        let dim = 768;
         let store = VectorStore::new_with_dim(conn, dim);
 
         // chunk "a": aligned with first component [1, 0, 0, ...]

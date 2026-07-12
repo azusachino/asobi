@@ -17,11 +17,11 @@ impl FastEmbedProvider {
     /// command happens to be invoked from.
     pub fn new(cache_dir: PathBuf) -> Result<Self> {
         std::fs::create_dir_all(&cache_dir)?;
-        let opts = InitOptions::new(EmbeddingModel::AllMiniLML6V2).with_cache_dir(cache_dir);
+        let opts = InitOptions::new(EmbeddingModel::GTEBaseENV15Q).with_cache_dir(cache_dir);
         let model = TextEmbedding::try_new(opts)?;
         Ok(Self {
             model: Arc::new(Mutex::new(model)),
-            dim: 384,
+            dim: 768,
         })
     }
 }
@@ -34,7 +34,7 @@ impl EmbeddingProvider for FastEmbedProvider {
             let mut model = model
                 .lock()
                 .map_err(|e| anyhow::anyhow!("mutex poisoned: {}", e))?;
-            Ok(model.embed(&texts, None)?)
+            model.embed(&texts, None)
         })
         .await?
     }
@@ -52,9 +52,9 @@ mod tests {
     async fn test_fastembed_provider() {
         let dir = tempfile::tempdir().unwrap();
         let p = FastEmbedProvider::new(dir.path().to_path_buf()).unwrap();
-        assert_eq!(p.dim(), 384);
+        assert_eq!(p.dim(), 768);
         let result = p.embed(&["hello".to_string()]).await.unwrap();
         assert_eq!(result.len(), 1);
-        assert_eq!(result[0].len(), 384);
+        assert_eq!(result[0].len(), 768);
     }
 }

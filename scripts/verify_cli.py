@@ -93,7 +93,7 @@ def main() -> None:
             [
                 "obs",
                 "project-a",
-                "Uses libSQL with FTS5 porter stemming for graph recall.",
+                "Uses Turso native FTS for graph recall.",
             ],
             env,
         )
@@ -126,8 +126,8 @@ def main() -> None:
             }
         ]
 
-        stemmed = graph(["search", "stem"], env)
-        assert "project-a" in entity_names(stemmed)
+        keyword_match = graph(["search", "Turso"], env)
+        assert "project-a" in entity_names(keyword_match)
 
         for idx in range(5):
             run(["new", f"limit-{idx}", "project"], env)
@@ -196,25 +196,75 @@ def main() -> None:
         assert entity_names(after_delete) == {"project-a"}
         assert after_delete["relations"] == []
 
+        # unlink: remove exactly one relation, leaving both endpoints intact.
+        run(["link", "project-a", "project-a:session", "tracks"], env)
+        linked = graph(["show", "project-a"], env)
+        assert ("project-a", "project-a:session", "tracks") in {
+            (r["from"], r["to"], r["relationType"]) for r in linked["relations"]
+        }
+        run(["unlink", "project-a", "project-a:session", "tracks"], env)
+        unlinked = graph(["show", "project-a", "project-a:session"], env)
+        assert ("project-a", "project-a:session", "tracks") not in {
+            (r["from"], r["to"], r["relationType"]) for r in unlinked["relations"]
+        }
+        assert {"project-a", "project-a:session"}.issubset(entity_names(unlinked))
+
         # Stats test
         stats = run(["stats"], env).stdout
         assert "Knowledge Graph Statistics" in stats
 
-        # Export test
+        # Full export -> reset -> import must preserve entities, truths, and
+        # relations (regression guard for JSON round-trip fidelity).
+        run(["link", "project-a", "project-a:session", "part_of"], env)
+        pre_reset = graph(["graph"], env)
+        pre_rels = {
+            (r["from"], r["to"], r["relationType"]) for r in pre_reset["relations"]
+        }
+        assert ("project-a", "project-a:session", "part_of") in pre_rels
+
         export_file = str(Path(tmp) / "backup.json")
         run(["export", "--output", export_file], env)
         assert Path(export_file).exists()
 
-        # Reset test
         run(["reset", "--force"], env)
         empty_graph = graph(["graph"], env)
         assert empty_graph["entities"] == []
         assert empty_graph["relations"] == []
 
-        # Import test
         run(["import", export_file], env)
         restored_graph = graph(["graph"], env)
-        assert "project-a" in entity_names(restored_graph)
+        assert entity_names(restored_graph) == entity_names(pre_reset)
+        assert {
+            (r["from"], r["to"], r["relationType"]) for r in restored_graph["relations"]
+        } == pre_rels
+        # truths survive the JSON round-trip
+        restored = graph(["show", "project-a"], env)
+        assert truths(restored, "project-a") == {"edition": "2024"}
+
+        # Physical backup -> mutation -> restore must preserve the complete
+        # libSQL database. This is distinct from the portable JSON snapshot
+        # above and guards the BackupStore CLI wiring.
+        snapshot_file = Path(tmp) / "snapshot.db"
+        run(["backup", "--output", str(snapshot_file)], env)
+        assert snapshot_file.is_file()
+
+        duplicate = run_expect_failure(["backup", "--output", str(snapshot_file)], env)
+        assert "already exists" in duplicate.stderr
+
+        run(["reset", "--force"], env)
+        assert graph(["graph"], env)["entities"] == []
+
+        run(["restore", str(snapshot_file), "--force"], env)
+        physically_restored = graph(["graph"], env)
+        assert entity_names(physically_restored) == entity_names(restored_graph)
+        assert {
+            (r["from"], r["to"], r["relationType"])
+            for r in physically_restored["relations"]
+        } == pre_rels
+        assert truths(physically_restored, "project-a") == {"edition": "2024"}
+
+        safety_backups = list((Path(tmp) / "backups").glob("pre-restore-*.db"))
+        assert len(safety_backups) == 1
 
     with tempfile.TemporaryDirectory(prefix="asobi-corrupt-") as tmp:
         db_path = Path(tmp) / "corrupt.db"
@@ -227,8 +277,140 @@ def main() -> None:
     batch_and_json_checks()
     skills_checks()
     agent_feature_checks()
+    scoped_export_checks()
 
     print("CLI graph integration checks passed")
+
+
+def scoped_export_checks() -> None:
+    """End-to-end coverage for ``export --scope`` (single-epic handoff bundles).
+
+    Builds two epics under a shared project with a shared pitfall and a decision
+    rationale chain, then verifies the directed traversal at the CLI boundary:
+    ``part_of`` children are pulled inward, cited ``depends_on`` leaves are
+    included but not followed past, the shared pitfall does not drag in the
+    sibling epic, the project bridge / session / preferences are excluded, and
+    ``--rationale`` adds exactly one ``extends`` hop. Finishes with a round-trip
+    ``import`` into a fresh database to prove the bundle is self-contained.
+    """
+    with tempfile.TemporaryDirectory(prefix="asobi-scope-") as tmp:
+        env = os.environ.copy()
+        env["ASOBI_DATABASE_URL"] = str(Path(tmp) / "asobi.db")
+
+        # Two epics under one project, a shared pitfall, and a decision chain.
+        run(
+            [
+                "new",
+                "proj",
+                "project",
+                "proj:a",
+                "task",
+                "proj:a:task-1",
+                "task",
+                "proj:a:task-2",
+                "task",
+                "proj:b",
+                "task",
+                "proj:b:task-1",
+                "task",
+                "proj:decision:x",
+                "concept",
+                "proj:decision:root",
+                "concept",
+                "proj:pitfall:shared",
+                "concept",
+                "proj:session",
+                "session",
+                "UserPreferences",
+                "preference",
+            ],
+            env,
+        )
+        run(
+            [
+                "link",
+                # epics/tasks belong to their parents (inward part_of)
+                "proj:a",
+                "proj",
+                "part_of",
+                "proj:a:task-1",
+                "proj:a",
+                "part_of",
+                "proj:a:task-2",
+                "proj:a",
+                "part_of",
+                "proj:b",
+                "proj",
+                "part_of",
+                "proj:b:task-1",
+                "proj:b",
+                "part_of",
+                # a task cites a decision that extends a root decision
+                "proj:a:task-2",
+                "proj:decision:x",
+                "depends_on",
+                "proj:decision:x",
+                "proj:decision:root",
+                "extends",
+                # a pitfall shared by both epics
+                "proj:a:task-1",
+                "proj:pitfall:shared",
+                "depends_on",
+                "proj:b:task-1",
+                "proj:pitfall:shared",
+                "depends_on",
+                # a stray edge into the importer's globals (must be guarded out)
+                "proj:a:task-1",
+                "UserPreferences",
+                "depends_on",
+            ],
+            env,
+        )
+
+        # Scope to epic A: children in, cited leaves in, everything else out.
+        scoped = entity_names(graph(["export", "--scope", "proj:a"], env))
+        assert scoped == {
+            "proj:a",
+            "proj:a:task-1",
+            "proj:a:task-2",
+            "proj:decision:x",
+            "proj:pitfall:shared",
+        }, scoped
+        # leaf-terminating: the decision is in, its `extends` target is not
+        assert "proj:decision:root" not in scoped
+        # shared pitfall must not drag in the sibling epic
+        assert "proj:b" not in scoped and "proj:b:task-1" not in scoped
+        # project bridge, volatile session, and importer globals excluded
+        assert "proj" not in scoped
+        assert "proj:session" not in scoped
+        assert "UserPreferences" not in scoped
+
+        # --rationale pulls exactly one extends hop off the cited leaf.
+        with_rationale = entity_names(
+            graph(["export", "--scope", "proj:a", "--rationale"], env)
+        )
+        assert "proj:decision:root" in with_rationale
+
+        # Multiple roots union without bridging through the project node.
+        both = entity_names(
+            graph(["export", "--scope", "proj:a", "--scope", "proj:b"], env)
+        )
+        assert {"proj:a:task-1", "proj:b:task-1"}.issubset(both)
+        assert "proj" not in both
+
+        # Round-trip: a scoped bundle imports cleanly into a fresh database.
+        bundle = str(Path(tmp) / "epic-a.json")
+        run(["export", "--scope", "proj:a", "--output", bundle], env)
+
+        fresh_env = os.environ.copy()
+        fresh_env["ASOBI_DATABASE_URL"] = str(Path(tmp) / "fresh.db")
+        run(["import", bundle], fresh_env)
+        imported = graph(["graph"], fresh_env)
+        assert entity_names(imported) == scoped
+        # relations survive only when both endpoints are in the bundle
+        rel_pairs = {(r["from"], r["to"]) for r in imported["relations"]}
+        assert ("proj:a:task-2", "proj:decision:x") in rel_pairs
+        assert ("proj:a", "proj") not in rel_pairs
 
 
 def batch_and_json_checks() -> None:

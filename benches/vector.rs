@@ -1,5 +1,5 @@
 #[cfg(feature = "documents")]
-use asobi::{
+use asobi::storage::libsql::{
     db::init_db,
     vector::{Chunk, VectorStore},
 };
@@ -15,7 +15,7 @@ const INSERT_SIZE: usize = 1000;
 #[cfg(feature = "documents")]
 const SEARCH_ITERS: usize = 100;
 #[cfg(feature = "documents")]
-const DIMENSION: usize = 384;
+const DIMENSION: usize = 768;
 
 #[cfg(feature = "documents")]
 fn main() {
@@ -29,7 +29,10 @@ fn main() {
         let dir = tempdir().expect("tempdir");
         let db_path = dir.path().join("bench_vector.db");
         unsafe {
-            std::env::set_var("ASOBI_DATABASE_URL", db_path.to_str().expect("utf-8 path"));
+            std::env::set_var(
+                asobi::paths::ENV_DATABASE_URL,
+                db_path.to_str().expect("utf-8 path"),
+            );
         }
         let (_db, conn) = init_db().await.expect("init db");
         let store = VectorStore::new_with_dim(conn.clone(), DIMENSION);
@@ -40,7 +43,7 @@ fn main() {
             let mut vector = vec![0.0f32; DIMENSION];
             vector[i % DIMENSION] = 1.0f32;
             chunks.push(Chunk {
-                id: uuid::Uuid::new_v4().to_string(),
+                id: uuid::Uuid::now_v7().to_string(),
                 topic_id: format!("topic-{}", i % 10),
                 chunk_idx: (i / 10) as u32,
                 text: format!("vector benchmark chunk text {}", i),
@@ -83,3 +86,4 @@ fn main() {
 fn main() {
     println!("Vector benchmark requires the 'documents' feature.");
 }
+// storage-boundary: provider-test

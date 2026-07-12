@@ -1,18 +1,16 @@
-use crate::db;
+use crate::api::v1::{DocumentStore, GraphStore};
 use crate::ingest::ingest_file;
 use crate::model::EntityOutput;
 use crate::normalize::slugify;
-use crate::vector::VectorStore;
 use anyhow::Result;
-use libsql::{Connection, params};
 use std::fmt::Write as _;
 use std::io::Write as _;
 use std::path::PathBuf;
 use std::time::{Duration, SystemTime};
 
 pub async fn sync_graph_to_markdown(
-    conn: &Connection,
-    store: &VectorStore,
+    graph_store: &impl GraphStore,
+    document_store: &impl DocumentStore,
     embedder: &impl crate::embed::EmbeddingProvider,
 ) -> Result<usize> {
     let paths = crate::paths::AsobiPaths::resolve();
@@ -21,7 +19,7 @@ pub async fn sync_graph_to_markdown(
         std::fs::create_dir_all(&topics_dir)?;
     }
 
-    let graph = db::read_graph_eager(conn).await?;
+    let graph = graph_store.read_graph_full().await?;
     let today = chrono::Local::now().format("%Y-%m-%d %H:%M").to_string();
     let mut count = 0;
 
@@ -36,18 +34,16 @@ pub async fn sync_graph_to_markdown(
         let mut compacted_time = today.clone();
         let mut should_write = true;
 
-        if file_path.exists() {
-            if let Ok(existing) = std::fs::read_to_string(&file_path) {
-                if let Some(old_time) = crate::frontmatter::parse(&existing)
-                    .and_then(|fm| fm.get("compacted").map(|s| s.to_string()))
-                {
-                    let content_with_old_time =
-                        render_entity_markdown(entity, &slug, &graph.relations, &old_time);
-                    if existing == content_with_old_time {
-                        should_write = false;
-                        compacted_time = old_time;
-                    }
-                }
+        if file_path.exists()
+            && let Ok(existing) = std::fs::read_to_string(&file_path)
+            && let Some(old_time) = crate::frontmatter::parse(&existing)
+                .and_then(|fm| fm.get("compacted").map(|s| s.to_string()))
+        {
+            let content_with_old_time =
+                render_entity_markdown(entity, &slug, &graph.relations, &old_time);
+            if existing == content_with_old_time {
+                should_write = false;
+                compacted_time = old_time;
             }
         }
 
@@ -55,7 +51,7 @@ pub async fn sync_graph_to_markdown(
             let content = render_entity_markdown(entity, &slug, &graph.relations, &compacted_time);
             std::fs::File::create(&file_path)?.write_all(content.as_bytes())?;
             // Refresh the Vector/FTS tier from the rendered file.
-            ingest_file(&file_path, conn, store, embedder).await?;
+            ingest_file(&file_path, document_store, embedder).await?;
             count += 1;
         }
     }
@@ -240,59 +236,13 @@ pub fn prune_old_sessions(topics_root: &str, days: u32) -> Result<usize> {
 /// Fetch all topic title embeddings and cluster by similarity.
 /// Returns clusters of topic IDs with pairwise cosine similarity > threshold.
 pub async fn find_duplicate_clusters(
-    store: &crate::vector::VectorStore,
-    conn: &libsql::Connection,
-    threshold: f32,
+    _store: &impl crate::api::v1::DocumentMaintenanceStore,
+    _threshold: f32,
 ) -> anyhow::Result<Vec<Vec<String>>> {
-    // Get all topic IDs
-    let mut rows = conn
-        .query(crate::constant::SQL_SELECT_ALL_TOPIC_IDS, ())
-        .await?;
-    let mut topic_ids = Vec::new();
-    while let Some(row) = rows.next().await? {
-        topic_ids.push(row.get::<String>(0)?);
-    }
-
-    let mut clusters: Vec<Vec<String>> = Vec::new();
-    let mut clustered: std::collections::HashSet<String> = std::collections::HashSet::new();
-
-    for id in &topic_ids {
-        if clustered.contains(id) {
-            continue;
-        }
-
-        // Fetch representative vector for this topic (first chunk)
-        let mut rows = conn
-            .query(
-                "SELECT embedding FROM chunks WHERE topic_id = ?1 LIMIT 1",
-                params![id.clone()],
-            )
-            .await?;
-
-        if let Some(row) = rows.next().await? {
-            let blob: Vec<u8> = row.get(0)?;
-            // F32_BLOB is stored as little-endian f32s
-            let vector: Vec<f32> = blob
-                .chunks_exact(4)
-                .map(|c| f32::from_le_bytes(c.try_into().unwrap()))
-                .collect();
-
-            let similar = store.search(&vector, 10).await?;
-            let mut cluster = vec![id.clone()];
-            for s in similar {
-                if s.score >= threshold && s.topic_id != *id && !clustered.contains(&s.topic_id) {
-                    cluster.push(s.topic_id.clone());
-                    clustered.insert(s.topic_id.clone());
-                }
-            }
-
-            if cluster.len() > 1 {
-                clustered.insert(id.clone());
-                clusters.push(cluster);
-            }
-        }
-    }
-    Ok(clusters)
+    _store
+        .find_duplicate_clusters(_threshold)
+        .await
+        .map_err(Into::into)
 }
 
 #[cfg(test)]
@@ -337,6 +287,25 @@ mod tests {
         assert!(!should_sync("task"));
         // Skills are already indexed by the installer; syncing would duplicate.
         assert!(!should_sync("skill"));
+    }
+
+    struct FakeMaintenance;
+
+    impl crate::api::v1::DocumentMaintenanceStore for FakeMaintenance {
+        async fn find_duplicate_clusters(
+            &self,
+            _threshold: f32,
+        ) -> crate::api::v1::ApiResult<Vec<Vec<String>>> {
+            Ok(vec![vec!["topic-a".into(), "topic-b".into()]])
+        }
+    }
+
+    #[tokio::test]
+    async fn test_find_duplicate_clusters_uses_storage_capability() {
+        let clusters = find_duplicate_clusters(&FakeMaintenance, 0.99)
+            .await
+            .unwrap();
+        assert_eq!(clusters, vec![vec!["topic-a", "topic-b"]]);
     }
 
     fn entity(name: &str, entity_type: &str) -> EntityOutput {

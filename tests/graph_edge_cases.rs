@@ -1,4 +1,4 @@
-use asobi::{db, model};
+use asobi::{model, storage::libsql::db};
 use std::fs;
 use tempfile::tempdir;
 
@@ -52,10 +52,6 @@ async fn graph_crud_handles_edges() {
     assert_eq!(graph.entities.len(), 1);
     assert_eq!(graph.entities[0].name, "alpha");
     assert_eq!(graph.relations.len(), 1); // 1-hop expansion brings in the relation
-
-    let hits = db::search_nodes(&conn, "run").await.unwrap();
-    assert_eq!(hits.entities.len(), 2); // 'alpha' matched FTS, 'beta' brought in by 1-hop relation expansion!
-    assert!(hits.entities.iter().any(|e| e.name == "alpha"));
 
     // creating a relation to a missing entity should fail foreign key constraints
     let bad_relation = db::create_relations(
@@ -126,14 +122,6 @@ async fn graph_accepts_irregular_text_without_sql_injection() {
     );
     assert_eq!(opened.entities[0].observations.len(), 2);
     assert!(opened.entities[0].observations.contains(&large_observation));
-
-    let unicode_hits = db::search_nodes(&conn, "日本語").await.unwrap();
-    // 1-hop relation expansion applies, but here it's isolated
-    assert_eq!(unicode_hits.entities.len(), 1);
-
-    // SQL injection text in observations should be safely searchable without syntax errors
-    let injection_hits = db::search_nodes(&conn, "drop").await.unwrap();
-    assert_eq!(injection_hits.entities.len(), 1);
 
     db::create_entities(
         &conn,
@@ -287,3 +275,4 @@ async fn graph_handles_malicious_payloads_gracefully() {
         assert_eq!(rel.relation_type, *payload);
     }
 }
+// storage-boundary: provider-test

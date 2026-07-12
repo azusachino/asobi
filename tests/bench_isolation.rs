@@ -6,8 +6,8 @@
 //! makes the bench safe: pointing `ASOBI_DATABASE_URL` at a scratch file
 //! fully isolates writes and resets from any other database file.
 
-use asobi::db;
 use asobi::model::EntityInput;
+use asobi::storage::libsql::db;
 use tempfile::tempdir;
 
 fn set_db(path: &std::path::Path) {
@@ -58,3 +58,4 @@ async fn bench_env_var_isolates_real_graph() {
     assert_eq!(graph.entities.len(), 1, "bench reset wiped the real graph");
     assert_eq!(graph.entities[0].name, "keep-me");
 }
+// storage-boundary: provider-test

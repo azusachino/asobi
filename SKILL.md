@@ -97,13 +97,26 @@ Returns a subgraph for the named entities plus relations between them. Takes one
 asobi truth <NAME> <KEY> <VALUE>
 ```
 
-Add or update a truth key-value pair for the named entity.
+Add or update a truth key-value pair for the named entity. Overwriting a truth
+records the superseded value in an append-only history with its valid-time window,
+so the current state stays a single value while the change trail is preserved.
 
 ```
 asobi rm-truth <NAME> <KEY>
 ```
 
 Delete a specific truth key from the named entity.
+
+```
+asobi history <NAME> [KEY]
+```
+
+Show an entity's truth change history — each superseded value with the
+`validFrom`/`validUntil` interval it was current for, newest first. Pass a `KEY`
+to narrow to a single truth. The value that is current now lives on the entity
+(`show`), not in history. History is recorded automatically on every overwrite and
+never appears in `search`/`graph`/`show`, so the default reads stay unchanged.
+It is local physical state and is **not** carried by JSON `export`/`import`.
 
 ### Skills Subsystem
 
@@ -202,6 +215,33 @@ Three-step maintenance sweep:
 1. Prunes session Markdown files in `.asobi/topics/sessions/` older than `DAYS` (default: 90).
 2. Finds near-duplicate topic clusters in the vector store (cosine ≥ 0.85).
 3. Syncs **durable knowledge** entities (`project`, `concept`, `reference`, `preference`, `standard`) back to a Markdown file in `.asobi/topics/` — including their truths — and re-ingests for FTS/vector freshness. Volatile state (`session`, `task`/epic) and self-indexing `skill` entities are skipped: they stay graph-only (read them with `search` / `show`), and `export` / `backup` cover full archival.
+
+### Physical backup and restore
+
+```bash
+asobi backup                          # timestamped snapshot; keep newest 3
+asobi backup --keep 5                 # retention for managed snapshots
+asobi backup -o /secure/asobi.db      # explicit path; never overwrites
+asobi restore /secure/asobi.db        # validate, save current DB, then prompt
+asobi restore /secure/asobi.db --force
+```
+
+- **Includes:** graph state, skill bodies, and document data.
+- **Safety:** integrity check, owner-only snapshot, `pre-restore-*.db`, closed handles, atomic replacement, stale sidecar cleanup.
+- **Scope:** libSQL only. Use JSON `export`/`import` for teammate, machine, or backend handoff.
+- **Retention:** `--keep` applies only to managed snapshots under `backups/`, not an explicit `-o` path.
+
+### Performance verification
+
+```bash
+ASOBI_BENCH_SIZES=1000,10000 make bench-libsql
+ASOBI_BENCH_SIZE=10000 make bench-criterion
+ASOBI_VECTOR_BENCH_SIZE=10000 make bench-vector-criterion
+ASOBI_BENCH_SIZE=10000 make bench-alloc
+make bench-sql-plans
+```
+
+Compare Criterion medians and confidence intervals under `target/criterion/`. Open `dhat-heap.json` with DHAT's viewer to find allocation-heavy call stacks. SQL plans should seek `idx_asobi_truths_lookup` for truth filters and use both relation indexes for neighborhood lookup. Use the same dataset size, commit profile, and machine for before/after comparisons.
 
 ---
 

@@ -79,10 +79,10 @@ asobi new "CLAUDE.md" "reference"
 asobi link "project-x" "UserPreferences" "follows"
 ```
 
-**Search (supports FTS5, segment matching, and truth filters):**
+**Search (supports Turso FTS, segment matching, and truth filters):**
 
 ```bash
-asobi search "tokio"           # finds "tokio", "tokio-util", stemmed variants
+asobi search "tokio"           # finds "tokio" and "tokio-util"
 asobi search "mobile"          # finds "ame:mobile-support:task-1" (segment match)
 asobi search "auth*"           # prefix: matches "auth", "authentication", "authorize"
 asobi search "async AND error" # both words must appear
@@ -115,22 +115,53 @@ asobi stats                                # Quick count of entities, relations,
 asobi graph | jq '.entities[] | select(.entityType == "session")'
 ```
 
-**Backup, Restore, and Reset:**
+### Backup, restore, and portable export
+
+| Goal | Command | Includes |
+| --- | --- | --- |
+| Portable handoff | `asobi export -o graph.json` | Entities, observations, truths, relations |
+| Scoped handoff | `asobi export --scope "proj:epic" -o epic.json` | One epic subtree |
+| Full libSQL archive | `asobi backup` | Complete database, including skills and documents |
 
 ```bash
-asobi export -o backup.json                # Export the entire graph to JSON
-asobi import backup.json                   # Import entities and relations from a JSON backup
-asobi reset                                # Interactively clear the entire graph (use --force to bypass)
+asobi import graph.json
+asobi backup                       # backups/asobi-<timestamp>.db; keep newest 3
+asobi backup --keep 5
+asobi backup -o /secure/asobi.db   # explicit path; never overwrites
+asobi restore /secure/asobi.db     # validate, save current DB, then prompt
+asobi restore /secure/asobi.db --force
 ```
 
-JSON export/import preserves graph entities, observations, truths, and relations. For a full-fidelity archive that also preserves installed skill bodies and database state, use `backup`/`restore`.
+- `--keep` applies only to managed snapshots, not an explicit `-o` path.
+- Snapshots are integrity-checked and owner-only on Unix.
+- Restore writes `backups/pre-restore-*.db`, closes live handles, atomically replaces the database, and removes stale WAL sidecars.
+- Turso does not support physical backup/restore; use JSON export/import instead.
+
+Scoped export is designed for handing an epic to another agent:
+
+- Includes each root, transitive `part_of` children, and one-hop `depends_on` targets.
+- `--rationale` adds one hop of `supersedes`/`extends` from cited decisions.
+- Excludes `session`, `preference`, and `standard` entities.
+- Produces ordinary JSON consumed by `asobi import`.
+
+```bash
+asobi export --scope "proj:epic" --scope "proj:other-epic" -o bundle.json
+asobi export --scope "proj:epic" --rationale -o bundle.json
+```
 
 **Manage truths (structured key-value attributes):**
 
 ```bash
 asobi truth "project-x" "language" "rust"
 asobi rm-truth "project-x" "language"
+asobi history "project-x"            # all superseded truth values, newest first
+asobi history "project-x" "language" # history for one truth key
 ```
+
+Overwriting a truth records the previous value with its valid-time window; the
+current value stays a single row. History is opt-in via `history` (never shown in
+`search`/`graph`/`show`) and is local — JSON `export`/`import` carries current
+graph state only, not the change log.
 
 **Manage skills (reusable workflows and knowledge):**
 
@@ -296,13 +327,14 @@ No files to pass, no state to reconstruct. The graph is the handoff.
 
 ### Search tips
 
-`search` uses FTS5 with porter stemming. Practical implications:
+`search` uses Turso's native full-text index. Queries match indexed terms; there is no
+SQLite FTS5 porter stemming. Practical implications:
 
-- `search "run"` → finds entities with "running", "runner", "ran"
-- `search "implement"` → finds "implementation", "implementing"
+- `search "run"` → matches the indexed term "run" (use the exact term when needed)
+- `search "implement"` → matches the indexed term "implement"
 - `search "tokio async"` → finds entities with both words (ranked higher) or either word
 - `search "UserPreferences"` → exact name match via LIKE fallback (entity has no observations)
-- `search "AND AND"` → invalid FTS5 syntax, silently falls back to LIKE, returns empty
+- `search "AND AND"` → invalid full-text syntax, silently falls back to LIKE, returns empty
 - `search "auth" --limit 500` → return more than the default top 100 matches
 - `search --where KEY=VALUE` → filters matching entities by truth values (e.g. `--where status=READY`). Can be repeated; multiple filters perform an intersection (AND condition). If a query term is also provided, it matches the intersection of the filters and the FTS/LIKE results.
 
@@ -330,14 +362,7 @@ You can override Asobi's home or database locations using environment variables:
 - **`ASOBI_HOME`**: Changes the base directory under which Asobi looks for configuration, data, and topics (e.g. `ASOBI_HOME=/tmp/asobi`).
 - **`ASOBI_DATABASE_URL`**: Specifies the direct path to the database file itself (e.g. `ASOBI_DATABASE_URL=/tmp/asobi-custom.db`).
 
-### Custom Busy Timeout
-In slow or resource-constrained sandboxes, standard file locks might take longer to release. You can increase the busy timeout (default is `15000` milliseconds) using:
-- **`ASOBI_BUSY_TIMEOUT`**: The database lock busy timeout in milliseconds (e.g. `ASOBI_BUSY_TIMEOUT=30000`).
-
-### Custom Journal Mode (Shared Memory Fallback)
-By default, Asobi uses WAL (Write-Ahead Logging) mode for performance and concurrency. WAL mode requires creating `-shm` (shared memory) and `-wal` files alongside the `.db` file. 
-
-In some sandboxed environments (such as Codex or certain restricted Docker setups), the underlying filesystem does not support shared memory creation, leading to initialization failures (e.g. `disk I/O error` or `permission denied`).
-
-To run Asobi successfully in these environments, switch the journal mode to `DELETE`:
-- **`ASOBI_JOURNAL_MODE=DELETE`**: Falls back to rollback-journal mode, which does not require shared memory (`-shm`) files.
+### Turso concurrency
+Turso uses experimental multi-process WAL with bounded retries for startup and
+immediate write transactions. Legacy `ASOBI_BUSY_TIMEOUT` and
+`ASOBI_JOURNAL_MODE` overrides are not supported.

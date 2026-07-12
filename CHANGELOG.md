@@ -1,5 +1,30 @@
 # Changelog
 
+## v0.5.0 — Storage Backends, Scoped Export, and Better Recall
+
+### Highlights
+
+- **Scoped export:** `export --scope <entity>` creates a portable bundle for one epic and its task subtree. Add `--rationale` to include its cited decision chain.
+- **Backend boundary:** the CLI uses a versioned storage API. libSQL is the supported default; Turso is an experimental opt-in.
+- **Better recall:** the document tier uses quantized `gte-base-en-v1.5` embeddings.
+- **Smaller build:** the default libSQL dependency contains only its local embedded core.
+- **Performance tooling:** Criterion baselines, DHAT allocation profiles, and SQL query-plan reports cover graph and vector hot paths.
+- **Truth history:** overwriting a truth records the superseded value with its valid-time window; read it with `asobi history <entity> [key]`.
+
+### Current behavior
+
+- libSQL is the default backend with ranked, stemmed FTS5 search and physical backup/restore.
+- Turso is selected with `--features turso-experimental` and `ASOBI_BACKEND=turso`. It uses substring search, an isolated `asobi.turso.db`, and no physical backup/restore.
+- JSON `export`/`import` is the portable handoff format across machines and backends.
+- Physical restore validates the snapshot, saves the current database, closes live handles, atomically replaces the file, and clears stale WAL sidecars.
+- Storage manages concurrency settings; legacy journal-mode and busy-timeout overrides are unavailable.
+- Truth filters and reverse relation lookups use covering indexes.
+- Each truth overwrite closes the previous value's valid-time interval into an append-only history; the current value stays a single upserted row. Re-writing an unchanged value records nothing.
+
+### Upgrade note
+
+Document embeddings are 768-dimensional. Existing document chunks are dropped automatically on first open and must be re-ingested. Graph data is unchanged.
+
 ## v0.4.1 — Review Hardening & Performance
 
 ### Fixed

@@ -1,5 +1,5 @@
-use asobi::db::{ENV_DATABASE_URL, create_entities, init_db, read_graph};
 use asobi::model::EntityInput;
+use asobi::storage::libsql::db::{ENV_DATABASE_URL, create_entities, init_db, read_graph};
 use tempfile::tempdir;
 
 #[tokio::test]
@@ -25,3 +25,4 @@ async fn test_entity_name_normalization() {
     assert_eq!(graph.entities.len(), 1);
     assert_eq!(graph.entities[0].name, "User-Preferences");
 }
+// storage-boundary: provider-test

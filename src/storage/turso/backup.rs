@@ -14,14 +14,14 @@
 //! default backup directory is pruned to the most recent `keep` snapshots.
 
 use anyhow::{Context, Result, bail};
-use libsql::{Builder, Connection, Database};
 use std::path::{Path, PathBuf};
 use tracing::{info, warn};
+use turso::{Builder, Connection, Database};
 
-use crate::constant::{
+use crate::paths::AsobiPaths;
+use crate::storage::turso::constant::{
     ENV_DATABASE_URL, SQL_INTEGRITY_CHECK, SQL_TABLE_EXISTS, SQL_VACUUM_INTO_TEMPLATE,
 };
-use crate::paths::AsobiPaths;
 
 /// Tables a valid Asobi snapshot must contain.
 const REQUIRED_TABLES: [&str; 2] = ["asobi_entities", "topics"];
@@ -31,12 +31,18 @@ const BACKUP_PREFIX: &str = "asobi";
 const PRE_RESTORE_PREFIX: &str = "pre-restore";
 
 /// The live database file the CLI operates on: `ASOBI_DATABASE_URL` if set,
-/// otherwise the resolved workspace `db_path()`. Backup and restore both go
-/// through this so they always target the same file as [`crate::db::init_db`].
+/// otherwise the Turso provider's own default state file inside the resolved
+/// workspace. Backup and restore both go through this so they always target the
+/// same file as [`crate::storage::turso::db::init_db`]. The default filename is
+/// owned by the provider, not by the shared workspace paths.
 pub fn effective_db_path() -> PathBuf {
     std::env::var(ENV_DATABASE_URL)
         .map(PathBuf::from)
-        .unwrap_or_else(|_| AsobiPaths::resolve().db_path())
+        .unwrap_or_else(|_| {
+            AsobiPaths::resolve()
+                .data_dir
+                .join(crate::storage::turso::db::DEFAULT_DATABASE_FILENAME)
+        })
 }
 
 /// Directory holding managed snapshots, co-located with the live DB so backups
@@ -142,10 +148,13 @@ pub async fn restore(db: Database, conn: Connection, source: &Path, force: bool)
 /// an integrity check. Rejects a wrong-file or corrupt-file mistake before any
 /// destructive step.
 async fn validate_snapshot(source: &Path) -> Result<()> {
+    let source = source
+        .to_str()
+        .context("snapshot path is not valid UTF-8")?;
     let db = Builder::new_local(source).build().await?;
     let conn = db.connect()?;
     for table in REQUIRED_TABLES {
-        let mut rows = conn.query(SQL_TABLE_EXISTS, libsql::params![table]).await?;
+        let mut rows = conn.query(SQL_TABLE_EXISTS, turso::params![table]).await?;
         if rows.next().await?.is_none() {
             bail!("missing expected table `{table}`");
         }
@@ -156,6 +165,7 @@ async fn validate_snapshot(source: &Path) -> Result<()> {
 
 /// Run `PRAGMA integrity_check` against the database at `path`.
 async fn assert_integrity(path: &Path) -> Result<()> {
+    let path = path.to_str().context("database path is not valid UTF-8")?;
     let db = Builder::new_local(path).build().await?;
     let conn = db.connect()?;
     check_integrity(&conn).await
@@ -164,17 +174,16 @@ async fn assert_integrity(path: &Path) -> Result<()> {
 /// `PRAGMA integrity_check` returns a single `ok` row when the database is sound,
 /// or one row per problem otherwise.
 ///
-/// libSQL's vector extension keeps an internal `libsql_vector_meta_shadow` table
-/// whose physical row order `VACUUM INTO` does not preserve, so `integrity_check`
-/// emits a benign `row not in PRIMARY KEY order for libsql_vector_meta_shadow`
-/// notice on every snapshot. That shadow table is a rebuildable index, not graph
-/// data, so we tolerate notices that reference it and fail only on anything else.
+/// Turso keeps rebuildable internal vector/FTS index tables whose physical
+/// ordering can change during `VACUUM INTO`, so `integrity_check` may report
+/// benign notices for those structures. They are indexes, not graph data, so
+/// tolerate only notices that name a known Turso internal index.
 async fn check_integrity(conn: &Connection) -> Result<()> {
     let mut rows = conn.query(SQL_INTEGRITY_CHECK, ()).await?;
     let mut problems = Vec::new();
     while let Some(row) = rows.next().await? {
         let line: String = row.get(0)?;
-        if line == "ok" || line.contains("libsql_vector") {
+        if line == "ok" || line.contains("libsql_vector") || line.contains("__turso_internal_fts") {
             continue;
         }
         problems.push(line);
@@ -300,7 +309,7 @@ mod tests {
     }
 
     async fn seed(conn: &Connection, name: &str) {
-        crate::db::create_entities(
+        crate::storage::turso::db::create_entities(
             conn,
             vec![EntityInput {
                 name: name.to_string(),
@@ -319,19 +328,19 @@ mod tests {
         let snap = dir.path().join("snap.db");
         set_db(&db_file);
 
-        let (db, conn) = crate::db::init_db().await.unwrap();
+        let (db, conn) = crate::storage::turso::db::init_db().await.unwrap();
         seed(&conn, "alpha").await;
 
         backup(&conn, Some(snap.clone()), 3).await.unwrap();
         assert!(snap.exists());
 
         // Mutate after the backup so a successful restore is observable.
-        crate::db::reset(&conn).await.unwrap();
+        crate::storage::turso::db::reset(&conn).await.unwrap();
 
         restore(db, conn, &snap, true).await.unwrap();
 
-        let (_db, conn) = crate::db::init_db().await.unwrap();
-        let graph = crate::db::open_nodes(&conn, vec!["alpha".to_string()])
+        let (_db, conn) = crate::storage::turso::db::init_db().await.unwrap();
+        let graph = crate::storage::turso::db::open_nodes(&conn, vec!["alpha".to_string()])
             .await
             .unwrap();
         assert_eq!(graph.entities.len(), 1, "restore did not bring back alpha");
@@ -345,7 +354,7 @@ mod tests {
         let snap = dir.path().join("snap.db");
         set_db(&db_file);
 
-        let (_db, conn) = crate::db::init_db().await.unwrap();
+        let (_db, conn) = crate::storage::turso::db::init_db().await.unwrap();
         backup(&conn, Some(snap.clone()), 3).await.unwrap();
 
         let err = backup(&conn, Some(snap), 3).await.unwrap_err();
@@ -360,7 +369,7 @@ mod tests {
         std::fs::write(&bogus, b"not a database").unwrap();
         set_db(&db_file);
 
-        let (db, conn) = crate::db::init_db().await.unwrap();
+        let (db, conn) = crate::storage::turso::db::init_db().await.unwrap();
         let err = restore(db, conn, &bogus, true).await.unwrap_err();
         assert!(err.to_string().contains("not a valid Asobi database"));
     }
@@ -372,7 +381,7 @@ mod tests {
         let snap = dir.path().join("snap.db");
         set_db(&db_file);
 
-        let (db, conn) = crate::db::init_db().await.unwrap();
+        let (db, conn) = crate::storage::turso::db::init_db().await.unwrap();
         seed(&conn, "alpha").await;
         backup(&conn, Some(snap.clone()), 3).await.unwrap();
 
@@ -401,7 +410,7 @@ mod tests {
             std::fs::write(bdir.join(name), b"old").unwrap();
         }
 
-        let (_db, conn) = crate::db::init_db().await.unwrap();
+        let (_db, conn) = crate::storage::turso::db::init_db().await.unwrap();
         // Default-location backup (output None) triggers retention.
         backup(&conn, None, 2).await.unwrap();
 
@@ -409,7 +418,7 @@ mod tests {
             .unwrap()
             .filter_map(|e| e.ok())
             .map(|e| e.file_name().into_string().unwrap())
-            .filter(|n| n.starts_with("asobi-"))
+            .filter(|n| n.starts_with("asobi-") && n.ends_with(".db"))
             .collect();
         remaining.sort();
         assert_eq!(remaining.len(), 2, "retention should keep exactly 2");
@@ -430,7 +439,7 @@ mod tests {
         let snap = dir.path().join("snap.db");
         set_db(&db_file);
 
-        let (_db, conn) = crate::db::init_db().await.unwrap();
+        let (_db, conn) = crate::storage::turso::db::init_db().await.unwrap();
         backup(&conn, Some(snap.clone()), 3).await.unwrap();
 
         let mode = std::fs::metadata(&snap).unwrap().permissions().mode();
