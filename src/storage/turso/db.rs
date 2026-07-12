@@ -7,7 +7,10 @@ pub const DEFAULT_SEARCH_LIMIT: usize = 100;
 pub const DEFAULT_DATABASE_FILENAME: &str = "asobi.turso.db";
 pub use crate::storage::turso::constant::ENV_DATABASE_URL;
 
-pub const SCHEMA_VERSION: i64 = 1;
+// v2 (v0.5, unreleased): covering indexes for truth filters and reverse relation
+// lookups, plus asobi_truth_history for superseded truth values with valid-time
+// intervals. All additions are idempotent CREATE ... IF NOT EXISTS.
+pub const SCHEMA_VERSION: i64 = 2;
 
 pub async fn init_db() -> Result<(Database, Connection)> {
     let paths = crate::paths::AsobiPaths::resolve();
@@ -161,7 +164,31 @@ pub async fn init_db() -> Result<(Database, Connection)> {
         .await?;
 
         conn.execute(
+            crate::storage::turso::constant::SCHEMA_CREATE_IDX_ASOBI_RELATIONS_TO,
+            (),
+        )
+        .await?;
+
+        conn.execute(
             crate::storage::turso::constant::SCHEMA_CREATE_ASOBI_TRUTHS,
+            (),
+        )
+        .await?;
+
+        conn.execute(
+            crate::storage::turso::constant::SCHEMA_CREATE_IDX_ASOBI_TRUTHS_LOOKUP,
+            (),
+        )
+        .await?;
+
+        conn.execute(
+            crate::storage::turso::constant::SCHEMA_CREATE_ASOBI_TRUTH_HISTORY,
+            (),
+        )
+        .await?;
+
+        conn.execute(
+            crate::storage::turso::constant::SCHEMA_CREATE_IDX_ASOBI_TRUTH_HISTORY,
             (),
         )
         .await?;
@@ -1098,12 +1125,64 @@ pub async fn reset(conn: &Connection) -> Result<()> {
 
 pub async fn truth_upsert(conn: &Connection, entity: &str, key: &str, value: &str) -> Result<()> {
     let norm_entity = crate::normalize::normalize_key(entity);
-    conn.execute(
-        crate::storage::turso::constant::SQL_UPSERT_TRUTH,
-        turso::params![norm_entity, key, value],
-    )
+    let key = key.to_string();
+    let value = value.to_string();
+    // Archive the outgoing value and write the new one atomically, so a truth's
+    // history can never diverge from its current value.
+    crate::storage::turso::tx::immediate_transaction(conn, |tx| {
+        let norm_entity = norm_entity.clone();
+        let key = key.clone();
+        let value = value.clone();
+        Box::pin(async move {
+            tx.execute(
+                crate::storage::turso::constant::SQL_ARCHIVE_TRUTH,
+                turso::params![norm_entity.clone(), key.clone(), value.clone()],
+            )
+            .await?;
+            tx.execute(
+                crate::storage::turso::constant::SQL_UPSERT_TRUTH,
+                turso::params![norm_entity, key, value],
+            )
+            .await?;
+            Ok(())
+        })
+    })
     .await?;
     Ok(())
+}
+
+pub async fn truth_history(
+    conn: &Connection,
+    entity: &str,
+    key: Option<&str>,
+) -> Result<Vec<crate::api::v1::TruthVersion>> {
+    let norm_entity = crate::normalize::normalize_key(entity);
+    let mut rows = match key {
+        Some(key) => {
+            conn.query(
+                crate::storage::turso::constant::SQL_SELECT_TRUTH_HISTORY_BY_KEY,
+                turso::params![norm_entity, key.to_string()],
+            )
+            .await?
+        }
+        None => {
+            conn.query(
+                crate::storage::turso::constant::SQL_SELECT_TRUTH_HISTORY,
+                turso::params![norm_entity],
+            )
+            .await?
+        }
+    };
+    let mut versions = Vec::new();
+    while let Some(row) = rows.next().await? {
+        versions.push(crate::api::v1::TruthVersion {
+            key: row.get(0)?,
+            value: row.get(1)?,
+            valid_from: row.get(2)?,
+            valid_until: row.get(3)?,
+        });
+    }
+    Ok(versions)
 }
 
 pub async fn truth_delete(conn: &Connection, entity: &str, key: &str) -> Result<()> {
@@ -1807,6 +1886,53 @@ mod tests {
         let entity_truths = truths.get("test-entity").expect("should have truths");
         assert_eq!(entity_truths.len(), 1);
         assert_eq!(entity_truths.get("version").unwrap(), "1.0.1");
+    }
+
+    #[tokio::test]
+    async fn test_truth_upsert_archives_previous_value() {
+        let dir = tempdir().unwrap();
+        unsafe {
+            std::env::set_var(
+                ENV_DATABASE_URL,
+                dir.path().join("test.db").to_str().unwrap(),
+            );
+        }
+        let (_db, conn) = init_db().await.unwrap();
+        seed_entity(&conn, "task-1", "task", &[]).await;
+
+        truth_upsert(&conn, "task-1", "status", "READY")
+            .await
+            .unwrap();
+        assert!(
+            truth_history(&conn, "task-1", None)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+
+        truth_upsert(&conn, "task-1", "status", "DONE")
+            .await
+            .unwrap();
+        let history = truth_history(&conn, "task-1", Some("status"))
+            .await
+            .unwrap();
+        assert_eq!(history.len(), 1);
+        assert_eq!(history[0].value, "READY");
+
+        let truths = select_truths(&conn, &["task-1"]).await.unwrap();
+        assert_eq!(truths["task-1"]["status"], "DONE");
+
+        // Re-writing the same value must not accumulate history.
+        truth_upsert(&conn, "task-1", "status", "DONE")
+            .await
+            .unwrap();
+        assert_eq!(
+            truth_history(&conn, "task-1", Some("status"))
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
     }
 
     #[tokio::test]

@@ -154,7 +154,14 @@ asobi export --scope "proj:epic" --rationale -o bundle.json
 ```bash
 asobi truth "project-x" "language" "rust"
 asobi rm-truth "project-x" "language"
+asobi history "project-x"            # all superseded truth values, newest first
+asobi history "project-x" "language" # history for one truth key
 ```
+
+Overwriting a truth records the previous value with its valid-time window; the
+current value stays a single row. History is opt-in via `history` (never shown in
+`search`/`graph`/`show`) and is local — JSON `export`/`import` carries current
+graph state only, not the change log.
 
 **Manage skills (reusable workflows and knowledge):**
 

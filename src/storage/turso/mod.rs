@@ -142,6 +142,16 @@ impl GraphStore for TursoStore {
             .map_err(be)
     }
 
+    async fn truth_history(
+        &self,
+        entity: &str,
+        key: Option<&str>,
+    ) -> ApiResult<Vec<crate::api::v1::TruthVersion>> {
+        crate::storage::turso::db::truth_history(&self.conn, entity, key)
+            .await
+            .map_err(be)
+    }
+
     async fn read_graph(&self) -> ApiResult<Graph> {
         crate::storage::turso::db::read_graph(&self.conn)
             .await
@@ -310,7 +320,7 @@ impl DocumentStore for TursoStore {
                 .search(embedding, limit)
                 .await
                 .map_err(be)?;
-            return Ok(results
+            Ok(results
                 .into_iter()
                 .map(|result| DocumentSearchResult {
                     id: result.id,
@@ -319,7 +329,7 @@ impl DocumentStore for TursoStore {
                     source: result.source,
                     score: result.score,
                 })
-                .collect());
+                .collect())
         }
         #[cfg(not(feature = "documents"))]
         {

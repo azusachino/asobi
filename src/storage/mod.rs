@@ -12,7 +12,7 @@ use crate::api::v1::{
     ApiResult, BackendCapabilities, BackendHealth, BackupReceipt, BackupRequest, BackupStore,
     DocumentChunk, DocumentMaintenanceStore, DocumentSearchResult, DocumentStore, GraphStore,
     MaintenanceStore, OpenNodes, SearchQuery, SearchResult, SearchStore, SkillRecord, SkillStore,
-    Stats, TopicSnapshot,
+    Stats, TopicSnapshot, TruthVersion,
 };
 use crate::model::{EntityInput, Graph, ObservationDeletion, ObservationInput, RelationInput};
 
@@ -231,6 +231,14 @@ impl GraphStore for Storage {
             Self::Libsql(store) => store.truth_delete(entity, key).await,
             #[cfg(feature = "turso-experimental")]
             Self::Turso(store) => store.truth_delete(entity, key).await,
+        }
+    }
+
+    async fn truth_history(&self, entity: &str, key: Option<&str>) -> ApiResult<Vec<TruthVersion>> {
+        match self {
+            Self::Libsql(store) => store.truth_history(entity, key).await,
+            #[cfg(feature = "turso-experimental")]
+            Self::Turso(store) => store.truth_history(entity, key).await,
         }
     }
 

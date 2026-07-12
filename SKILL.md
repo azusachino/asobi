@@ -97,13 +97,26 @@ Returns a subgraph for the named entities plus relations between them. Takes one
 asobi truth <NAME> <KEY> <VALUE>
 ```
 
-Add or update a truth key-value pair for the named entity.
+Add or update a truth key-value pair for the named entity. Overwriting a truth
+records the superseded value in an append-only history with its valid-time window,
+so the current state stays a single value while the change trail is preserved.
 
 ```
 asobi rm-truth <NAME> <KEY>
 ```
 
 Delete a specific truth key from the named entity.
+
+```
+asobi history <NAME> [KEY]
+```
+
+Show an entity's truth change history — each superseded value with the
+`validFrom`/`validUntil` interval it was current for, newest first. Pass a `KEY`
+to narrow to a single truth. The value that is current now lives on the entity
+(`show`), not in history. History is recorded automatically on every overwrite and
+never appears in `search`/`graph`/`show`, so the default reads stay unchanged.
+It is local physical state and is **not** carried by JSON `export`/`import`.
 
 ### Skills Subsystem
 
@@ -217,6 +230,18 @@ asobi restore /secure/asobi.db --force
 - **Safety:** integrity check, owner-only snapshot, `pre-restore-*.db`, closed handles, atomic replacement, stale sidecar cleanup.
 - **Scope:** libSQL only. Use JSON `export`/`import` for teammate, machine, or backend handoff.
 - **Retention:** `--keep` applies only to managed snapshots under `backups/`, not an explicit `-o` path.
+
+### Performance verification
+
+```bash
+ASOBI_BENCH_SIZES=1000,10000 make bench-libsql
+ASOBI_BENCH_SIZE=10000 make bench-criterion
+ASOBI_VECTOR_BENCH_SIZE=10000 make bench-vector-criterion
+ASOBI_BENCH_SIZE=10000 make bench-alloc
+make bench-sql-plans
+```
+
+Compare Criterion medians and confidence intervals under `target/criterion/`. Open `dhat-heap.json` with DHAT's viewer to find allocation-heavy call stacks. SQL plans should seek `idx_asobi_truths_lookup` for truth filters and use both relation indexes for neighborhood lookup. Use the same dataset size, commit profile, and machine for before/after comparisons.
 
 ---
 

@@ -59,6 +59,10 @@ pub const SCHEMA_CREATE_ASOBI_RELATIONS: &str = "CREATE TABLE IF NOT EXISTS asob
             FOREIGN KEY (to_entity)   REFERENCES asobi_entities(name) ON DELETE CASCADE
         )";
 
+pub const SCHEMA_CREATE_IDX_ASOBI_RELATIONS_TO: &str =
+    "CREATE INDEX IF NOT EXISTS idx_asobi_relations_to
+          ON asobi_relations(to_entity, from_entity, relation_type)";
+
 pub const SCHEMA_CREATE_ASOBI_TRUTHS: &str = "CREATE TABLE IF NOT EXISTS asobi_truths (
             entity_name TEXT NOT NULL,
             key         TEXT NOT NULL,
@@ -67,6 +71,24 @@ pub const SCHEMA_CREATE_ASOBI_TRUTHS: &str = "CREATE TABLE IF NOT EXISTS asobi_t
             PRIMARY KEY (entity_name, key),
             FOREIGN KEY (entity_name) REFERENCES asobi_entities(name) ON DELETE CASCADE
         )";
+
+pub const SCHEMA_CREATE_IDX_ASOBI_TRUTHS_LOOKUP: &str =
+    "CREATE INDEX IF NOT EXISTS idx_asobi_truths_lookup
+          ON asobi_truths(key, value, entity_name)";
+
+pub const SCHEMA_CREATE_ASOBI_TRUTH_HISTORY: &str =
+    "CREATE TABLE IF NOT EXISTS asobi_truth_history (
+            entity_name TEXT NOT NULL,
+            key         TEXT NOT NULL,
+            value       TEXT NOT NULL,
+            valid_from  DATETIME NOT NULL,
+            valid_until DATETIME NOT NULL,
+            FOREIGN KEY (entity_name) REFERENCES asobi_entities(name) ON DELETE CASCADE
+        )";
+
+pub const SCHEMA_CREATE_IDX_ASOBI_TRUTH_HISTORY: &str =
+    "CREATE INDEX IF NOT EXISTS idx_asobi_truth_history
+          ON asobi_truth_history(entity_name, key, valid_until)";
 
 pub const SCHEMA_CREATE_ASOBI_SKILLS: &str = "CREATE TABLE IF NOT EXISTS asobi_skills (
             entity_name  TEXT PRIMARY KEY,
@@ -125,6 +147,15 @@ pub const SQL_EVICT_OBSERVATIONS: &str = "DELETE FROM asobi_observations WHERE e
 pub const SQL_UPSERT_TRUTH: &str = "INSERT INTO asobi_truths (entity_name, key, value) VALUES (?1, ?2, ?3) \
      ON CONFLICT(entity_name, key) DO UPDATE SET value=excluded.value, updated_at=CURRENT_TIMESTAMP";
 pub const SQL_DELETE_TRUTH: &str = "DELETE FROM asobi_truths WHERE entity_name = ?1 AND key = ?2";
+/// Close the current value's validity window into history before an overwrite.
+/// A no-op when the truth is new or its value is unchanged (`value <> ?3`).
+pub const SQL_ARCHIVE_TRUTH: &str = "INSERT INTO asobi_truth_history (entity_name, key, value, valid_from, valid_until) \
+     SELECT entity_name, key, value, updated_at, CURRENT_TIMESTAMP FROM asobi_truths \
+     WHERE entity_name = ?1 AND key = ?2 AND value <> ?3";
+pub const SQL_SELECT_TRUTH_HISTORY: &str = "SELECT key, value, valid_from, valid_until FROM asobi_truth_history \
+     WHERE entity_name = ?1 ORDER BY valid_until DESC, key";
+pub const SQL_SELECT_TRUTH_HISTORY_BY_KEY: &str = "SELECT key, value, valid_from, valid_until FROM asobi_truth_history \
+     WHERE entity_name = ?1 AND key = ?2 ORDER BY valid_until DESC";
 
 pub const SQL_UPSERT_SKILL: &str = "INSERT INTO asobi_skills (entity_name, body, source, version) VALUES (?1, ?2, ?3, ?4) \
      ON CONFLICT(entity_name) DO UPDATE SET body=excluded.body, source=excluded.source, version=excluded.version, installed_at=CURRENT_TIMESTAMP";

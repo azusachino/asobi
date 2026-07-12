@@ -80,6 +80,12 @@ enum Commands {
     },
     /// Delete a specific truth for an entity
     RmTruth { name: String, key: String },
+    /// Show an entity's truth change history (superseded values with validity windows)
+    History {
+        name: String,
+        /// Limit to a single truth key
+        key: Option<String>,
+    },
     /// Delete entities and their relations
     Rm { names: Vec<String> },
     /// Delete specific observations
@@ -581,6 +587,10 @@ async fn run_cli(cli: Cli) -> Result<()> {
             if json {
                 emit_nodes(backend, vec![name]).await?;
             }
+        }
+        Commands::History { name, key } => {
+            let history = backend.truth_history(&name, key.as_deref()).await?;
+            println!("{}", serde_json::to_string_pretty(&history)?);
         }
         Commands::Rm { names } => {
             let deleted = names.clone();

@@ -118,6 +118,18 @@ pub struct DocumentSearchResult {
     pub score: f32,
 }
 
+/// A superseded truth value with its valid-time interval.  The current value
+/// lives in the graph; each overwrite closes the previous value's interval and
+/// records it here, so callers can ask "what was true when".
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TruthVersion {
+    pub key: String,
+    pub value: String,
+    pub valid_from: String,
+    pub valid_until: String,
+}
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TopicSnapshot {
@@ -224,6 +236,9 @@ pub trait GraphStore {
     async fn delete_relations(&self, relations: Vec<RelationInput>) -> ApiResult<()>;
     async fn truth_upsert(&self, entity: &str, key: &str, value: &str) -> ApiResult<()>;
     async fn truth_delete(&self, entity: &str, key: &str) -> ApiResult<()>;
+    /// Superseded truth values for an entity, newest first.  `key` narrows to a
+    /// single truth's history; `None` returns every key's history.
+    async fn truth_history(&self, entity: &str, key: Option<&str>) -> ApiResult<Vec<TruthVersion>>;
 
     /// Standard board read (truths + observation counts; no bodies).
     async fn read_graph(&self) -> ApiResult<Graph>;

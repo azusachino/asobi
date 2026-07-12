@@ -171,6 +171,16 @@ impl GraphStore for LibsqlStore {
             .map_err(be)
     }
 
+    async fn truth_history(
+        &self,
+        entity: &str,
+        key: Option<&str>,
+    ) -> ApiResult<Vec<crate::api::v1::TruthVersion>> {
+        crate::storage::libsql::db::truth_history(&self.conn, entity, key)
+            .await
+            .map_err(be)
+    }
+
     async fn read_graph(&self) -> ApiResult<Graph> {
         crate::storage::libsql::db::read_graph(&self.conn)
             .await
