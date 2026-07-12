@@ -3,9 +3,10 @@
 //! field names (camelCase) are the stable serialization contract for
 //! `graph` / `search` / `show` / `export`.
 
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Deserialize, Serialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, JsonSchema, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct EntityInput {
     pub name: String,
@@ -13,7 +14,7 @@ pub struct EntityInput {
     pub observations: Vec<String>,
 }
 
-#[derive(Debug, Deserialize, Serialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, JsonSchema, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct RelationInput {
     pub from: String,
@@ -35,14 +36,14 @@ pub struct ObservationDeletion {
     pub observations: Vec<String>,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, JsonSchema, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct DetailedObservation {
     pub id: i64,
     pub content: String,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, JsonSchema, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct EntityOutput {
     pub name: String,
@@ -57,7 +58,7 @@ pub struct EntityOutput {
     pub observations_detailed: Option<Vec<DetailedObservation>>,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, JsonSchema, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct Graph {
     pub entities: Vec<EntityOutput>,

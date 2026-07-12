@@ -6,6 +6,8 @@ use asobi::api::{
 use asobi::application::AsobiRuntime;
 use asobi::paths::AsobiPaths;
 use clap::{Parser, Subcommand};
+use schemars::JsonSchema;
+use serde::Serialize;
 #[cfg(feature = "documents")]
 use std::sync::Arc;
 use tracing::{Event, Subscriber, info, warn};
@@ -52,6 +54,42 @@ where
         ctx.format_fields(writer.by_ref(), event)?;
         writeln!(writer)
     }
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+struct DeletedReceipt {
+    deleted: Vec<String>,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+struct EntityStatsDetail {
+    name: String,
+    observation_count: usize,
+    limit: usize,
+    percentage: f64,
+    critical: bool,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+struct StatsReceipt {
+    entities: usize,
+    relations: usize,
+    observations: usize,
+    database_path: &'static str,
+    journal_mode: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    entities_detailed: Option<Vec<EntityStatsDetail>>,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+struct CapabilitiesReceipt {
+    api_version: u32,
+    capabilities: asobi::api::BackendCapabilities,
+    health: asobi::api::BackendHealth,
 }
 
 #[derive(Parser)]
@@ -642,7 +680,7 @@ async fn run_cli(cli: Cli) -> Result<()> {
             if json {
                 println!(
                     "{}",
-                    serde_json::to_string_pretty(&serde_json::json!({ "deleted": deleted }))?
+                    serde_json::to_string_pretty(&DeletedReceipt { deleted })?
                 );
             }
         }
@@ -762,15 +800,7 @@ async fn run_cli(cli: Cli) -> Result<()> {
                 observations,
             } = backend.stats().await?;
             if json {
-                let mut stats_json = serde_json::json!({
-                    "entities": entities,
-                    "relations": relations,
-                    "observations": observations,
-                    "databasePath": db_path,
-                    "journalMode": journal_mode
-                });
-
-                if per_entity {
+                let entities_detailed = if per_entity {
                     let paths = asobi::paths::AsobiPaths::resolve();
                     let limit = std::env::var("ASOBI_OBSERVATION_LIMIT")
                         .ok()
@@ -778,27 +808,39 @@ async fn run_cli(cli: Cli) -> Result<()> {
                         .unwrap_or(paths.observation_limit.unwrap_or(200));
 
                     let list = backend.stats_per_entity().await?;
-                    let detailed: Vec<serde_json::Value> = list
-                        .iter()
-                        .map(|(name, count)| {
-                            let pct = if limit > 0 {
-                                (*count as f64 / limit as f64) * 100.0
-                            } else {
-                                0.0
-                            };
-                            serde_json::json!({
-                                "name": name,
-                                "observationCount": count,
-                                "limit": limit,
-                                "percentage": pct,
-                                "critical": limit > 0 && *count >= (limit * 80 / 100)
+                    Some(
+                        list.iter()
+                            .map(|(name, count)| {
+                                let pct = if limit > 0 {
+                                    (*count as f64 / limit as f64) * 100.0
+                                } else {
+                                    0.0
+                                };
+                                EntityStatsDetail {
+                                    name: name.clone(),
+                                    observation_count: *count,
+                                    limit,
+                                    percentage: pct,
+                                    critical: limit > 0 && *count >= (limit * 80 / 100),
+                                }
                             })
-                        })
-                        .collect();
-                    stats_json["entitiesDetailed"] = serde_json::json!(detailed);
-                }
+                            .collect(),
+                    )
+                } else {
+                    None
+                };
 
-                println!("{}", serde_json::to_string_pretty(&stats_json)?);
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&StatsReceipt {
+                        entities,
+                        relations,
+                        observations,
+                        database_path: db_path,
+                        journal_mode,
+                        entities_detailed,
+                    })?
+                );
             } else {
                 println!("Database Path:  {}", db_path);
                 println!("Journal Mode:   {}", journal_mode);
@@ -841,11 +883,11 @@ async fn run_cli(cli: Cli) -> Result<()> {
             let health = backend.health().await?;
             println!(
                 "{}",
-                serde_json::to_string_pretty(&serde_json::json!({
-                    "apiVersion": asobi::api::API_VERSION,
-                    "capabilities": capabilities,
-                    "health": health,
-                }))?
+                serde_json::to_string_pretty(&CapabilitiesReceipt {
+                    api_version: asobi::api::API_VERSION,
+                    capabilities,
+                    health,
+                })?
             );
         }
 
