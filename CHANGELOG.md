@@ -14,7 +14,12 @@
 
 - JSON Schema derives for response data and a schema-validation gate in the
   CLI integration verifier.
-- Consistent unpadded local-time log formatting.
+
+### Changed
+
+- Unified logging on `tracing`'s standard compact formatter with local-time
+  timestamps; the top-level fatal error is now emitted through `tracing` too,
+  so all diagnostics share one format and sink (stderr).
 
 ## v0.5.1 — Local-Time Logs & Leaner Builds
 

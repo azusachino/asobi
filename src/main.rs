@@ -10,11 +10,10 @@ use schemars::JsonSchema;
 use serde::Serialize;
 #[cfg(feature = "documents")]
 use std::sync::Arc;
-use tracing::{Event, Subscriber, info, warn};
+use tracing::{error, info, warn};
 use tracing_subscriber::EnvFilter;
-use tracing_subscriber::fmt::format::{FormatEvent, FormatFields, Writer};
+use tracing_subscriber::fmt::format::Writer;
 use tracing_subscriber::fmt::time::FormatTime;
-use tracing_subscriber::registry::LookupSpan;
 
 /// Timestamp logs in the machine's local timezone instead of tracing's default
 /// UTC. Reuses the `chrono` dependency (already pulled in for backup/compact) so
@@ -26,33 +25,6 @@ struct LocalTimer;
 impl FormatTime for LocalTimer {
     fn format_time(&self, w: &mut Writer<'_>) -> std::fmt::Result {
         write!(w, "{}", chrono::Local::now().format("%Y-%m-%d %H:%M:%S"))
-    }
-}
-
-/// Compact stderr formatter without `tracing-subscriber`'s padded level field.
-///
-/// The stock compact formatter emits a leading space for four-character levels
-/// such as `INFO`, in addition to the separator after the timestamp. Keeping
-/// the level unpadded makes log lines consistent while retaining the compact
-/// formatter's timestamp, level, and message shape.
-#[derive(Debug, Clone, Copy, Default)]
-struct CompactLogFormat;
-
-impl<S, N> FormatEvent<S, N> for CompactLogFormat
-where
-    S: Subscriber + for<'a> LookupSpan<'a>,
-    N: for<'a> FormatFields<'a> + 'static,
-{
-    fn format_event(
-        &self,
-        ctx: &tracing_subscriber::fmt::FmtContext<'_, S, N>,
-        mut writer: Writer<'_>,
-        event: &Event<'_>,
-    ) -> std::fmt::Result {
-        LocalTimer.format_time(&mut writer)?;
-        write!(writer, " {} ", event.metadata().level())?;
-        ctx.format_fields(writer.by_ref(), event)?;
-        writeln!(writer)
     }
 }
 
@@ -360,7 +332,8 @@ fn init_tracing() {
             EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
         )
         .with_target(false)
-        .event_format(CompactLogFormat)
+        .with_timer(LocalTimer)
+        .compact()
         .init();
 }
 
@@ -494,7 +467,7 @@ async fn main() {
             });
             println!("{}", serde_json::to_string_pretty(&error_json).unwrap());
         } else {
-            eprintln!("Error: {:?}", e);
+            error!("{e:?}");
         }
         std::process::exit(1);
     }
@@ -1225,56 +1198,62 @@ fn schema_for_data<T: JsonSchema>() -> serde_json::Value {
     schema
 }
 
-fn emit_schema(command: Option<&str>) -> Result<()> {
-    let mut commands = std::collections::BTreeMap::new();
-    for name in [
-        "capabilities",
-        "export",
-        "graph",
-        "history",
-        "link",
-        "new",
-        "obs",
-        "rm",
-        "rm-obs",
-        "rm-truth",
-        "search",
-        "show",
-        "stats",
-        "truth",
-        "unlink",
-        "update-obs",
-    ] {
-        let schema = match name {
-            "capabilities" => schema_for_data::<CapabilitiesReceipt>(),
-            "rm" => schema_for_data::<DeletedReceipt>(),
-            "stats" => schema_for_data::<StatsReceipt>(),
-            "history" => schema_for_data::<Vec<asobi::api::v1::TruthVersion>>(),
-            _ => schema_for_data::<asobi::model::Graph>(),
-        };
-        commands.insert(name, schema);
-    }
+/// A command name paired with a builder for its payload's JSON Schema.
+type SchemaRow = (&'static str, fn() -> serde_json::Value);
 
+/// The one source of truth mapping a command to the JSON Schema of its
+/// machine-readable payload. Most commands echo the affected `Graph`; the rest
+/// have their own receipt type. Adding a command means adding one row here.
+fn schema_registry() -> Vec<SchemaRow> {
+    use asobi::model::Graph;
+    let rows: Vec<SchemaRow> = vec![
+        ("capabilities", schema_for_data::<CapabilitiesReceipt>),
+        ("export", schema_for_data::<Graph>),
+        ("graph", schema_for_data::<Graph>),
+        (
+            "history",
+            schema_for_data::<Vec<asobi::api::v1::TruthVersion>>,
+        ),
+        ("link", schema_for_data::<Graph>),
+        ("new", schema_for_data::<Graph>),
+        ("obs", schema_for_data::<Graph>),
+        ("rm", schema_for_data::<DeletedReceipt>),
+        ("rm-obs", schema_for_data::<Graph>),
+        ("rm-truth", schema_for_data::<Graph>),
+        ("search", schema_for_data::<Graph>),
+        ("show", schema_for_data::<Graph>),
+        ("stats", schema_for_data::<StatsReceipt>),
+        ("truth", schema_for_data::<Graph>),
+        ("unlink", schema_for_data::<Graph>),
+        ("update-obs", schema_for_data::<Graph>),
+    ];
     #[cfg(feature = "documents")]
-    commands.insert(
-        "query",
-        schema_for_data::<Vec<asobi::recall::RecallResult>>(),
-    );
+    let rows = {
+        let mut rows = rows;
+        rows.push(("query", schema_for_data::<Vec<asobi::recall::RecallResult>>));
+        rows
+    };
+    rows
+}
 
+fn emit_schema(command: Option<&str>) -> Result<()> {
+    let registry = schema_registry();
     if let Some(command) = command {
-        let schema = commands
-            .get(command)
+        let (_, schema_of) = registry
+            .iter()
+            .find(|(name, _)| *name == command)
             .ok_or_else(|| anyhow::anyhow!("unknown schema command: {command}"))?;
-        println!("{}", serde_json::to_string_pretty(schema)?);
+        print_json(schema_of())
     } else {
-        let index = serde_json::json!({
+        let commands: std::collections::BTreeMap<_, _> = registry
+            .iter()
+            .map(|(name, schema_of)| (*name, schema_of()))
+            .collect();
+        print_json(serde_json::json!({
             "schemaVersion": CLI_SCHEMA_VERSION,
             "commands": commands,
-        });
-        println!("{}", serde_json::to_string_pretty(&index)?);
+        }))
     }
-
-    Ok(())
 }
 
 async fn import_graph(store: &impl GraphStore, graph: asobi::model::Graph) -> Result<()> {
