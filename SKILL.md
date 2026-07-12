@@ -21,8 +21,8 @@ Asobi maintains a persistent Knowledge Graph of project facts, user preferences,
 One graph, a few node parts — knowing which to write is the skill:
 
 - **Entity** — a named node with a `type`.
-- **Observation** — append-only log line, capped (oldest evicted past the limit, default 50). The *trail*.
-- **Truth** — a `key→value` fact that upserts. The *current state* (`status`, `version`).
+- **Observation** — append-only log line, capped (oldest evicted past the limit, default 50). The _trail_.
+- **Truth** — a `key→value` fact that upserts. The _current state_ (`status`, `version`).
 - **Relation** — directed edge `(from, to, type)`.
 - **Skill** — an installed instruction: Markdown body + `description`/`source`/`version` truths.
 
@@ -32,9 +32,9 @@ One graph, a few node parts — knowing which to write is the skill:
 
 ## Command Reference
 
-Stream contract (matters for scripted callers): **mutating** commands print a one-line confirmation (`Entity 'X' created.`, `Observation added.`, etc.) to **stderr** and leave **stdout empty** on success — check the exit code, not stdout. **Read** commands (`graph`, `search`, `show`, `stats`, `export`) write their result to **stdout**; graph reads emit JSON.
+Stream contract (matters for scripted callers): **mutating** commands print a one-line confirmation (`Entity 'X' created.`, `Observation added.`, etc.) to **stderr** and leave **stdout empty** on success — check the exit code, not stdout. **Read** commands (`graph`, `search`, `show`, `stats`, `export`) write their command-specific JSON result to **stdout**. Use `asobi schema --command NAME` to discover the payload contract.
 
-Pass the global `--json` flag to any mutating command to also print the affected entity/entities (and the relations among them) as JSON to **stdout** — e.g. `asobi new A task --json`. This removes the follow-up `show` round-trip; `rm --json` instead prints `{"deleted": [...]}`.
+Pass the global `--json` flag to any mutating command to also print the affected entity/entities (and the relations among them) as JSON to **stdout** — e.g. `asobi new A task --json`. This removes the follow-up `show` round-trip; `rm --json` returns `{ "deleted": [...] }`.
 
 ### Create
 
@@ -64,32 +64,29 @@ Creates one or more directed relations in a single call — pass repeated `FROM 
 asobi graph
 ```
 
-Returns the full graph as JSON: `{ "entities": [...], "relations": [...] }`. Each entity includes all its observations.
+Returns the full graph as `{ "entities": [...], "relations": [...] }`; each entity includes all its observations. Use `asobi schema --command graph` for the payload contract.
 
 ```
 asobi search <QUERY> [--limit <N>] [--where KEY=VALUE ...]
 ```
 
-Returns a subgraph (same JSON shape) of entities matching `QUERY`. Uses two search paths, merged in order:
+Returns a subgraph (same payload shape) of entities matching `QUERY`. Use `asobi schema --command search` for the payload contract. Uses two search paths, merged in order:
 
 1. **FTS5 on observations** — porter stemming + BM25 ranking. `"run"` matches `"running"`, `"tokio async"` ranks entities that contain both words higher. Supports FTS5 operators: `AND`, `OR`, `NOT`, prefix with `*` (e.g. `auth*`).
 2. **LIKE on entity name / type** — substring fallback, always runs. Catches exact-name lookups (`UserPreferences`) and entities with no observations.
 
 Supports filtering the search results by matching entity truths via repeatable `--where KEY=VALUE` filters (e.g. `asobi search --where status=READY`). If multiple `--where` filters are specified, they are treated as an intersection (AND condition).
 
-Relations between matched entities are included. Results are ordered by BM25 relevance (FTS matches first, then name/type matches).
-The default limit is 100 matched nodes; use `--limit` for larger ranked exports.
-Use `graph` when the caller needs the full graph; do not use a broad
-`search` query as an implicit export.
+Relations between matched entities are included. Results are ordered by BM25 relevance (FTS matches first, then name/type matches). The default limit is 100 matched nodes; use `--limit` for larger ranked exports. Use `graph` when the caller needs the full graph; do not use a broad `search` query as an implicit export.
 
 ```
 asobi show <NAME> [<NAME> ...] [--expand <RELATION_TYPE> ...] [--with-ids]
 ```
 
 Returns a subgraph for the named entities plus relations between them. Takes one or more names as positional args.
-* `--expand <RELATION_TYPE>`: repeatably expand relations of a given type. Useful for loading subtrees (e.g. `--expand part_of` to eagerly load related epic tasks).
-* `--with-ids`: include `observationsDetailed` list showing exact unique integer IDs (`id`) for each observation.
 
+- `--expand <RELATION_TYPE>`: repeatably expand relations of a given type. Useful for loading subtrees (e.g. `--expand part_of` to eagerly load related epic tasks).
+- `--with-ids`: include `observationsDetailed` list showing exact unique integer IDs (`id`) for each observation.
 
 ### Truths
 
@@ -97,9 +94,7 @@ Returns a subgraph for the named entities plus relations between them. Takes one
 asobi truth <NAME> <KEY> <VALUE>
 ```
 
-Add or update a truth key-value pair for the named entity. Overwriting a truth
-records the superseded value in an append-only history with its valid-time window,
-so the current state stays a single value while the change trail is preserved.
+Add or update a truth key-value pair for the named entity. Overwriting a truth records the superseded value in an append-only history with its valid-time window, so the current state stays a single value while the change trail is preserved.
 
 ```
 asobi rm-truth <NAME> <KEY>
@@ -111,12 +106,7 @@ Delete a specific truth key from the named entity.
 asobi history <NAME> [KEY]
 ```
 
-Show an entity's truth change history — each superseded value with the
-`validFrom`/`validUntil` interval it was current for, newest first. Pass a `KEY`
-to narrow to a single truth. The value that is current now lives on the entity
-(`show`), not in history. History is recorded automatically on every overwrite and
-never appears in `search`/`graph`/`show`, so the default reads stay unchanged.
-It is local physical state and is **not** carried by JSON `export`/`import`.
+Show an entity's truth change history — each superseded value with the `validFrom`/`validUntil` interval it was current for, newest first. Pass a `KEY` to narrow to a single truth. The value that is current now lives on the entity (`show`), not in history. History is recorded automatically on every overwrite and never appears in `search`/`graph`/`show`, so the default reads stay unchanged. It is local physical state and is **not** carried by JSON `export`/`import`.
 
 ### Skills Subsystem
 
@@ -169,8 +159,8 @@ asobi rm-obs <NAME> <CONTENT> [--prefix]
 ```
 
 Removes matching observations from the named entity.
-* `--prefix`: deletes all observations under the entity matching the content string as a prefix, rather than requiring an exact match.
 
+- `--prefix`: deletes all observations under the entity matching the content string as a prefix, rather than requiring an exact match.
 
 ```
 asobi unlink <FROM> <TO> <RELATION_TYPE>
@@ -180,8 +170,7 @@ Removes a single relation by its three-part key.
 
 ### Document ingestion / vector recall
 
-Available only in binaries built with Cargo feature `documents`
-(`cargo build --features documents` or `make build-documents`).
+Available only in binaries built with Cargo feature `documents` (`cargo build --features documents` or `make build-documents`).
 
 ```
 asobi ingest <PATH>
@@ -313,7 +302,7 @@ asobi truth "<project>:session" "status" "IN_PROGRESS"
 
 ## Output Format Reference
 
-**Graph commands** return a JSON object containing `entities` and `relations`.
+**Graph commands** return their documented JSON payload directly. Use `asobi schema --command graph` to discover the exact shape.
 
 `graph` and `search` use a **lazy-read contract** (they do not populate observation content or skill bodies, returning only `observationCount` and `truths`):
 
@@ -371,7 +360,7 @@ asobi truth "<project>:session" "status" "IN_PROGRESS"
 }
 ```
 
-**Mutating commands** print a plain-text confirmation line to **stderr** (no JSON, stdout empty). Rely on the process exit code for success/failure, then `show` the affected entity if you need to read back the result.
+**Mutating commands** print a plain-text confirmation line to **stderr** (no JSON, stdout empty) unless global `--json` is passed. With `--json`, read the affected payload directly.
 
 ---
 

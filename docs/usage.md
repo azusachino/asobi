@@ -65,6 +65,7 @@ Add `.asobi/` to `.gitignore`; the `asobi.toml` itself can be checked in.
 asobi search --where status=IN_PROGRESS
 asobi show "my-project:session"
 ```
+
 **Store a decision (supports hierarchical naming and seeded observations):**
 
 ```bash
@@ -103,10 +104,7 @@ asobi obs "my-project:session" "next: implement FTS5 index"
 asobi compact  # refreshes the recall index; session state already lives in the graph
 ```
 
-`compact` syncs only durable *knowledge* entities (project, decisions, references,
-preferences) to Markdown + the FTS/vector index. Volatile state (`session`, `task`)
-and self-indexing `skill` entities stay graph-only — query them with `search` / `show`,
-and use `export` / `backup` for full archival.
+`compact` syncs only durable _knowledge_ entities (project, decisions, references, preferences) to Markdown + the FTS/vector index. Volatile state (`session`, `task`) and self-indexing `skill` entities stay graph-only — query them with `search` / `show`, and use `export` / `backup` for full archival.
 
 **Inspect the full graph:**
 
@@ -158,10 +156,7 @@ asobi history "project-x"            # all superseded truth values, newest first
 asobi history "project-x" "language" # history for one truth key
 ```
 
-Overwriting a truth records the previous value with its valid-time window; the
-current value stays a single row. History is opt-in via `history` (never shown in
-`search`/`graph`/`show`) and is local — JSON `export`/`import` carries current
-graph state only, not the change log.
+Overwriting a truth records the previous value with its valid-time window; the current value stays a single row. History is opt-in via `history` (never shown in `search`/`graph`/`show`) and is local — JSON `export`/`import` carries current graph state only, not the change log.
 
 **Manage skills (reusable workflows and knowledge):**
 
@@ -172,7 +167,6 @@ asobi skills show my-skill
 asobi skills update
 asobi skills remove asobi-skills
 ```
-
 
 **Ingest Markdown into the document tier (optional):**
 
@@ -243,20 +237,31 @@ asobi truth "<project>:session" "status" "IN_PROGRESS"
 
 ### Entity naming conventions
 
-| Pattern             | Type         | Purpose                                      |
-| ------------------- | ------------ | -------------------------------------------- |
-| `<project>:session` | `session`    | Volatile task state — reset each session     |
-| `<project>:tasks`   | `task`       | In-progress task tracking                    |
-| `<project>`         | `project`    | Stable project facts, architecture decisions |
-| `UserPreferences`   | `preference` | Cross-project user habits                    |
-| `CodingStyle`       | `standard`   | Commit format, indentation, etc.             |
-| `ToolPreferences`   | `preference` | Nix, make, etc.                               |
+| Pattern | Type | Purpose |
+| --- | --- | --- |
+| `<project>:session` | `session` | Volatile task state — reset each session |
+| `<project>:tasks` | `task` | In-progress task tracking |
+| `<project>` | `project` | Stable project facts, architecture decisions |
+| `UserPreferences` | `preference` | Cross-project user habits |
+| `CodingStyle` | `standard` | Commit format, indentation, etc. |
+| `ToolPreferences` | `preference` | Nix, make, etc. |
+
+### Machine-readable response contract
+
+Commands retain their existing JSON payload shapes. `asobi schema` is the compatibility promise and discovery surface:
+
+```bash
+asobi schema
+asobi schema --command show
+```
+
+The schema document carries its own `schemaVersion`, independent from the storage/export `apiVersion`. Use the command-specific schema to validate and parse the corresponding payload; no extra response wrapper is required.
 
 ### Output format
 
 Asobi operates under a **lazy-read contract** to minimize token overhead.
 
-`graph` and `search` return a lazy JSON structure (excluding `observations` and skill `body`, only providing `truths` and `observationCount`):
+The payload for `graph` and `search` is a lazy JSON structure (excluding `observations` and skill `body`, only providing `truths` and `observationCount`):
 
 ```json
 {
@@ -327,8 +332,7 @@ No files to pass, no state to reconstruct. The graph is the handoff.
 
 ### Search tips
 
-`search` uses Turso's native full-text index. Queries match indexed terms; there is no
-SQLite FTS5 porter stemming. Practical implications:
+`search` uses Turso's native full-text index. Queries match indexed terms; there is no SQLite FTS5 porter stemming. Practical implications:
 
 - `search "run"` → matches the indexed term "run" (use the exact term when needed)
 - `search "implement"` → matches the indexed term "implement"
@@ -351,18 +355,22 @@ asobi show "project-x:session" "UserPreferences"
 When running in sandboxed or highly restricted environments (such as Codex, Nix build sandboxes, or certain containerized runners), the environment might impose constraints on directory write access or shared-memory creation. Asobi can be configured to run smoothly in these environments using the following techniques:
 
 ### Project-Local Workspace
+
 Use the project-local setup to avoid writing to the global `~/.local` (XDG) directory, which may be read-only or non-existent:
+
 ```bash
 asobi init --local
 ```
+
 This writes an `asobi.toml` file in the current working directory and places database and configurations within the `./.asobi/` subdirectory.
 
 ### Custom Database Paths
+
 You can override Asobi's home or database locations using environment variables:
+
 - **`ASOBI_HOME`**: Changes the base directory under which Asobi looks for configuration, data, and topics (e.g. `ASOBI_HOME=/tmp/asobi`).
 - **`ASOBI_DATABASE_URL`**: Specifies the direct path to the database file itself (e.g. `ASOBI_DATABASE_URL=/tmp/asobi-custom.db`).
 
 ### Turso concurrency
-Turso uses experimental multi-process WAL with bounded retries for startup and
-immediate write transactions. Legacy `ASOBI_BUSY_TIMEOUT` and
-`ASOBI_JOURNAL_MODE` overrides are not supported.
+
+Turso uses experimental multi-process WAL with bounded retries for startup and immediate write transactions. Legacy `ASOBI_BUSY_TIMEOUT` and `ASOBI_JOURNAL_MODE` overrides are not supported.

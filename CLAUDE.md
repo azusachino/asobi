@@ -15,7 +15,7 @@ Rust (edition 2024) on `tokio`; `clap` CLI, `tracing` logs (stderr, `RUST_LOG`).
 
 ## CLI
 
-Graph: `new` (`--obs` seeds at creation), `obs`, `link`, `rm`, `rm-obs`, `unlink`, `graph`, `search` (`--where key=value` truth filters; query term optional), `show`. Truths: `truth`, `rm-truth`. Plus `skills`, `ingest`, `query` (`--json`/`--limit`), `compact`, `init`, `backup`, `restore`, `stats`, `export` (`--scope <entity>` for a single-epic subgraph bundle, `--rationale` for the decision chain), `import`, `reset`. Full reference: [`SKILL.md`](SKILL.md), [`docs/usage.md`](docs/usage.md).
+Graph: `new` (`--obs` seeds at creation), `obs`, `link`, `rm`, `rm-obs`, `unlink`, `graph`, `search` (`--where key=value` truth filters; query term optional), `show`. Truths: `truth`, `rm-truth`. Plus `skills`, `ingest`, `query` (`--json`/`--limit`), `compact`, `init`, `backup`, `restore`, `stats`, `export` (`--scope <entity>` for a single-epic subgraph bundle, `--rationale` for the decision chain), `import`, `reset`, and `schema [--command NAME]`. Machine-readable payloads retain their command-specific JSON shapes; `asobi schema` is the compatibility promise and discovery surface. See [`docs/response-contract.md`](docs/response-contract.md). Full reference: [`SKILL.md`](SKILL.md), [`docs/usage.md`](docs/usage.md).
 
 ## Make
 

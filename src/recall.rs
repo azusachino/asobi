@@ -1,9 +1,10 @@
 use crate::{api::v1::DocumentStore, embed::EmbeddingProvider};
 use anyhow::Result;
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, JsonSchema, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RecallResult {
     pub topic_id: String,

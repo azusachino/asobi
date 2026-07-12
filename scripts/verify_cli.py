@@ -13,9 +13,18 @@ import subprocess
 import tempfile
 from pathlib import Path
 
+import fastjsonschema
+
 
 ROOT = Path(__file__).resolve().parents[1]
 BIN = ROOT / "target" / "debug" / "asobi"
+_SCHEMAS: dict[str, dict] = {}
+_SCHEMA_FORMATS = {
+    "uint": lambda value: isinstance(value, int) and value >= 0,
+    "uint32": lambda value: isinstance(value, int) and 0 <= value <= 2**32 - 1,
+    "int64": lambda value: isinstance(value, int),
+    "double": lambda value: isinstance(value, (int, float)),
+}
 
 
 def run(args: list[str], env: dict[str, str]) -> subprocess.CompletedProcess[str]:
@@ -57,7 +66,53 @@ def run_expect_failure(
 
 
 def graph(args: list[str], env: dict[str, str]) -> dict:
-    return json.loads(run(args, env).stdout)
+    command = args[0]
+    return validate_response(args, env, command)
+
+
+def validate_response(args: list[str], env: dict[str, str], command: str) -> dict:
+    payload = json.loads(run(args, env).stdout)
+    schema = command_schema(command, env)
+    fastjsonschema.compile(schema, formats=_SCHEMA_FORMATS)(payload)
+    return payload
+
+
+def command_schema(command: str, env: dict[str, str]) -> dict:
+    if command not in _SCHEMAS:
+        _SCHEMAS[command] = json.loads(
+            run(["schema", "--command", command], env).stdout
+        )
+    return _SCHEMAS[command]
+
+
+def validate_error(payload: dict) -> dict:
+    assert payload["status"] == "failed"
+    assert isinstance(payload["error"], str)
+    return payload
+
+
+def json_data(args: list[str], env: dict[str, str]) -> dict:
+    """Return the data payload from a successful versioned response."""
+    commands = {
+        "capabilities",
+        "export",
+        "graph",
+        "history",
+        "link",
+        "new",
+        "obs",
+        "rm",
+        "rm-obs",
+        "rm-truth",
+        "search",
+        "show",
+        "stats",
+        "truth",
+        "unlink",
+        "update-obs",
+    }
+    command = next(arg for arg in args if arg in commands)
+    return validate_response(args, env, command)
 
 
 def entity_names(payload: dict) -> set[str]:
@@ -78,8 +133,21 @@ def truths(payload: dict, name: str) -> dict[str, str]:
     return {}
 
 
+def schema_checks(env: dict[str, str]) -> None:
+    index = json.loads(run(["schema"], env).stdout)
+    assert index["schemaVersion"] == 1
+    assert "commands" in index
+    assert "graph" in index["commands"]
+    assert "properties" in index["commands"]["graph"]
+
+    graph_schema = json.loads(run(["schema", "--command", "graph"], env).stdout)
+    fastjsonschema.compile(graph_schema, formats=_SCHEMA_FORMATS)
+    assert graph_schema["x-asobi-schema-version"] == 1
+
+
 def main() -> None:
     subprocess.run(["cargo", "build"], cwd=ROOT, check=True)
+    schema_checks(os.environ.copy())
 
     with tempfile.TemporaryDirectory(prefix="asobi-cli-") as tmp:
         env = os.environ.copy()
@@ -453,17 +521,15 @@ def batch_and_json_checks() -> None:
         assert "triple" in bad_triples.stderr.lower()
 
         # --json: new echoes the created entity to stdout.
-        echoed = json.loads(run(["new", "delta", "task", "--json"], env).stdout)
+        echoed = json_data(["new", "delta", "task", "--json"], env)
         assert "delta" in entity_names(echoed)
 
         # --json: obs returns the affected entity with its trail.
-        obs_echo = json.loads(run(["obs", "delta", "first obs", "--json"], env).stdout)
+        obs_echo = json_data(["obs", "delta", "first obs", "--json"], env)
         assert observations(obs_echo, "delta") == ["first obs"]
 
         # --json: link shows the relation among its endpoints.
-        rel_echo = json.loads(
-            run(["link", "delta", "alpha", "uses", "--json"], env).stdout
-        )
+        rel_echo = json_data(["link", "delta", "alpha", "uses", "--json"], env)
         assert {
             "from": "delta",
             "to": "alpha",
@@ -471,14 +537,12 @@ def batch_and_json_checks() -> None:
         } in rel_echo["relations"]
 
         # --json: truth / rm-truth return the entity's current truths.
-        truth_echo = json.loads(
-            run(["truth", "delta", "status", "READY", "--json"], env).stdout
-        )
+        truth_echo = json_data(["truth", "delta", "status", "READY", "--json"], env)
         assert truths(truth_echo, "delta") == {"status": "READY"}
 
         # --json: rm reports the removed names (entities are gone,
         # so there is nothing to open — the shape is a deletion receipt).
-        del_echo = json.loads(run(["rm", "gamma", "--json"], env).stdout)
+        del_echo = json_data(["rm", "gamma", "--json"], env)
         assert del_echo == {"deleted": ["gamma"]}
 
 
@@ -614,15 +678,14 @@ def agent_feature_checks() -> None:
         assert "alice" in stats_out
 
         # 6b. stats --json --per-entity
-        stats_json = json.loads(run(["--json", "stats", "--per-entity"], env).stdout)
+        stats_json = json_data(["--json", "stats", "--per-entity"], env)
         assert stats_json["entities"] == 2
         assert stats_json["relations"] == 1
         assert stats_json["entitiesDetailed"][0]["name"] == "alice"
 
         # 7. JSON error formatting
         failed = run_expect_failure(["--json", "import", "nonexistent_abc.json"], env)
-        err_json = json.loads(failed.stdout)
-        assert err_json["status"] == "failed"
+        err_json = validate_error(json.loads(failed.stdout))
         assert "No such file or directory" in err_json["error"]
 
 

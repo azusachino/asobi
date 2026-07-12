@@ -1,11 +1,29 @@
 # Changelog
 
+## v0.5.2 — Versioned CLI Responses
+
+### Breaking / Upgrade
+
+- Existing JSON graph and mutation payloads remain unchanged.
+- Use `asobi schema` or `asobi schema --command NAME` to discover and validate command-specific JSON Schemas.
+- The schema version is independent from storage/export `apiVersion`; the initial schema version is `1`.
+
+### Added
+
+- JSON Schema derives for response data and a schema-validation gate in the CLI integration verifier.
+
+### Changed
+
+- Unified logging on `tracing`'s standard compact formatter with local-time timestamps; the top-level fatal error is now emitted through `tracing` too, so all diagnostics share one format and sink (stderr).
+
 ## v0.5.1 — Local-Time Logs & Leaner Builds
 
 ### Fixed
+
 - Log timestamps now render in the machine's local timezone instead of UTC, reusing the existing `chrono` dependency (no new crates, and avoiding tracing-subscriber's unsound `local-time` feature).
 
 ### Changed
+
 - Trimmed the `documents` feature footprint: `fastembed` is pinned to text-only models over rustls/ureq, dropping the image-codec and reqwest/hyper/native-tls subtrees (~115 fewer crates).
 - Trimmed the default build: `clap` drops its color and suggestion stack (7 fewer crates).
 
@@ -37,12 +55,14 @@ Document embeddings are 768-dimensional. Existing document chunks are dropped au
 ## v0.4.1 — Review Hardening & Performance
 
 ### Fixed
+
 - Scoped `rm-obs --id` and `update-obs --id` mutations to the named entity.
 - Preserved truths across JSON export/import and rebuilt observation FTS after legacy ID migration.
 - Hardened skill repository cloning against option and extended-transport injection.
 - Made reset clear topics and vector chunks, exports use `0600` permissions, and duplicate `new --obs` calls idempotent.
 
 ### Changed
+
 - Standardized skill installation and vector insertion on immediate transactions.
 - Batched recall topic metadata lookups and moved fastembed inference to blocking worker threads.
 - Corrected Compact help text to describe duplicate-topic reporting.
@@ -50,6 +70,7 @@ Document embeddings are 768-dimensional. Existing document chunks are dropped au
 ## v0.4.0 — SQLite Concurrency & Sandbox Resiliency
 
 ### Added
+
 - **Dynamic Busy Timeout**: Read and apply lock timeout dynamically from `ASOBI_BUSY_TIMEOUT` (defaulting to 15000ms).
 - **Actionable Open Errors**: Wrapped database directory creation and database building steps with detailed contexts including the resolved file path and workspace setup hints.
 - **Journal Mode Override & Fallback**: Support explicit `ASOBI_JOURNAL_MODE` configuration and fall back automatically to `DELETE` journal mode if WAL's shared memory (`-shm` / `-wal`) allocation fails.
@@ -57,14 +78,15 @@ Document embeddings are 768-dimensional. Existing document chunks are dropped au
 - **Concurrency regression test**: Added a multi-process concurrency integration test suite (`tests/concurrency_test.rs`) verifying execution under bursty lock contention.
 
 ### Changed
+
 - **Schema-Version Gate**: Short-circuits connection setup (skipping setup DDLs) if `PRAGMA user_version` matches `SCHEMA_VERSION = 1`, making warm starts completely lock-free.
 - **Immediate Setup Lock**: Wrapped cold setup and migrations in `BEGIN IMMEDIATE` and re-check versioning to resolve concurrent initialization race conditions.
 - **Immediate Write Transactions**: Configured all graph write operations (`create_entities`, `add_observations`, `create_relations`, `delete_entities`, `delete_observations`, and `delete_relations`) to use `TransactionBehavior::Immediate` to prevent deadlocks under concurrency.
 
 ## v0.3.0 — Agent-Centric Performance & Precision
 
-
 ### Added
+
 - **Sequential Observation IDs**: Transitioned the database schema of `asobi_observations.id` from random UUID strings to an `AUTOINCREMENT INTEGER`. Existing databases are automatically migrated in-place upon initialization.
 - **Detailed Traversal with IDs (`show --with-ids`)**: The detailed output now includes unique integer `id` values for all observations.
 - **Subtree Relation Expansion (`show --expand <type>`)**: Added a repeatable `--expand` flag to `show` (e.g. `--expand part_of`), which recursively traverses and resolves related entities in a single JSON payload.
@@ -74,6 +96,7 @@ Document embeddings are 768-dimensional. Existing document chunks are dropped au
 - **Consistent JSON receipts**: Global `--json` flag now outputs structured receipts for `backup`, `restore`, `import`, and `reset` commands.
 
 ### Changed
+
 - **$O(1)$ Search Deduplication**: Refactored `search_nodes_with_limit` duplicate resolution to use `HashSet` instead of $O(n)$ `Vec::contains` lookups.
 - **Dropped Prefix Deletion**: Replaced the short-lived `rm-obs --prefix` flag with ID-based deletions to prevent concurrency issues and ensure strict matching logic.
 

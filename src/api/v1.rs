@@ -66,7 +66,7 @@ pub struct SearchQuery {
 
 // ---- Value types ----------------------------------------------------------
 
-#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Default, schemars::JsonSchema, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Stats {
     pub entities: usize,
@@ -74,7 +74,7 @@ pub struct Stats {
     pub observations: usize,
 }
 
-#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Default, schemars::JsonSchema, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BackendCapabilities {
     pub backend: String,
@@ -88,7 +88,7 @@ pub struct BackendCapabilities {
     pub file_backup: bool,
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, schemars::JsonSchema, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SearchResult {
     pub id: String,
@@ -97,7 +97,7 @@ pub struct SearchResult {
     pub score: f64,
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, schemars::JsonSchema, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DocumentChunk {
     pub id: String,
@@ -108,7 +108,7 @@ pub struct DocumentChunk {
     pub embedding: Vec<f32>,
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, schemars::JsonSchema, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DocumentSearchResult {
     pub id: String,
@@ -121,7 +121,7 @@ pub struct DocumentSearchResult {
 /// A superseded truth value with its valid-time interval.  The current value
 /// lives in the graph; each overwrite closes the previous value's interval and
 /// records it here, so callers can ask "what was true when".
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, schemars::JsonSchema, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TruthVersion {
     pub key: String,
@@ -130,7 +130,7 @@ pub struct TruthVersion {
     pub valid_until: String,
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, schemars::JsonSchema, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TopicSnapshot {
     pub id: String,
@@ -139,7 +139,7 @@ pub struct TopicSnapshot {
     pub body: String,
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, schemars::JsonSchema, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BackendHealth {
     pub backend: String,
@@ -150,7 +150,7 @@ pub struct BackendHealth {
 /// Identity and compatibility metadata for the selected backend.  The state
 /// identifier is descriptive only; resolving its concrete path remains a
 /// backend concern.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, schemars::JsonSchema, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BackendInfo {
     pub backend: String,
@@ -162,7 +162,7 @@ pub struct BackendInfo {
 
 /// A persisted skill record.  Git/frontmatter parsing belongs to the
 /// application layer; this type is only the storage-facing result.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, schemars::JsonSchema, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SkillRecord {
     pub entity_name: String,
@@ -174,7 +174,7 @@ pub struct SkillRecord {
 
 /// Logical, backend-neutral graph snapshot used by export/import.  It is not
 /// a physical database backup and must not contain driver-specific state.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, schemars::JsonSchema, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Snapshot {
     pub api_version: u32,
@@ -184,7 +184,7 @@ pub struct Snapshot {
     pub graph: Graph,
 }
 
-#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Default, schemars::JsonSchema, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ImportReport {
     pub entities_created: usize,
@@ -194,14 +194,14 @@ pub struct ImportReport {
     pub truths_updated: usize,
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, schemars::JsonSchema, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BackupRequest {
     pub destination: std::path::PathBuf,
     pub keep: usize,
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, schemars::JsonSchema, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BackupReceipt {
     pub path: std::path::PathBuf,

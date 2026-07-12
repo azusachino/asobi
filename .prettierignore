@@ -1,0 +1,7 @@
+# Prettier does not read .gitignore; mirror the build/data dirs so it never
+# reformats vendored, generated, or runtime files.
+target/
+.asobi/
+.fastembed_cache/
+.venv/
+node_modules/
