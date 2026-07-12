@@ -21,8 +21,8 @@ Asobi maintains a persistent Knowledge Graph of project facts, user preferences,
 One graph, a few node parts — knowing which to write is the skill:
 
 - **Entity** — a named node with a `type`.
-- **Observation** — append-only log line, capped (oldest evicted past the limit, default 50). The *trail*.
-- **Truth** — a `key→value` fact that upserts. The *current state* (`status`, `version`).
+- **Observation** — append-only log line, capped (oldest evicted past the limit, default 50). The _trail_.
+- **Truth** — a `key→value` fact that upserts. The _current state_ (`status`, `version`).
 - **Relation** — directed edge `(from, to, type)`.
 - **Skill** — an installed instruction: Markdown body + `description`/`source`/`version` truths.
 
@@ -77,19 +77,16 @@ Returns a subgraph (same payload shape) of entities matching `QUERY`. Use `asobi
 
 Supports filtering the search results by matching entity truths via repeatable `--where KEY=VALUE` filters (e.g. `asobi search --where status=READY`). If multiple `--where` filters are specified, they are treated as an intersection (AND condition).
 
-Relations between matched entities are included. Results are ordered by BM25 relevance (FTS matches first, then name/type matches).
-The default limit is 100 matched nodes; use `--limit` for larger ranked exports.
-Use `graph` when the caller needs the full graph; do not use a broad
-`search` query as an implicit export.
+Relations between matched entities are included. Results are ordered by BM25 relevance (FTS matches first, then name/type matches). The default limit is 100 matched nodes; use `--limit` for larger ranked exports. Use `graph` when the caller needs the full graph; do not use a broad `search` query as an implicit export.
 
 ```
 asobi show <NAME> [<NAME> ...] [--expand <RELATION_TYPE> ...] [--with-ids]
 ```
 
 Returns a subgraph for the named entities plus relations between them. Takes one or more names as positional args.
-* `--expand <RELATION_TYPE>`: repeatably expand relations of a given type. Useful for loading subtrees (e.g. `--expand part_of` to eagerly load related epic tasks).
-* `--with-ids`: include `observationsDetailed` list showing exact unique integer IDs (`id`) for each observation.
 
+- `--expand <RELATION_TYPE>`: repeatably expand relations of a given type. Useful for loading subtrees (e.g. `--expand part_of` to eagerly load related epic tasks).
+- `--with-ids`: include `observationsDetailed` list showing exact unique integer IDs (`id`) for each observation.
 
 ### Truths
 
@@ -97,9 +94,7 @@ Returns a subgraph for the named entities plus relations between them. Takes one
 asobi truth <NAME> <KEY> <VALUE>
 ```
 
-Add or update a truth key-value pair for the named entity. Overwriting a truth
-records the superseded value in an append-only history with its valid-time window,
-so the current state stays a single value while the change trail is preserved.
+Add or update a truth key-value pair for the named entity. Overwriting a truth records the superseded value in an append-only history with its valid-time window, so the current state stays a single value while the change trail is preserved.
 
 ```
 asobi rm-truth <NAME> <KEY>
@@ -111,12 +106,7 @@ Delete a specific truth key from the named entity.
 asobi history <NAME> [KEY]
 ```
 
-Show an entity's truth change history — each superseded value with the
-`validFrom`/`validUntil` interval it was current for, newest first. Pass a `KEY`
-to narrow to a single truth. The value that is current now lives on the entity
-(`show`), not in history. History is recorded automatically on every overwrite and
-never appears in `search`/`graph`/`show`, so the default reads stay unchanged.
-It is local physical state and is **not** carried by JSON `export`/`import`.
+Show an entity's truth change history — each superseded value with the `validFrom`/`validUntil` interval it was current for, newest first. Pass a `KEY` to narrow to a single truth. The value that is current now lives on the entity (`show`), not in history. History is recorded automatically on every overwrite and never appears in `search`/`graph`/`show`, so the default reads stay unchanged. It is local physical state and is **not** carried by JSON `export`/`import`.
 
 ### Skills Subsystem
 
@@ -169,8 +159,8 @@ asobi rm-obs <NAME> <CONTENT> [--prefix]
 ```
 
 Removes matching observations from the named entity.
-* `--prefix`: deletes all observations under the entity matching the content string as a prefix, rather than requiring an exact match.
 
+- `--prefix`: deletes all observations under the entity matching the content string as a prefix, rather than requiring an exact match.
 
 ```
 asobi unlink <FROM> <TO> <RELATION_TYPE>
@@ -180,8 +170,7 @@ Removes a single relation by its three-part key.
 
 ### Document ingestion / vector recall
 
-Available only in binaries built with Cargo feature `documents`
-(`cargo build --features documents` or `make build-documents`).
+Available only in binaries built with Cargo feature `documents` (`cargo build --features documents` or `make build-documents`).
 
 ```
 asobi ingest <PATH>
@@ -313,8 +302,7 @@ asobi truth "<project>:session" "status" "IN_PROGRESS"
 
 ## Output Format Reference
 
-**Graph commands** return their documented JSON payload directly. Use
-`asobi schema --command graph` to discover the exact shape.
+**Graph commands** return their documented JSON payload directly. Use `asobi schema --command graph` to discover the exact shape.
 
 `graph` and `search` use a **lazy-read contract** (they do not populate observation content or skill bodies, returning only `observationCount` and `truths`):
 

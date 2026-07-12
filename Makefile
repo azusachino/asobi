@@ -20,7 +20,7 @@ help:
 	@echo "  bench-vector-criterion - Run statistical vector-search benchmarks"
 	@echo "  bench-alloc   - Write a DHAT allocation profile for graph hot paths"
 	@echo "  bench-sql-plans - Print query plans for graph hot-path SQL"
-	@echo "  fmt           - Format Rust, Python, JSON, and YAML code"
+	@echo "  fmt           - Format Rust, Python, JSON, YAML, and Markdown"
 	@echo "  fmt-check     - Verify formatting without writing (gate; run fmt to fix)"
 	@echo "  lint          - Run Rust clippy and Python ruff"
 	@echo "  check         - Run format check, lint, and tests (CI baseline, libSQL only)"
@@ -87,12 +87,12 @@ bench-sql-plans:
 
 fmt:
 	cargo fmt
-	bun x prettier --write "**/*.{json,yaml,yml}"
+	bun x prettier --write "**/*.{json,yaml,yml,md}"
 	ruff format .
 
 fmt-check:
 	cargo fmt --check
-	bun x prettier --check "**/*.{json,yaml,yml}"
+	bun x prettier --check "**/*.{json,yaml,yml,md}"
 	ruff format --check .
 
 lint:

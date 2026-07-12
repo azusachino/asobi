@@ -1,7 +1,7 @@
 # Specification: Sequential Observation IDs & Agent Precision
 
 **Date**: 2026-07-01  
-**Status**: Implemented (v0.3.0)  
+**Status**: Implemented (v0.3.0)
 
 ---
 
@@ -14,6 +14,7 @@ asobi rm-obs my-project "next: implement FTS5 index"
 ```
 
 This model had three major drawbacks:
+
 1. **High Token Overhead (Write/Delete Amplification)**: An agent wanting to edit or delete an observation had to copy and send the entire observation text string over command line arguments. For large logs, this resulted in massive token consumption.
 2. **Ambiguity**: If two observations under the same entity had the same content string, updating or deleting one would unintentionally modify or delete both.
 3. **Database Lookups**: Deletion required full-text scans or string indexing on the `content` field rather than $O(1)$ primary key indexing.
@@ -22,9 +23,10 @@ This model had three major drawbacks:
 
 ## 2. Solution: Sequential Observation IDs
 
-We transition `asobi_observations` to use an `INTEGER PRIMARY KEY AUTOINCREMENT` for the observation identifier. 
+We transition `asobi_observations` to use an `INTEGER PRIMARY KEY AUTOINCREMENT` for the observation identifier.
 
 ### 2.1 Database Schema
+
 The schema for `asobi_observations` is updated to:
 
 ```sql
@@ -40,6 +42,7 @@ CREATE TABLE asobi_observations (
 Since the `id` column is an alias for SQLite's 64-bit integer `rowid`, FTS5 triggers that reference `new.rowid` and `old.rowid` remain perfectly functional without schema logic changes.
 
 ### 2.2 Eager detailed representation
+
 When an agent or user requests detailed entity views via `asobi show --with-ids`, observations are serialized inside an `observationsDetailed` JSON field. Each observation item contains its unique integer `id`:
 
 ```json
@@ -48,10 +51,7 @@ When an agent or user requests detailed entity views via `asobi show --with-ids`
     {
       "name": "alice",
       "entityType": "person",
-      "observations": [
-        "status: active",
-        "next: code"
-      ],
+      "observations": ["status: active", "next: code"],
       "observationsDetailed": [
         { "id": 1, "content": "status: active" },
         { "id": 2, "content": "next: code" }
@@ -65,11 +65,11 @@ When an agent or user requests detailed entity views via `asobi show --with-ids`
 
 ### 2.3 CLI commands
 
-* **Delete by ID**:
+- **Delete by ID**:
   ```bash
   asobi rm-obs my-entity 1 --id
   ```
-* **Update by ID**:
+- **Update by ID**:
   ```bash
   asobi update-obs my-entity 2 "next: code tests" --id
   ```
@@ -100,9 +100,11 @@ To support seamless upgrades of existing databases without data loss or manual s
 ## 4. Efficiency Evaluation
 
 ### 4.1 Token Efficiency
-* **String-Match Deletion**: To delete an observation containing $N$ words, the CLI command args take $N$ tokens. For a typical 50-word observation, this is $\sim 65$ tokens (including command overhead).
-* **ID-Match Deletion**: Deletion targets a simple integer (e.g. `1`). This takes exactly 1 token, representing a **$98\%$ token saving** for large updates or deletions.
+
+- **String-Match Deletion**: To delete an observation containing $N$ words, the CLI command args take $N$ tokens. For a typical 50-word observation, this is $\sim 65$ tokens (including command overhead).
+- **ID-Match Deletion**: Deletion targets a simple integer (e.g. `1`). This takes exactly 1 token, representing a **$98\%$ token saving** for large updates or deletions.
 
 ### 4.2 Query and Execution Efficiency
-* **Primary Key Indexing**: Finding, deleting, or updating a row by an integer primary key is a direct B-tree lookup ($O(\log N)$ or $O(1)$ in SQLite), avoiding string comparison operations on the `content` field.
-* **Compact Sorting**: Sorting is done via `ORDER BY id` instead of string datetimes (`ORDER BY created_at, id`). Sorting on an integer primary key is highly optimized and index-backed in SQLite, bypassing text comparison overhead.
+
+- **Primary Key Indexing**: Finding, deleting, or updating a row by an integer primary key is a direct B-tree lookup ($O(\log N)$ or $O(1)$ in SQLite), avoiding string comparison operations on the `content` field.
+- **Compact Sorting**: Sorting is done via `ORDER BY id` instead of string datetimes (`ORDER BY created_at, id`). Sorting on an integer primary key is highly optimized and index-backed in SQLite, bypassing text comparison overhead.
