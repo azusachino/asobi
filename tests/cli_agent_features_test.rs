@@ -67,7 +67,8 @@ fn test_cli_agent_features() {
         .expect("failed to execute asobi");
     assert!(output.status.success());
     let stdout_str = String::from_utf8(output.stdout).unwrap();
-    let graph: serde_json::Value = serde_json::from_str(&stdout_str).unwrap();
+    let envelope: serde_json::Value = serde_json::from_str(&stdout_str).unwrap();
+    let graph = &envelope["data"];
     let alice = &graph["entities"][0];
     let detailed_obs = alice["observationsDetailed"]
         .as_array()
@@ -115,7 +116,8 @@ fn test_cli_agent_features() {
         .expect("failed to execute asobi");
     assert!(output.status.success());
     let stdout_str = String::from_utf8(output.stdout).unwrap();
-    let graph: serde_json::Value = serde_json::from_str(&stdout_str).unwrap();
+    let envelope: serde_json::Value = serde_json::from_str(&stdout_str).unwrap();
+    let graph = &envelope["data"];
     let alice = &graph["entities"][0];
     let detailed_obs = alice["observationsDetailed"]
         .as_array()
@@ -142,7 +144,8 @@ fn test_cli_agent_features() {
         .expect("failed to execute asobi");
     assert!(output.status.success());
     let stdout_str = String::from_utf8(output.stdout).unwrap();
-    let graph: serde_json::Value = serde_json::from_str(&stdout_str).unwrap();
+    let envelope: serde_json::Value = serde_json::from_str(&stdout_str).unwrap();
+    let graph = &envelope["data"];
     let entities = graph["entities"].as_array().unwrap();
     let mut names: Vec<&str> = entities
         .iter()
@@ -173,8 +176,9 @@ fn test_cli_agent_features() {
         .expect("failed to execute asobi");
     assert!(output.status.success());
     let stdout_str = String::from_utf8(output.stdout).unwrap();
-    let stats_json: serde_json::Value =
+    let stats_envelope: serde_json::Value =
         serde_json::from_str(&stdout_str).expect("Expected stats to be JSON");
+    let stats_json = &stats_envelope["data"];
     assert_eq!(stats_json["entities"], 2);
     assert_eq!(stats_json["relations"], 1);
     let detailed = stats_json["entitiesDetailed"].as_array().unwrap();
@@ -192,9 +196,10 @@ fn test_cli_agent_features() {
     let stdout_str = String::from_utf8(output.stdout).unwrap();
     let err_json: serde_json::Value =
         serde_json::from_str(&stdout_str).expect("Expected stdout to be JSON error");
-    assert_eq!(err_json["status"], "failed");
+    assert_eq!(err_json["schemaVersion"], 1);
+    assert_eq!(err_json["ok"], false);
     assert!(
-        err_json["error"]
+        err_json["error"]["message"]
             .as_str()
             .unwrap()
             .contains("No such file or directory")

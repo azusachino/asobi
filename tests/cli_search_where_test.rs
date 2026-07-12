@@ -81,7 +81,8 @@ fn test_cli_search_where_only() {
     );
 
     let stdout_str = String::from_utf8(output.stdout).unwrap();
-    let graph: serde_json::Value = serde_json::from_str(&stdout_str).unwrap();
+    let envelope: serde_json::Value = serde_json::from_str(&stdout_str).unwrap();
+    let graph = &envelope["data"];
 
     let entities = graph["entities"]
         .as_array()

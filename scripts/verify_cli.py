@@ -57,7 +57,17 @@ def run_expect_failure(
 
 
 def graph(args: list[str], env: dict[str, str]) -> dict:
-    return json.loads(run(args, env).stdout)
+    envelope = json.loads(run(args, env).stdout)
+    assert envelope["schemaVersion"] == 1
+    assert envelope["ok"] is True
+    assert "data" in envelope
+    assert "error" not in envelope
+    return envelope["data"]
+
+
+def json_data(args: list[str], env: dict[str, str]) -> dict:
+    """Return the data payload from a successful versioned response."""
+    return graph(args, env)
 
 
 def entity_names(payload: dict) -> set[str]:
@@ -453,17 +463,15 @@ def batch_and_json_checks() -> None:
         assert "triple" in bad_triples.stderr.lower()
 
         # --json: new echoes the created entity to stdout.
-        echoed = json.loads(run(["new", "delta", "task", "--json"], env).stdout)
+        echoed = json_data(["new", "delta", "task", "--json"], env)
         assert "delta" in entity_names(echoed)
 
         # --json: obs returns the affected entity with its trail.
-        obs_echo = json.loads(run(["obs", "delta", "first obs", "--json"], env).stdout)
+        obs_echo = json_data(["obs", "delta", "first obs", "--json"], env)
         assert observations(obs_echo, "delta") == ["first obs"]
 
         # --json: link shows the relation among its endpoints.
-        rel_echo = json.loads(
-            run(["link", "delta", "alpha", "uses", "--json"], env).stdout
-        )
+        rel_echo = json_data(["link", "delta", "alpha", "uses", "--json"], env)
         assert {
             "from": "delta",
             "to": "alpha",
@@ -471,14 +479,12 @@ def batch_and_json_checks() -> None:
         } in rel_echo["relations"]
 
         # --json: truth / rm-truth return the entity's current truths.
-        truth_echo = json.loads(
-            run(["truth", "delta", "status", "READY", "--json"], env).stdout
-        )
+        truth_echo = json_data(["truth", "delta", "status", "READY", "--json"], env)
         assert truths(truth_echo, "delta") == {"status": "READY"}
 
         # --json: rm reports the removed names (entities are gone,
         # so there is nothing to open — the shape is a deletion receipt).
-        del_echo = json.loads(run(["rm", "gamma", "--json"], env).stdout)
+        del_echo = json_data(["rm", "gamma", "--json"], env)
         assert del_echo == {"deleted": ["gamma"]}
 
 
@@ -614,7 +620,7 @@ def agent_feature_checks() -> None:
         assert "alice" in stats_out
 
         # 6b. stats --json --per-entity
-        stats_json = json.loads(run(["--json", "stats", "--per-entity"], env).stdout)
+        stats_json = json_data(["--json", "stats", "--per-entity"], env)
         assert stats_json["entities"] == 2
         assert stats_json["relations"] == 1
         assert stats_json["entitiesDetailed"][0]["name"] == "alice"
@@ -622,8 +628,9 @@ def agent_feature_checks() -> None:
         # 7. JSON error formatting
         failed = run_expect_failure(["--json", "import", "nonexistent_abc.json"], env)
         err_json = json.loads(failed.stdout)
-        assert err_json["status"] == "failed"
-        assert "No such file or directory" in err_json["error"]
+        assert err_json["schemaVersion"] == 1
+        assert err_json["ok"] is False
+        assert "No such file or directory" in err_json["error"]["message"]
 
 
 if __name__ == "__main__":

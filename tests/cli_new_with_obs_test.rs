@@ -53,7 +53,8 @@ fn test_cli_new_with_obs() {
 
     assert!(output.status.success());
     let stdout_str = String::from_utf8(output.stdout).unwrap();
-    let graph: serde_json::Value = serde_json::from_str(&stdout_str).unwrap();
+    let envelope: serde_json::Value = serde_json::from_str(&stdout_str).unwrap();
+    let graph = &envelope["data"];
 
     // The returned JSON structure from show contains entities
     let entities = graph["entities"]

@@ -5,6 +5,7 @@ use asobi::api::{
 };
 use asobi::application::AsobiRuntime;
 use asobi::paths::AsobiPaths;
+use asobi::response::{ErrorKind, ResponseError, emit, emit_err};
 use clap::{Parser, Subcommand};
 use schemars::JsonSchema;
 use serde::Serialize;
@@ -482,11 +483,13 @@ async fn main() {
 
     if let Err(e) = run_cli(cli).await {
         if json {
-            let error_json = serde_json::json!({
-                "status": "failed",
-                "error": e.to_string()
-            });
-            println!("{}", serde_json::to_string_pretty(&error_json).unwrap());
+            let response_error = ResponseError {
+                kind: ErrorKind::Internal,
+                message: e.to_string(),
+            };
+            if emit_err(&response_error).is_err() {
+                eprintln!("Error: {:?}", e);
+            }
         } else {
             eprintln!("Error: {:?}", e);
         }
@@ -546,7 +549,7 @@ async fn run_cli(cli: Cli) -> Result<()> {
                     let results =
                         asobi::recall::recall(&query, backend, embedder.as_ref(), limit).await?;
                     if json {
-                        println!("{}", serde_json::to_string_pretty(&results)?);
+                        emit(results)?;
                     } else if results.is_empty() {
                         info!("No results found.");
                     } else {
@@ -671,17 +674,14 @@ async fn run_cli(cli: Cli) -> Result<()> {
         }
         Commands::History { name, key } => {
             let history = backend.truth_history(&name, key.as_deref()).await?;
-            println!("{}", serde_json::to_string_pretty(&history)?);
+            emit(history)?;
         }
         Commands::Rm { names } => {
             let deleted = names.clone();
             backend.delete_entities(names).await?;
             info!("Entities deleted.");
             if json {
-                println!(
-                    "{}",
-                    serde_json::to_string_pretty(&DeletedReceipt { deleted })?
-                );
+                emit(DeletedReceipt { deleted })?;
             }
         }
         Commands::RmObs { name, content, id } => {
@@ -751,7 +751,7 @@ async fn run_cli(cli: Cli) -> Result<()> {
         }
         Commands::Graph => {
             let graph = backend.read_graph().await?;
-            println!("{}", serde_json::to_string_pretty(&graph)?);
+            emit(graph)?;
         }
         Commands::Search {
             query,
@@ -774,7 +774,7 @@ async fn run_cli(cli: Cli) -> Result<()> {
                     filters: parsed_filters,
                 })
                 .await?;
-            println!("{}", serde_json::to_string_pretty(&graph)?);
+            emit(graph)?;
         }
         Commands::Show {
             names,
@@ -788,7 +788,7 @@ async fn run_cli(cli: Cli) -> Result<()> {
                     expand,
                 })
                 .await?;
-            println!("{}", serde_json::to_string_pretty(&graph)?);
+            emit(graph)?;
         }
         Commands::Stats { per_entity } => {
             let db_path = "provider-managed";
@@ -830,17 +830,14 @@ async fn run_cli(cli: Cli) -> Result<()> {
                     None
                 };
 
-                println!(
-                    "{}",
-                    serde_json::to_string_pretty(&StatsReceipt {
-                        entities,
-                        relations,
-                        observations,
-                        database_path: db_path,
-                        journal_mode,
-                        entities_detailed,
-                    })?
-                );
+                emit(StatsReceipt {
+                    entities,
+                    relations,
+                    observations,
+                    database_path: db_path,
+                    journal_mode,
+                    entities_detailed,
+                })?;
             } else {
                 println!("Database Path:  {}", db_path);
                 println!("Journal Mode:   {}", journal_mode);
@@ -881,14 +878,11 @@ async fn run_cli(cli: Cli) -> Result<()> {
         Commands::Capabilities => {
             let capabilities = backend.capabilities().await?;
             let health = backend.health().await?;
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&CapabilitiesReceipt {
-                    api_version: asobi::api::API_VERSION,
-                    capabilities,
-                    health,
-                })?
-            );
+            emit(CapabilitiesReceipt {
+                api_version: asobi::api::API_VERSION,
+                capabilities,
+                health,
+            })?;
         }
 
         Commands::Export {
@@ -901,13 +895,13 @@ async fn run_cli(cli: Cli) -> Result<()> {
             } else {
                 backend.read_graph_scoped(&scope, rationale).await?
             };
-            let json = serde_json::to_string_pretty(&graph)?;
             if let Some(path) = output {
+                let json = serde_json::to_string_pretty(&graph)?;
                 std::fs::write(&path, json)?;
                 asobi::application::restrict_permissions(std::path::Path::new(&path), 0o600)?;
                 info!("Graph exported to {}", path);
             } else {
-                println!("{}", json);
+                emit(graph)?;
             }
         }
         Commands::Import { file } => {
@@ -1205,7 +1199,7 @@ async fn emit_nodes(store: &impl GraphStore, names: Vec<String>) -> Result<()> {
             ..Default::default()
         })
         .await?;
-    println!("{}", serde_json::to_string_pretty(&graph)?);
+    emit(graph)?;
     Ok(())
 }
 

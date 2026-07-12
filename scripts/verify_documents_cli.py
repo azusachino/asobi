@@ -189,9 +189,10 @@ def ingest_then_query_recalls() -> None:
         )
         run(["ingest", str(doc)], env, home)
 
-        results = json.loads(
+        envelope = json.loads(
             run(["query", "zephyrquux handshake", "--json"], env, home).stdout
         )
+        results = envelope["data"]
         assert results, "ingested document not recalled by query"
         assert any("zephyrquux" in r["snippet"].lower() for r in results), (
             f"distinctive term missing from recall snippets: {results}"
@@ -212,9 +213,10 @@ def synced_topic_is_recallable() -> None:
         )
         run(["compact"], env, home)
 
-        results = json.loads(
+        envelope = json.loads(
             run(["query", "qubefable recall", "--json"], env, home).stdout
         )
+        results = envelope["data"]
         assert results, "synced preference topic not recalled after compact"
         assert any(
             "userpreferences" in r["topicId"].lower()
