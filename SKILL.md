@@ -32,9 +32,9 @@ One graph, a few node parts — knowing which to write is the skill:
 
 ## Command Reference
 
-Stream contract (matters for scripted callers): **mutating** commands print a one-line confirmation (`Entity 'X' created.`, `Observation added.`, etc.) to **stderr** and leave **stdout empty** on success — check the exit code, not stdout. **Read** commands (`graph`, `search`, `show`, `stats`, `export`) write their result to **stdout**; JSON responses use the versioned `{schemaVersion, ok, data|error}` envelope.
+Stream contract (matters for scripted callers): **mutating** commands print a one-line confirmation (`Entity 'X' created.`, `Observation added.`, etc.) to **stderr** and leave **stdout empty** on success — check the exit code, not stdout. **Read** commands (`graph`, `search`, `show`, `stats`, `export`) write their command-specific JSON result to **stdout**. Use `asobi schema --command NAME` to discover the payload contract.
 
-Pass the global `--json` flag to any mutating command to also print the affected entity/entities (and the relations among them) as JSON to **stdout** — e.g. `asobi new A task --json`. This removes the follow-up `show` round-trip; the payload is under `.data` and `rm --json` returns `{ "data": { "deleted": [...] } }` inside the envelope.
+Pass the global `--json` flag to any mutating command to also print the affected entity/entities (and the relations among them) as JSON to **stdout** — e.g. `asobi new A task --json`. This removes the follow-up `show` round-trip; `rm --json` returns `{ "deleted": [...] }`.
 
 ### Create
 
@@ -64,13 +64,13 @@ Creates one or more directed relations in a single call — pass repeated `FROM 
 asobi graph
 ```
 
-Returns the full graph in the response envelope. The graph payload is `{ "entities": [...], "relations": [...] }`; each entity includes all its observations.
+Returns the full graph as `{ "entities": [...], "relations": [...] }`; each entity includes all its observations. Use `asobi schema --command graph` for the payload contract.
 
 ```
 asobi search <QUERY> [--limit <N>] [--where KEY=VALUE ...]
 ```
 
-Returns an enveloped subgraph (same payload shape) of entities matching `QUERY`. Uses two search paths, merged in order:
+Returns a subgraph (same payload shape) of entities matching `QUERY`. Use `asobi schema --command search` for the payload contract. Uses two search paths, merged in order:
 
 1. **FTS5 on observations** — porter stemming + BM25 ranking. `"run"` matches `"running"`, `"tokio async"` ranks entities that contain both words higher. Supports FTS5 operators: `AND`, `OR`, `NOT`, prefix with `*` (e.g. `auth*`).
 2. **LIKE on entity name / type** — substring fallback, always runs. Catches exact-name lookups (`UserPreferences`) and entities with no observations.
@@ -313,8 +313,8 @@ asobi truth "<project>:session" "status" "IN_PROGRESS"
 
 ## Output Format Reference
 
-**Graph commands** return the versioned response envelope. The graph payload is
-available at `data.entities` and `data.relations`.
+**Graph commands** return their documented JSON payload directly. Use
+`asobi schema --command graph` to discover the exact shape.
 
 `graph` and `search` use a **lazy-read contract** (they do not populate observation content or skill bodies, returning only `observationCount` and `truths`):
 
@@ -372,7 +372,7 @@ available at `data.entities` and `data.relations`.
 }
 ```
 
-**Mutating commands** print a plain-text confirmation line to **stderr** (no JSON, stdout empty) unless global `--json` is passed. With `--json`, read the affected payload under `data`; on failure, branch on `error.kind`.
+**Mutating commands** print a plain-text confirmation line to **stderr** (no JSON, stdout empty) unless global `--json` is passed. With `--json`, read the affected payload directly.
 
 ---
 

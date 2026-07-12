@@ -1,8 +1,8 @@
 //! Domain types for the knowledge graph, shared across `db`, `main`, and
 //! `backup`. These are the canonical in-memory shapes for graph I/O; the JSON
 //! field names (camelCase) are the stable serialization contract for
-//! `graph` / `search` / `show` / `export`; CLI responses wrap these data shapes
-//! in the versioned `{schemaVersion, ok, data|error}` envelope.
+//! `graph` / `search` / `show` / `export`; `asobi schema` exposes their stable
+//! JSON Schemas for machine-readable compatibility.
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};

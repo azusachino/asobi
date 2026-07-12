@@ -4,15 +4,11 @@
 
 ### Breaking / Upgrade
 
-- JSON graph reads and successful commands using `--json` now return a
-  versioned `{schemaVersion, ok, data}` envelope. Update consumers to read
-  graph fields through `.data`.
-- JSON-mode failures return `{schemaVersion, ok: false, error}` with a stable
-  `error.kind` taxonomy instead of the legacy error shape.
-- Use `asobi schema` or `asobi schema --command NAME` to discover the response
-  envelope and command-specific JSON Schemas.
-- The response contract version is independent from storage/export `apiVersion`;
-  the initial response schema version is `1`.
+- Existing JSON graph and mutation payloads remain unchanged.
+- Use `asobi schema` or `asobi schema --command NAME` to discover and validate
+  command-specific JSON Schemas.
+- The schema version is independent from storage/export `apiVersion`; the
+  initial schema version is `1`.
 
 ### Added
 

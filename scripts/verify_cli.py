@@ -67,15 +67,14 @@ def run_expect_failure(
 
 def graph(args: list[str], env: dict[str, str]) -> dict:
     command = args[0]
-    envelope = validate_response(args, env, command)
-    return envelope["data"]
+    return validate_response(args, env, command)
 
 
 def validate_response(args: list[str], env: dict[str, str], command: str) -> dict:
-    envelope = json.loads(run(args, env).stdout)
+    payload = json.loads(run(args, env).stdout)
     schema = command_schema(command, env)
-    fastjsonschema.compile(schema, formats=_SCHEMA_FORMATS)(envelope)
-    return envelope
+    fastjsonschema.compile(schema, formats=_SCHEMA_FORMATS)(payload)
+    return payload
 
 
 def command_schema(command: str, env: dict[str, str]) -> dict:
@@ -86,22 +85,10 @@ def command_schema(command: str, env: dict[str, str]) -> dict:
     return _SCHEMAS[command]
 
 
-def validate_error(envelope: dict) -> dict:
-    assert envelope["schemaVersion"] == 1
-    assert envelope["ok"] is False
-    assert "error" in envelope
-    assert "data" not in envelope
-    assert envelope["error"]["kind"] in {
-        "not_found",
-        "conflict",
-        "invalid_input",
-        "unsupported",
-        "unavailable",
-        "backend",
-        "internal",
-    }
-    assert isinstance(envelope["error"]["message"], str)
-    return envelope
+def validate_error(payload: dict) -> dict:
+    assert payload["status"] == "failed"
+    assert isinstance(payload["error"], str)
+    return payload
 
 
 def json_data(args: list[str], env: dict[str, str]) -> dict:
@@ -125,7 +112,7 @@ def json_data(args: list[str], env: dict[str, str]) -> dict:
         "update-obs",
     }
     command = next(arg for arg in args if arg in commands)
-    return validate_response(args, env, command)["data"]
+    return validate_response(args, env, command)
 
 
 def entity_names(payload: dict) -> set[str]:
@@ -148,17 +135,14 @@ def truths(payload: dict, name: str) -> dict[str, str]:
 
 def schema_checks(env: dict[str, str]) -> None:
     index = json.loads(run(["schema"], env).stdout)
-    assert index["responseSchemaVersion"] == 1
+    assert index["schemaVersion"] == 1
     assert "commands" in index
     assert "graph" in index["commands"]
     assert "properties" in index["commands"]["graph"]
 
     graph_schema = json.loads(run(["schema", "--command", "graph"], env).stdout)
     fastjsonschema.compile(graph_schema, formats=_SCHEMA_FORMATS)
-    properties = graph_schema["properties"]
-    assert properties["schemaVersion"]["const"] == 1
-    assert properties["ok"]["const"] is True
-    assert "data" in properties
+    assert graph_schema["x-asobi-schema-version"] == 1
 
 
 def main() -> None:
@@ -702,7 +686,7 @@ def agent_feature_checks() -> None:
         # 7. JSON error formatting
         failed = run_expect_failure(["--json", "import", "nonexistent_abc.json"], env)
         err_json = validate_error(json.loads(failed.stdout))
-        assert "No such file or directory" in err_json["error"]["message"]
+        assert "No such file or directory" in err_json["error"]
 
 
 if __name__ == "__main__":

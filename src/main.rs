@@ -5,7 +5,6 @@ use asobi::api::{
 };
 use asobi::application::AsobiRuntime;
 use asobi::paths::AsobiPaths;
-use asobi::response::{ErrorKind, Response, ResponseError, emit, emit_err};
 use clap::{Parser, Subcommand};
 use schemars::JsonSchema;
 use serde::Serialize;
@@ -238,7 +237,7 @@ enum Commands {
     },
     /// Report the API contract and selected backend capabilities
     Capabilities,
-    /// Emit JSON Schema for the versioned response envelope and command data
+    /// Emit JSON Schema for command payloads
     Schema {
         /// Restrict output to one command's response schema
         #[arg(long)]
@@ -489,16 +488,11 @@ async fn main() {
 
     if let Err(e) = run_cli(cli).await {
         if json {
-            let response_error = ResponseError {
-                kind: e
-                    .downcast_ref::<asobi::api::ApiError>()
-                    .map(ErrorKind::from)
-                    .unwrap_or(ErrorKind::Internal),
-                message: e.to_string(),
-            };
-            if emit_err(&response_error).is_err() {
-                eprintln!("Error: {:?}", e);
-            }
+            let error_json = serde_json::json!({
+                "status": "failed",
+                "error": e.to_string()
+            });
+            println!("{}", serde_json::to_string_pretty(&error_json).unwrap());
         } else {
             eprintln!("Error: {:?}", e);
         }
@@ -563,7 +557,7 @@ async fn run_cli(cli: Cli) -> Result<()> {
                     let results =
                         asobi::recall::recall(&query, backend, embedder.as_ref(), limit).await?;
                     if json {
-                        emit(results)?;
+                        print_json(results)?;
                     } else if results.is_empty() {
                         info!("No results found.");
                     } else {
@@ -688,14 +682,14 @@ async fn run_cli(cli: Cli) -> Result<()> {
         }
         Commands::History { name, key } => {
             let history = backend.truth_history(&name, key.as_deref()).await?;
-            emit(history)?;
+            print_json(history)?;
         }
         Commands::Rm { names } => {
             let deleted = names.clone();
             backend.delete_entities(names).await?;
             info!("Entities deleted.");
             if json {
-                emit(DeletedReceipt { deleted })?;
+                print_json(DeletedReceipt { deleted })?;
             }
         }
         Commands::RmObs { name, content, id } => {
@@ -765,7 +759,7 @@ async fn run_cli(cli: Cli) -> Result<()> {
         }
         Commands::Graph => {
             let graph = backend.read_graph().await?;
-            emit(graph)?;
+            print_json(graph)?;
         }
         Commands::Search {
             query,
@@ -788,7 +782,7 @@ async fn run_cli(cli: Cli) -> Result<()> {
                     filters: parsed_filters,
                 })
                 .await?;
-            emit(graph)?;
+            print_json(graph)?;
         }
         Commands::Show {
             names,
@@ -802,7 +796,7 @@ async fn run_cli(cli: Cli) -> Result<()> {
                     expand,
                 })
                 .await?;
-            emit(graph)?;
+            print_json(graph)?;
         }
         Commands::Stats { per_entity } => {
             let db_path = "provider-managed";
@@ -844,7 +838,7 @@ async fn run_cli(cli: Cli) -> Result<()> {
                     None
                 };
 
-                emit(StatsReceipt {
+                print_json(StatsReceipt {
                     entities,
                     relations,
                     observations,
@@ -892,7 +886,7 @@ async fn run_cli(cli: Cli) -> Result<()> {
         Commands::Capabilities => {
             let capabilities = backend.capabilities().await?;
             let health = backend.health().await?;
-            emit(CapabilitiesReceipt {
+            print_json(CapabilitiesReceipt {
                 api_version: asobi::api::API_VERSION,
                 capabilities,
                 health,
@@ -915,7 +909,7 @@ async fn run_cli(cli: Cli) -> Result<()> {
                 asobi::application::restrict_permissions(std::path::Path::new(&path), 0o600)?;
                 info!("Graph exported to {}", path);
             } else {
-                emit(graph)?;
+                print_json(graph)?;
             }
         }
         Commands::Import { file } => {
@@ -1213,19 +1207,21 @@ async fn emit_nodes(store: &impl GraphStore, names: Vec<String>) -> Result<()> {
             ..Default::default()
         })
         .await?;
-    emit(graph)?;
+    print_json(graph)?;
     Ok(())
 }
 
-fn schema_for_response<T: JsonSchema>() -> serde_json::Value {
-    let mut schema = serde_json::to_value(schemars::schema_for!(Response<T>))
+fn print_json<T: Serialize>(value: T) -> Result<()> {
+    println!("{}", serde_json::to_string_pretty(&value)?);
+    Ok(())
+}
+
+const CLI_SCHEMA_VERSION: u32 = 1;
+
+fn schema_for_data<T: JsonSchema>() -> serde_json::Value {
+    let mut schema = serde_json::to_value(schemars::schema_for!(T))
         .expect("response schemas must serialize to JSON");
-    schema["properties"]["schemaVersion"] = serde_json::json!({
-        "const": asobi::response::RESPONSE_SCHEMA_VERSION,
-        "type": "integer",
-    });
-    schema["properties"]["ok"] = serde_json::json!({ "const": true });
-    schema["required"] = serde_json::json!(["schemaVersion", "ok", "data"]);
+    schema["x-asobi-schema-version"] = serde_json::json!(CLI_SCHEMA_VERSION);
     schema
 }
 
@@ -1250,11 +1246,11 @@ fn emit_schema(command: Option<&str>) -> Result<()> {
         "update-obs",
     ] {
         let schema = match name {
-            "capabilities" => schema_for_response::<CapabilitiesReceipt>(),
-            "rm" => schema_for_response::<DeletedReceipt>(),
-            "stats" => schema_for_response::<StatsReceipt>(),
-            "history" => schema_for_response::<Vec<asobi::api::v1::TruthVersion>>(),
-            _ => schema_for_response::<asobi::model::Graph>(),
+            "capabilities" => schema_for_data::<CapabilitiesReceipt>(),
+            "rm" => schema_for_data::<DeletedReceipt>(),
+            "stats" => schema_for_data::<StatsReceipt>(),
+            "history" => schema_for_data::<Vec<asobi::api::v1::TruthVersion>>(),
+            _ => schema_for_data::<asobi::model::Graph>(),
         };
         commands.insert(name, schema);
     }
@@ -1262,7 +1258,7 @@ fn emit_schema(command: Option<&str>) -> Result<()> {
     #[cfg(feature = "documents")]
     commands.insert(
         "query",
-        schema_for_response::<Vec<asobi::recall::RecallResult>>(),
+        schema_for_data::<Vec<asobi::recall::RecallResult>>(),
     );
 
     if let Some(command) = command {
@@ -1272,8 +1268,7 @@ fn emit_schema(command: Option<&str>) -> Result<()> {
         println!("{}", serde_json::to_string_pretty(schema)?);
     } else {
         let index = serde_json::json!({
-            "responseSchemaVersion": asobi::response::RESPONSE_SCHEMA_VERSION,
-            "envelope": schema_for_response::<asobi::model::Graph>(),
+            "schemaVersion": CLI_SCHEMA_VERSION,
             "commands": commands,
         });
         println!("{}", serde_json::to_string_pretty(&index)?);
