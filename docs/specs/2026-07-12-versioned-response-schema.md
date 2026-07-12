@@ -1,6 +1,6 @@
 # Versioned Response Schema (v0.5.2)
 
-Status: planned · Date: 2026-07-12 · Breaking: yes (patch release to 0.5.2)
+Status: implemented · Date: 2026-07-12 · Breaking: yes (patch release to 0.5.2)
 
 ## Problem
 

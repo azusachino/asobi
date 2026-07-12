@@ -1,5 +1,25 @@
 # Changelog
 
+## v0.5.2 — Versioned CLI Responses
+
+### Breaking / Upgrade
+
+- JSON graph reads and successful commands using `--json` now return a
+  versioned `{schemaVersion, ok, data}` envelope. Update consumers to read
+  graph fields through `.data`.
+- JSON-mode failures return `{schemaVersion, ok: false, error}` with a stable
+  `error.kind` taxonomy instead of the legacy error shape.
+- Use `asobi schema` or `asobi schema --command NAME` to discover the response
+  envelope and command-specific JSON Schemas.
+- The response contract version is independent from storage/export `apiVersion`;
+  the initial response schema version is `1`.
+
+### Added
+
+- JSON Schema derives for response data and a schema-validation gate in the
+  CLI integration verifier.
+- Consistent unpadded local-time log formatting.
+
 ## v0.5.1 — Local-Time Logs & Leaner Builds
 
 ### Fixed
