@@ -1,6 +1,6 @@
-# Versioned Response Schema (v0.6.0)
+# Versioned Response Schema (v0.5.2)
 
-Status: planned · Date: 2026-07-12 · Breaking: yes (major-minor cut to 0.6.0)
+Status: planned · Date: 2026-07-12 · Breaking: yes (patch release to 0.5.2)
 
 ## Problem
 
@@ -21,7 +21,7 @@ the **response** contract for CLI stdout, which is a separate consumer surface.
 
 ## Decisions
 
-1. **Hard cut at 0.6.0.** All `--json` output becomes enveloped in one release;
+1. **Hard cut at 0.5.2.** All `--json` output becomes enveloped in one release;
    no opt-in transition flag. The primary consumer (the asobi agent skill) is
    updated in the same release.
 2. **JSON Schema always ships.** `schemars` is a normal (non-optional)
@@ -145,7 +145,7 @@ structs promoted out of `json!{}` (see Task 2). Generate with
 
 The envelope and its schema are one atomic contract — releasing the enveloped
 response without a discoverable schema is the half-measure this spec exists to
-avoid. Ship all of it in one PR / one release (v0.6.0). Ordered so the tree
+avoid. Ship all of it in one PR / one release (v0.5.2). Ordered so the tree
 builds after each step:
 
 1. Add `schemars` dep. Create `src/response.rs`: `Response<T>`, `ResponseError`,
@@ -170,7 +170,7 @@ builds after each step:
    `model.rs` doc comment, and the asobi `SKILL.md` (agents now read
    `.data.entities` and branch on `.error.kind`). Add
    `docs/response-contract.md` describing the envelope + version policy.
-8. `CHANGELOG.md` v0.6.0 with a **Breaking / Upgrade** section.
+8. `CHANGELOG.md` v0.5.2 with a **Breaking / Upgrade** section.
 
 ## Definition of done
 

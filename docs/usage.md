@@ -112,7 +112,7 @@ and use `export` / `backup` for full archival.
 
 ```bash
 asobi stats                                # Quick count of entities, relations, observations
-asobi graph | jq '.entities[] | select(.entityType == "session")'
+asobi graph | jq '.data.entities[] | select(.entityType == "session")'
 ```
 
 ### Backup, restore, and portable export
@@ -252,11 +252,42 @@ asobi truth "<project>:session" "status" "IN_PROGRESS"
 | `CodingStyle`       | `standard`   | Commit format, indentation, etc.             |
 | `ToolPreferences`   | `preference` | Nix, make, etc.                               |
 
+### Machine-readable response contract
+
+Graph reads and commands invoked with `--json` return a versioned envelope:
+
+```json
+{
+  "schemaVersion": 1,
+  "ok": true,
+  "data": { "entities": [], "relations": [] }
+}
+```
+
+On failure with `--json`, `ok` is `false` and `error` is present instead of
+`data`:
+
+```json
+{
+  "schemaVersion": 1,
+  "ok": false,
+  "error": { "kind": "not_found", "message": "not found: missing" }
+}
+```
+
+Use `asobi schema` to discover the envelope and command-specific JSON Schemas;
+use `asobi schema --command show` for one command. Consumers should read graph
+fields through `.data` and branch on `.error.kind`. The response schema version
+is independent from the storage/export `apiVersion`.
+
 ### Output format
 
 Asobi operates under a **lazy-read contract** to minimize token overhead.
 
-`graph` and `search` return a lazy JSON structure (excluding `observations` and skill `body`, only providing `truths` and `observationCount`):
+The `data` payload for `graph` and `search` is a lazy JSON structure (excluding
+`observations` and skill `body`, only providing `truths` and
+`observationCount`). The command output wraps this payload in the envelope
+described above:
 
 ```json
 {
