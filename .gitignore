@@ -14,6 +14,7 @@ asobi.db
 .DS_Store
 memory_export.json
 tools_list.json
+dhat-heap.json
 *.txt
 
 # ── Python (uv) ───────────────────────────────────────────────────────────────
@@ -30,4 +31,3 @@ __pycache__/
 .agents/CURRENT_TASK.md
 .agents/MEMORY.md
 .antigravitycli/
-

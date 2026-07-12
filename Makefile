@@ -1,4 +1,4 @@
-.PHONY: help build build-documents run test test-documents test-scripts test-turso-scripts test-documents-scripts verify-storage-boundary verify-libsql verify-turso bench-libsql bench-turso fmt fmt-check lint check check-documents check-turso bench clean init
+.PHONY: help build build-documents run test test-documents test-scripts test-turso-scripts test-documents-scripts verify-storage-boundary verify-libsql verify-turso bench-libsql bench-turso bench-criterion bench-vector-criterion bench-alloc bench-sql-plans fmt fmt-check lint check check-documents check-turso bench clean init
 
 # Default task: Show help
 help:
@@ -16,6 +16,10 @@ help:
 	@echo "  verify-turso - Run the experimental Turso CLI verification"
 	@echo "  bench-libsql - Run graph benchmarks against the default build"
 	@echo "  bench-turso - Build the Turso graph benchmark (set ASOBI_BACKEND=turso to select it)"
+	@echo "  bench-criterion - Run statistical graph hot-path benchmarks"
+	@echo "  bench-vector-criterion - Run statistical vector-search benchmarks"
+	@echo "  bench-alloc   - Write a DHAT allocation profile for graph hot paths"
+	@echo "  bench-sql-plans - Print query plans for graph hot-path SQL"
 	@echo "  fmt           - Format Rust, Python, JSON, and YAML code"
 	@echo "  fmt-check     - Verify formatting without writing (gate; run fmt to fix)"
 	@echo "  lint          - Run Rust clippy and Python ruff"
@@ -68,6 +72,18 @@ bench-libsql:
 #   ASOBI_BACKEND=turso make bench-turso
 bench-turso:
 	cargo bench --features turso-experimental --bench graph
+
+bench-criterion:
+	cargo bench --bench graph_criterion
+
+bench-vector-criterion:
+	cargo bench --features documents --bench vector_criterion
+
+bench-alloc:
+	cargo bench --bench allocations
+
+bench-sql-plans:
+	cargo bench --bench sql_plans
 
 fmt:
 	cargo fmt

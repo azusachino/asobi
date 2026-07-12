@@ -91,5 +91,5 @@ See the [Running in Sandboxed Environments](docs/usage.md#running-in-sandboxed-e
 - **Task runner**: `make` (Nix-wrapped). `make check` is the quality gate: rustfmt, Prettier, Ruff, Clippy with `-D warnings`, graph tests, document-feature tests, and both CLI verification scripts.
 - **Rust quality standard**: keep code rustfmt-clean, introduce no Clippy warnings, preserve single-threaded test isolation, and add regression coverage for behavior changes. Run `make check` before commits.
 - **Coverage**: with `cargo-tarpaulin` installed, run `cargo tarpaulin --all-features --out Html --output-dir coverage` and open `coverage/index.html`.
-- **Benchmarks**: run `make bench`; compare runs using the same `ASOBI_BENCH_SIZES` (default `1000,10000,50000`) and record the `avg=` values for the same commit and machine.
+- **Benchmarks**: run `make bench`; use [performance profiling](docs/benchmarks/profiling.md) for Criterion baselines, DHAT allocations, and SQL plans.
 - See [`docs/usage.md`](docs/usage.md) for the full CLI reference, [`docs/workflow.md`](docs/workflow.md) for the day-to-day and task dispatcher workflow, and [`docs/architecture.md`](docs/architecture.md) for design.

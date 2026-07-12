@@ -74,6 +74,8 @@ libsql = { version = "0.9", default-features = false, features = ["core"] }
 
 
 [dev-dependencies]
+criterion = { version = "0.7", features = ["async_tokio"] }
+dhat = "0.3"
 filetime = "0.2"
 tempfile = "3"
 
@@ -92,6 +94,23 @@ required-features = ["documents"]
 
 [[bench]]
 name = "skills"
+harness = false
+
+[[bench]]
+name = "graph_criterion"
+harness = false
+
+[[bench]]
+name = "vector_criterion"
+harness = false
+required-features = ["documents"]
+
+[[bench]]
+name = "allocations"
+harness = false
+
+[[bench]]
+name = "sql_plans"
 harness = false
 
 
