@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.5.1 — Local-Time Logs & Leaner Builds
+
+### Fixed
+- Log timestamps now render in the machine's local timezone instead of UTC, reusing the existing `chrono` dependency (no new crates, and avoiding tracing-subscriber's unsound `local-time` feature).
+
+### Changed
+- Trimmed the `documents` feature footprint: `fastembed` is pinned to text-only models over rustls/ureq, dropping the image-codec and reqwest/hyper/native-tls subtrees (~115 fewer crates).
+- Trimmed the default build: `clap` drops its color and suggestion stack (7 fewer crates).
+
 ## v0.5.0 — Storage Backends, Scoped Export, and Better Recall
 
 ### Highlights
