@@ -13,9 +13,18 @@ import subprocess
 import tempfile
 from pathlib import Path
 
+import fastjsonschema
+
 
 ROOT = Path(__file__).resolve().parents[1]
 BIN = ROOT / "target" / "debug" / "asobi"
+_SCHEMAS: dict[str, dict] = {}
+_SCHEMA_FORMATS = {
+    "uint": lambda value: isinstance(value, int) and value >= 0,
+    "uint32": lambda value: isinstance(value, int) and 0 <= value <= 2**32 - 1,
+    "int64": lambda value: isinstance(value, int),
+    "double": lambda value: isinstance(value, (int, float)),
+}
 
 
 def run(args: list[str], env: dict[str, str]) -> subprocess.CompletedProcess[str]:
@@ -57,17 +66,66 @@ def run_expect_failure(
 
 
 def graph(args: list[str], env: dict[str, str]) -> dict:
-    envelope = json.loads(run(args, env).stdout)
-    assert envelope["schemaVersion"] == 1
-    assert envelope["ok"] is True
-    assert "data" in envelope
-    assert "error" not in envelope
+    command = args[0]
+    envelope = validate_response(args, env, command)
     return envelope["data"]
+
+
+def validate_response(args: list[str], env: dict[str, str], command: str) -> dict:
+    envelope = json.loads(run(args, env).stdout)
+    schema = command_schema(command, env)
+    fastjsonschema.compile(schema, formats=_SCHEMA_FORMATS)(envelope)
+    return envelope
+
+
+def command_schema(command: str, env: dict[str, str]) -> dict:
+    if command not in _SCHEMAS:
+        _SCHEMAS[command] = json.loads(
+            run(["schema", "--command", command], env).stdout
+        )
+    return _SCHEMAS[command]
+
+
+def validate_error(envelope: dict) -> dict:
+    assert envelope["schemaVersion"] == 1
+    assert envelope["ok"] is False
+    assert "error" in envelope
+    assert "data" not in envelope
+    assert envelope["error"]["kind"] in {
+        "not_found",
+        "conflict",
+        "invalid_input",
+        "unsupported",
+        "unavailable",
+        "backend",
+        "internal",
+    }
+    assert isinstance(envelope["error"]["message"], str)
+    return envelope
 
 
 def json_data(args: list[str], env: dict[str, str]) -> dict:
     """Return the data payload from a successful versioned response."""
-    return graph(args, env)
+    commands = {
+        "capabilities",
+        "export",
+        "graph",
+        "history",
+        "link",
+        "new",
+        "obs",
+        "rm",
+        "rm-obs",
+        "rm-truth",
+        "search",
+        "show",
+        "stats",
+        "truth",
+        "unlink",
+        "update-obs",
+    }
+    command = next(arg for arg in args if arg in commands)
+    return validate_response(args, env, command)["data"]
 
 
 def entity_names(payload: dict) -> set[str]:
@@ -96,6 +154,7 @@ def schema_checks(env: dict[str, str]) -> None:
     assert "properties" in index["commands"]["graph"]
 
     graph_schema = json.loads(run(["schema", "--command", "graph"], env).stdout)
+    fastjsonschema.compile(graph_schema, formats=_SCHEMA_FORMATS)
     properties = graph_schema["properties"]
     assert properties["schemaVersion"]["const"] == 1
     assert properties["ok"]["const"] is True
@@ -642,9 +701,7 @@ def agent_feature_checks() -> None:
 
         # 7. JSON error formatting
         failed = run_expect_failure(["--json", "import", "nonexistent_abc.json"], env)
-        err_json = json.loads(failed.stdout)
-        assert err_json["schemaVersion"] == 1
-        assert err_json["ok"] is False
+        err_json = validate_error(json.loads(failed.stdout))
         assert "No such file or directory" in err_json["error"]["message"]
 
 

@@ -46,7 +46,7 @@ test-documents:
 	cargo test --features documents -- --test-threads=1
 
 test-scripts:
-	uv run scripts/verify_cli.py
+	uv run --with fastjsonschema scripts/verify_cli.py
 
 test-turso-scripts:
 	uv run scripts/verify_cli.turso.py
@@ -58,7 +58,7 @@ verify-storage-boundary:
 	uv run --no-project python scripts/verify_storage_boundary.py
 
 verify-libsql: build
-	uv run scripts/verify_cli.py
+	uv run --with fastjsonschema scripts/verify_cli.py
 
 verify-turso:
 	cargo build --features turso-experimental
