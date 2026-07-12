@@ -484,7 +484,10 @@ async fn main() {
     if let Err(e) = run_cli(cli).await {
         if json {
             let response_error = ResponseError {
-                kind: ErrorKind::Internal,
+                kind: e
+                    .downcast_ref::<asobi::api::ApiError>()
+                    .map(ErrorKind::from)
+                    .unwrap_or(ErrorKind::Internal),
                 message: e.to_string(),
             };
             if emit_err(&response_error).is_err() {

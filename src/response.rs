@@ -3,6 +3,8 @@
 use schemars::JsonSchema;
 use serde::Serialize;
 
+use crate::api::v1::ApiError;
+
 /// Version of the CLI response envelope contract.
 pub const RESPONSE_SCHEMA_VERSION: u32 = 1;
 
@@ -28,7 +30,7 @@ pub struct ResponseError {
 }
 
 /// Stable machine-readable error categories.
-#[derive(Debug, Clone, Serialize, JsonSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ErrorKind {
     NotFound,
@@ -38,6 +40,19 @@ pub enum ErrorKind {
     Unavailable,
     Backend,
     Internal,
+}
+
+impl From<&ApiError> for ErrorKind {
+    fn from(error: &ApiError) -> Self {
+        match error {
+            ApiError::NotFound(_) => Self::NotFound,
+            ApiError::Conflict(_) => Self::Conflict,
+            ApiError::Invalid(_) => Self::InvalidInput,
+            ApiError::Unsupported(_) => Self::Unsupported,
+            ApiError::Unavailable(_) => Self::Unavailable,
+            ApiError::Backend(_) => Self::Backend,
+        }
+    }
 }
 
 /// Serialize `data` in a success envelope to stdout.
@@ -103,5 +118,33 @@ mod tests {
         assert_eq!(value["error"]["kind"], "invalid_input");
         assert_eq!(value["error"]["message"], "bad request");
         assert!(value.get("data").is_none());
+    }
+
+    #[test]
+    fn api_errors_map_to_stable_error_kinds() {
+        let cases = [
+            (
+                ApiError::NotFound("missing".to_string()),
+                ErrorKind::NotFound,
+            ),
+            (
+                ApiError::Conflict("duplicate".to_string()),
+                ErrorKind::Conflict,
+            ),
+            (
+                ApiError::Invalid("bad input".to_string()),
+                ErrorKind::InvalidInput,
+            ),
+            (ApiError::Unsupported("vectors"), ErrorKind::Unsupported),
+            (
+                ApiError::Unavailable("offline".to_string()),
+                ErrorKind::Unavailable,
+            ),
+            (ApiError::Backend("broken".to_string()), ErrorKind::Backend),
+        ];
+
+        for (error, expected) in cases {
+            assert_eq!(ErrorKind::from(&error), expected);
+        }
     }
 }
