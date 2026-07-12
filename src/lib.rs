@@ -20,6 +20,7 @@ pub mod normalize;
 pub mod paths;
 #[cfg(feature = "documents")]
 pub mod recall;
+pub mod response;
 pub mod skills;
 pub use anyhow::{Result, anyhow, bail};
 pub use tokio::task::JoinHandle;
