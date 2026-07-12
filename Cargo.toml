@@ -1,6 +1,6 @@
 [package]
 name = "asobi"
-version = "0.5.0"
+version = "0.5.1"
 edition = "2024"
 authors = ["haru <azusachino@proton.me>"]
 description = "A persistent, project-local knowledge graph CLI for AI agents."
@@ -49,7 +49,7 @@ uuid = { version = "1", features = ["v7"] }
 
 
 # CLI
-clap = { version = "4.6", features = ["derive"] }
+clap = { version = "4.6", default-features = false, features = ["std", "derive", "help", "usage", "error-context"] }
 walkdir = "2"
 toml = "1"
 
@@ -61,7 +61,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 
 # Chunking & Embedding
-fastembed = { version = "5", optional = true }
+fastembed = { version = "5", optional = true, default-features = false, features = ["ort-download-binaries-rustls-tls", "hf-hub-rustls-tls"] }
 
 
 # Database & Vector Store

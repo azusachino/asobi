@@ -10,6 +10,19 @@ use clap::{Parser, Subcommand};
 use std::sync::Arc;
 use tracing::{info, warn};
 use tracing_subscriber::EnvFilter;
+use tracing_subscriber::fmt::time::FormatTime;
+
+/// Timestamp logs in the machine's local timezone instead of tracing's default
+/// UTC. Reuses the `chrono` dependency (already pulled in for backup/compact) so
+/// this adds no crates and avoids tracing-subscriber's `local-time` feature,
+/// whose `time`-crate offset lookup is unsound in a multithreaded process.
+struct LocalTimer;
+
+impl FormatTime for LocalTimer {
+    fn format_time(&self, w: &mut tracing_subscriber::fmt::format::Writer<'_>) -> std::fmt::Result {
+        write!(w, "{}", chrono::Local::now().format("%Y-%m-%d %H:%M:%S"))
+    }
+}
 
 #[derive(Parser)]
 #[command(name = "asobi")]
@@ -273,6 +286,7 @@ fn init_tracing() {
             EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
         )
         .with_target(false)
+        .with_timer(LocalTimer)
         .compact()
         .init();
 }
