@@ -264,6 +264,11 @@ enum Commands {
         #[command(subcommand)]
         subcommand: Option<SkillsCommands>,
     },
+    /// Plan and coordinate durable task-dispatcher work
+    Tasks {
+        #[command(subcommand)]
+        subcommand: Option<asobi::tasks::TasksCommands>,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -925,6 +930,7 @@ async fn run_cli(cli: Cli) -> Result<()> {
             info!("Backup written to {}", receipt.path.display());
         }
         Commands::Restore { .. } => unreachable!("restore handled before borrowing storage"),
+        Commands::Tasks { subcommand } => asobi::tasks::run(backend, subcommand, json).await?,
         Commands::Skills { subcommand } => {
             use std::io::IsTerminal;
             match subcommand {

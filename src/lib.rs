@@ -21,5 +21,6 @@ pub mod paths;
 #[cfg(feature = "documents")]
 pub mod recall;
 pub mod skills;
+pub mod tasks;
 pub use anyhow::{Result, anyhow, bail};
 pub use tokio::task::JoinHandle;

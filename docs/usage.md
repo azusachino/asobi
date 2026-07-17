@@ -168,6 +168,19 @@ asobi skills update
 asobi skills remove asobi-skills
 ```
 
+**Coordinate durable task work:**
+
+```bash
+asobi tasks plan "project:epic" --objective "Ship the feature" \
+  --task "Implement the change" --task "Verify the result"
+asobi tasks list "project:epic"
+asobi tasks dispatch                 # select the first READY_TO_DISPATCH task
+asobi tasks sync "project:epic:task-1" --note "make check passes" --status DONE
+asobi tasks close "project:epic"
+```
+
+Use `asobi tasks --help` or `asobi tasks <command> --help` for the complete argument reference. These are graph-backed commands: status is a truth, implementation notes are observations, and child tasks link to their epic via `part_of`.
+
 **Ingest Markdown into the document tier (optional):**
 
 These commands require a binary built with `--features documents`:
