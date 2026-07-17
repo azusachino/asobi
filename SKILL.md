@@ -258,7 +258,7 @@ asobi truth "<project>:session" "last-updated" "YYYY-MM-DD"
 asobi obs "<project>:session" "next: <one sentence handoff>"
 
 # Session state already lives in the graph; compact only refreshes the
-# knowledge recall index (it skips session/task entities). Use export/backup
+# Markdown topic projection (it skips session/task entities). Use export/backup
 # for full archival.
 asobi compact
 ```

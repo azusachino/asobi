@@ -30,6 +30,7 @@ test:
 
 test-scripts: build
 	uv run --with fastjsonschema scripts/verify_cli.py
+	uv run --no-project python scripts/use_cases.py
 
 verify-storage-boundary:
 	uv run --no-project python scripts/verify_storage_boundary.py

@@ -310,7 +310,7 @@ def main() -> None:
         assert truths(restored, "project-a") == {"edition": "2024"}
 
         # Physical backup -> mutation -> restore must preserve the complete
-        # libSQL database. This is distinct from the portable JSON snapshot
+        # SQLite database. This is distinct from the portable JSON snapshot
         # above and guards the BackupStore CLI wiring.
         snapshot_file = Path(tmp) / "snapshot.db"
         run(["backup", "--output", str(snapshot_file)], env)

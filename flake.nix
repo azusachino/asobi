@@ -41,7 +41,7 @@
             pkgs.bun
             # Task runner
             pkgs.gnumake
-            # Native build deps for libsql / fastembed (ort)
+            # Native build dependencies for bundled SQLite
             pkgs.pkg-config
             pkgs.openssl
             pkgs.cmake

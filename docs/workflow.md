@@ -13,7 +13,7 @@ To achieve maximum **token efficiency**, Asobi splits graph reading into two mod
 1. **Lazy Reads (`search` / `graph`)**: Return only metadata, entity types, truths, and observation _counts_. They completely omit long raw observation logs and skill bodies.
 2. **Eager Detailed Reads (`show`)**: Load raw observation logs, but only for the specific entities requested.
 
-By defaulting to lazy reads, agents avoid ingestion of hundreds of historical text lines unless they explicitly need to inspect or modify them.
+By defaulting to lazy reads, agents avoid loading hundreds of historical text lines unless they explicitly need to inspect or modify them.
 
 ---
 
@@ -61,7 +61,7 @@ As you work, decisions are made, dependencies are discovered, and state changes.
 #### Step 3: Append new observations
 
 ```bash
-asobi obs my-project "Decided to switch to libSQL for concurrent WAL support"
+asobi obs my-project "Decided to use SQLite WAL for concurrent agent access"
 ```
 
 - **Why it works**: Appends a new observation to `my-project`.
@@ -137,8 +137,8 @@ asobi obs my-project:session "next: run tests on target host"
 asobi compact
 ```
 
-- **Why it works**: Rewrites stable knowledge entities to project Markdown documents and refreshes the FTS5/vector indices.
-- **Token Efficiency**: Volatile entities (`session`, `task`) are excluded from compaction, preventing vector database churn and keeping search results focused on long-term knowledge.
+- **Why it works**: Rewrites stable knowledge entities to deterministic Markdown topics.
+- **Token Efficiency**: Volatile entities (`session`, `task`) are excluded from compaction, keeping operational state in the graph where it is cheap to query.
 
 ---
 
