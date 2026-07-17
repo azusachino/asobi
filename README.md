@@ -8,6 +8,8 @@ Keep memory, track session state, and share context across conversations — sto
 
 [![CI](https://github.com/azusachino/asobi/actions/workflows/ci.yml/badge.svg)](https://github.com/azusachino/asobi/actions/workflows/ci.yml) [![Release](https://img.shields.io/github/v/tag/azusachino/asobi?label=release&sort=semver)](https://github.com/azusachino/asobi/releases) [![License: MIT](https://img.shields.io/github/license/azusachino/asobi)](LICENSE) [![Built with Nix](https://img.shields.io/badge/built%20with-nix-5277C3?logo=nixos&logoColor=white)](https://nixos.org) [![Rust](https://img.shields.io/badge/rust-2024-orange?logo=rust&logoColor=white)](https://www.rust-lang.org)
 
+[![crates.io](https://img.shields.io/crates/v/asobi.svg)](https://crates.io/crates/asobi) [![Downloads](https://img.shields.io/crates/d/asobi.svg)](https://crates.io/crates/asobi) [![docs.rs](https://img.shields.io/docsrs/asobi)](https://docs.rs/asobi) [![Code of Conduct](https://img.shields.io/badge/code%20of%20conduct-contributor%20covenant-4baaaa.svg)](CODE_OF_CONDUCT.md) [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
+
 [![Last commit](https://img.shields.io/github/last-commit/azusachino/asobi)](https://github.com/azusachino/asobi/commits/main) [![Stars](https://img.shields.io/github/stars/azusachino/asobi?style=social)](https://github.com/azusachino/asobi/stargazers)
 
 </div>
@@ -22,6 +24,24 @@ Keep memory, track session state, and share context across conversations — sto
 - **Concurrency-safe** — WAL-mode storage with bounded busy timeouts, so lead and dispatched agents can share a graph.
 - **Lazy reads** — `graph`/`search` return truths + counts; `show` returns the full body. Cheap to load, cheap on tokens.
 - **Skills** — install reusable agent instructions from a git repo or local path.
+
+## 🏗️ Architecture
+
+One synchronous storage contract, one bundled backend, one local file — see [ADR 0001](docs/decisions/0001-sqlite-only-v2-rewrite.md) and [ADR 0002](docs/decisions/0002-why-rusqlite.md) for why.
+
+```mermaid
+flowchart LR
+    CLI["src/cli/*\n(commands, dispatch, graph, skills)"]
+    API["api::v2\nGraphStore · SearchStore · SkillStore\nSnapshotStore · BackupStore · MaintenanceStore · TaskStore"]
+    Sqlite["SqliteStore\n(src/storage/sqlite.rs)"]
+    DB[("asobi.db\nWAL + FTS5")]
+
+    CLI --> API
+    API --> Sqlite
+    Sqlite --> DB
+```
+
+Commands depend only on the `api::v2` traits, never on `rusqlite` types directly — `src/storage/sqlite.rs` is the only file that owns SQL, schema, and pragmas.
 
 ## 📦 Installation
 

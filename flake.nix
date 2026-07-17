@@ -41,10 +41,6 @@
             pkgs.bun
             # Task runner
             pkgs.gnumake
-            # Native build dependencies for bundled SQLite
-            pkgs.pkg-config
-            pkgs.openssl
-            pkgs.cmake
           ];
 
           env = {

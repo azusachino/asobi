@@ -6,6 +6,7 @@
 
 - Synchronous `api::v2` storage traits for graph, search, skills, snapshots, backups, maintenance, and task dispatch.
 - Bundled SQLite through `rusqlite`, with WAL mode, foreign keys, bounded busy timeouts, and FTS5/BM25 keyword search.
+- Durable task dispatcher: `tasks plan`, `list`, `dispatch`, `sync`, and `close` with nested help, lifecycle validation, and JSON response schemas.
 - Atomic task dispatch: status transition, claimant truth, and dispatch observation commit together, so concurrent agents produce one winner.
 - Graph-to-Markdown `compact` projection for durable knowledge topics.
 - Contract, CLI, evil-input, edge-case, concurrent-process, daily-practice, and benchmark coverage.
@@ -19,10 +20,6 @@
 ### Verification
 
 `make check` runs formatting, Clippy, all Rust tests, the CLI verifier, the daily use-case scenario, and storage-boundary checks. `cargo bench --no-run` verifies all benchmark targets; `make bench` executes them.
-
-## v0.5.3 — Durable task dispatcher
-
-- Added `tasks plan`, `list`, `dispatch`, `sync`, and `close` with nested help, lifecycle validation, JSON response schemas, and CLI integration coverage.
 
 ## v0.5.2 — Versioned CLI responses
 
