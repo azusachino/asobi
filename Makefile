@@ -1,4 +1,4 @@
-.PHONY: help build run test test-scripts verify-storage-boundary bench bench-graph bench-criterion bench-alloc bench-sql-plans bench-tasks bench-storage fmt fmt-check lint check clean init
+.PHONY: help build run test test-scripts verify-storage-boundary bench bench-compile bench-graph bench-criterion bench-alloc bench-sql-plans bench-tasks bench-storage fmt fmt-check lint check clean init
 
 help:
 	@echo "Available tasks:"
@@ -8,6 +8,7 @@ help:
 	@echo "  test-scripts          Run built-CLI integration checks"
 	@echo "  verify-storage-boundary  Check provider encapsulation"
 	@echo "  bench                 Run all benchmark harnesses"
+	@echo "  bench-compile         Compile all benchmark targets without running them"
 	@echo "  bench-graph           Run graph benchmarks"
 	@echo "  bench-criterion       Run graph Criterion benchmarks"
 	@echo "  bench-alloc           Write a DHAT allocation profile"
@@ -37,6 +38,9 @@ verify-storage-boundary:
 
 bench:
 	cargo bench
+
+bench-compile:
+	cargo bench --no-run
 
 bench-graph:
 	cargo bench --bench graph
@@ -70,7 +74,7 @@ lint:
 	cargo clippy -- -D warnings
 	ruff check .
 
-check: verify-storage-boundary fmt-check lint test test-scripts
+check: verify-storage-boundary fmt-check lint test test-scripts bench-compile
 
 clean:
 	cargo clean
