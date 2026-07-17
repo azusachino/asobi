@@ -199,8 +199,7 @@ pub(crate) fn run(backend: &crate::storage::Storage, command: Commands, json: bo
             print_json(graph)?;
         }
         Commands::Stats { per_entity } => {
-            let db_path = "provider-managed";
-            let journal_mode = "provider-managed";
+            let location = backend.location()?;
 
             let Stats {
                 entities,
@@ -242,13 +241,15 @@ pub(crate) fn run(backend: &crate::storage::Storage, command: Commands, json: bo
                     entities,
                     relations,
                     observations,
-                    database_path: db_path,
-                    journal_mode,
+                    database_path: location.database_path,
+                    journal_mode: location.journal_mode,
+                    schema_version: location.schema_version,
                     entities_detailed,
                 })?;
             } else {
-                println!("Database Path:  {}", db_path);
-                println!("Journal Mode:   {}", journal_mode);
+                println!("Database Path:  {}", location.database_path);
+                println!("Journal Mode:   {}", location.journal_mode);
+                println!("Schema Version: {}", location.schema_version);
                 println!("Knowledge Graph Statistics:");
                 println!("  Entities:     {}", entities);
                 println!("  Relations:    {}", relations);

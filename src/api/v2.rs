@@ -84,6 +84,14 @@ pub struct BackendCapabilities {
 
 #[derive(Debug, Clone, schemars::JsonSchema, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct StorageLocation {
+    pub database_path: String,
+    pub journal_mode: String,
+    pub schema_version: u32,
+}
+
+#[derive(Debug, Clone, schemars::JsonSchema, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct BackendHealth {
     pub backend: String,
     pub reachable: bool,
@@ -192,6 +200,7 @@ pub trait MaintenanceStore {
     fn reset(&self) -> ApiResult<()>;
     fn capabilities(&self) -> ApiResult<BackendCapabilities>;
     fn health(&self) -> ApiResult<BackendHealth>;
+    fn location(&self) -> ApiResult<StorageLocation>;
 }
 
 pub trait TaskStore {

@@ -25,8 +25,9 @@ pub(crate) struct StatsReceipt {
     pub(crate) entities: usize,
     pub(crate) relations: usize,
     pub(crate) observations: usize,
-    pub(crate) database_path: &'static str,
-    pub(crate) journal_mode: &'static str,
+    pub(crate) database_path: String,
+    pub(crate) journal_mode: String,
+    pub(crate) schema_version: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) entities_detailed: Option<Vec<EntityStatsDetail>>,
 }

@@ -1,7 +1,8 @@
 use crate::api::v2::{
     ApiError, ApiResult, BackendCapabilities, BackendHealth, BackupReceipt, BackupRequest,
     BackupStore, GraphStore, ImportReport, MaintenanceStore, OpenNodes, SearchQuery, SearchStore,
-    SkillRecord, SkillStore, Snapshot, SnapshotStore, Stats, TaskStore, TruthVersion,
+    SkillRecord, SkillStore, Snapshot, SnapshotStore, Stats, StorageLocation, TaskStore,
+    TruthVersion,
 };
 use crate::model::{
     EntityInput, EntityOutput, Graph, ObservationDeletion, ObservationInput, RelationInput,
@@ -771,6 +772,16 @@ impl MaintenanceStore for SqliteStore {
                 backend: "sqlite".into(),
                 reachable: true,
                 detail: Some(format!("schema {SCHEMA_VERSION}")),
+            })
+        })
+    }
+    fn location(&self) -> ApiResult<StorageLocation> {
+        self.read(|conn| {
+            let journal_mode: String = conn.query_row("PRAGMA journal_mode", [], |r| r.get(0))?;
+            Ok(StorageLocation {
+                database_path: self.db_path.display().to_string(),
+                journal_mode,
+                schema_version: SCHEMA_VERSION as u32,
             })
         })
     }

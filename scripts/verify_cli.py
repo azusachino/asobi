@@ -327,7 +327,8 @@ def main() -> None:
         # them before replacing the main file, otherwise SQLite can replay stale
         # pages into the restored database.
         live_db = Path(env["ASOBI_DATABASE_URL"])
-        with sqlite3.connect(live_db) as live_connection:
+        live_connection = sqlite3.connect(live_db)
+        with live_connection:
             live_connection.execute("PRAGMA journal_mode=WAL")
             live_connection.execute(
                 "CREATE TABLE IF NOT EXISTS restore_sidecar_marker (value TEXT)"
@@ -337,6 +338,10 @@ def main() -> None:
             )
         assert Path(f"{live_db}-wal").exists()
         assert Path(f"{live_db}-shm").exists()
+        # `with` only commits/rolls back; the connection itself stays open and
+        # keeps a lock on the file unless closed explicitly, which would
+        # otherwise fight the CLI process for the file lock below.
+        live_connection.close()
 
         run(["restore", str(snapshot_file), "--force"], env)
         physically_restored = graph(["graph"], env)
