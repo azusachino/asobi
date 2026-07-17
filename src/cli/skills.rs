@@ -6,6 +6,19 @@ use anyhow::Result;
 use std::io::IsTerminal;
 use tracing::{info, warn};
 
+fn classify_skill_source(source: &str) -> (String, bool) {
+    let mut git_url = source.to_string();
+    let is_git = if source.contains("://") || source.contains("git@") {
+        true
+    } else if source.contains("github.com/") || source.contains("gitlab.com/") {
+        git_url = format!("https://{source}");
+        true
+    } else {
+        !std::path::Path::new(source).is_dir() && source.ends_with(".git")
+    };
+    (git_url, is_git)
+}
+
 pub(crate) fn run(
     backend: &crate::storage::Storage,
     paths: &AsobiPaths,
@@ -36,15 +49,7 @@ pub(crate) fn run(
             all,
             select,
         }) => {
-            let mut git_url = source.clone();
-            let is_git = if source.contains("://") || source.contains("git@") {
-                true
-            } else if source.contains("github.com/") || source.contains("gitlab.com/") {
-                git_url = format!("https://{}", source);
-                true
-            } else {
-                !std::path::Path::new(&source).is_dir() && source.ends_with(".git")
-            };
+            let (git_url, is_git) = classify_skill_source(&source);
 
             let (target_path, version) = if is_git {
                 let (cache_path, ver) = get_or_update_cached_repo(&git_url, &paths.caches_dir())?;
@@ -111,15 +116,7 @@ pub(crate) fn run(
 
             for src in unique_sources {
                 info!("Updating skills from {}...", src);
-                let mut git_url = src.clone();
-                let is_git = if src.contains("://") || src.contains("git@") {
-                    true
-                } else if src.contains("github.com/") || src.contains("gitlab.com/") {
-                    git_url = format!("https://{}", src);
-                    true
-                } else {
-                    !std::path::Path::new(&src).is_dir() && src.ends_with(".git")
-                };
+                let (git_url, is_git) = classify_skill_source(&src);
 
                 let (target_path, version) = if is_git {
                     let (cache_path, ver) =

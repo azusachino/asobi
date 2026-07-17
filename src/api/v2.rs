@@ -202,5 +202,4 @@ pub trait TaskStore {
         observation_limit: usize,
     ) -> ApiResult<Option<String>>;
     fn claim_next(&self, agent: &str) -> ApiResult<Option<String>>;
-    fn transition(&self, task: &str, from: &str, to: &str) -> ApiResult<()>;
 }

@@ -9,6 +9,7 @@ use crate::model::{
 use rusqlite::{
     Connection, OptionalExtension, Transaction, TransactionBehavior, params, params_from_iter,
 };
+use std::cmp::Reverse;
 use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -62,6 +63,7 @@ impl SqliteStore {
     }
 
     fn init_schema(conn: &Connection) -> rusqlite::Result<()> {
+        let previous_version: i64 = conn.query_row("PRAGMA user_version", [], |row| row.get(0))?;
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS asobi_entities (
                 name TEXT PRIMARY KEY,
@@ -125,7 +127,7 @@ impl SqliteStore {
         )?;
         let count: i64 =
             conn.query_row("SELECT count(*) FROM asobi_observations", [], |r| r.get(0))?;
-        if count > 0 {
+        if count > 0 && previous_version < SCHEMA_VERSION {
             let _ = conn.execute(
                 "INSERT INTO asobi_obs_fts(asobi_obs_fts) VALUES ('rebuild')",
                 [],
@@ -229,12 +231,13 @@ fn graph_from_connection(
             .collect::<rusqlite::Result<Vec<_>>>()?
     };
     let mut entities = Vec::new();
+    let mut obs_stmt = conn
+        .prepare("SELECT id, content FROM asobi_observations WHERE entity_name = ? ORDER BY id")?;
+    let mut truth_stmt =
+        conn.prepare("SELECT key, value FROM asobi_truths WHERE entity_name = ? ORDER BY key")?;
     for (name, entity_type) in entity_rows {
         let mut observations = Vec::new();
         let mut detailed = Vec::new();
-        let mut obs_stmt = conn.prepare(
-            "SELECT id, content FROM asobi_observations WHERE entity_name = ? ORDER BY id",
-        )?;
         for obs in obs_stmt.query_map([&name], |r| {
             Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?))
         })? {
@@ -243,8 +246,6 @@ fn graph_from_connection(
             detailed.push(crate::model::DetailedObservation { id, content });
         }
         let mut truths = BTreeMap::new();
-        let mut truth_stmt =
-            conn.prepare("SELECT key, value FROM asobi_truths WHERE entity_name = ? ORDER BY key")?;
         for truth in truth_stmt.query_map([&name], |r| {
             Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
         })? {
@@ -586,8 +587,15 @@ impl SnapshotStore for SqliteStore {
 
 impl BackupStore for SqliteStore {
     fn backup(&self, request: BackupRequest) -> ApiResult<BackupReceipt> {
-        let destination = if request.destination.as_os_str().is_empty() {
-            self.db_path.with_extension("backup.db")
+        let managed = request.destination.as_os_str().is_empty();
+        let destination = if managed {
+            let backup_dir = self
+                .db_path
+                .parent()
+                .unwrap_or_else(|| Path::new("."))
+                .join("backups");
+            std::fs::create_dir_all(&backup_dir).map_err(backend_error)?;
+            backup_dir.join(format!("asobi-{}.db", backup_timestamp()?))
         } else {
             request.destination
         };
@@ -596,6 +604,12 @@ impl BackupStore for SqliteStore {
         }
         let escaped = destination.to_string_lossy().replace('\'', "''");
         self.read(|conn| conn.execute(&format!("VACUUM INTO '{}'", escaped), []))?;
+        if managed {
+            prune_managed_backups(
+                destination.parent().unwrap_or_else(|| Path::new(".")),
+                request.keep,
+            )?;
+        }
         Ok(BackupReceipt {
             path: destination,
             backend: "sqlite".into(),
@@ -621,8 +635,37 @@ impl BackupStore for SqliteStore {
                 "backup integrity check failed: {result}"
             )));
         }
+        let schema_version: i64 = check
+            .query_row("PRAGMA user_version", [], |row| row.get(0))
+            .map_err(backend_error)?;
+        if schema_version != SCHEMA_VERSION {
+            return Err(ApiError::Invalid(format!(
+                "not an Asobi SQLite database: unsupported schema version {schema_version}"
+            )));
+        }
+        for table in [
+            "asobi_entities",
+            "asobi_observations",
+            "asobi_relations",
+            "asobi_truths",
+            "asobi_obs_fts",
+        ] {
+            let exists: bool = check
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name = ? AND type = 'table')",
+                    [table],
+                    |row| row.get(0),
+                )
+                .map_err(backend_error)?;
+            if !exists {
+                return Err(ApiError::Invalid(format!(
+                    "not an Asobi SQLite database: missing {table}"
+                )));
+            }
+        }
         drop(check);
         if db_path.exists() {
+            self.read(|conn| conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);"))?;
             let backup_dir = db_path
                 .parent()
                 .unwrap_or_else(|| Path::new("."))
@@ -636,10 +679,55 @@ impl BackupStore for SqliteStore {
                 .map_err(backend_error)?;
         }
         drop(self);
+        remove_database_sidecars(&db_path)?;
         std::fs::copy(source, db_path)
             .map(|_| ())
             .map_err(backend_error)
     }
+}
+
+fn backup_timestamp() -> ApiResult<u128> {
+    Ok(std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(backend_error)?
+        .as_nanos())
+}
+
+fn prune_managed_backups(directory: &Path, keep: usize) -> ApiResult<()> {
+    let mut backups = std::fs::read_dir(directory)
+        .map_err(backend_error)?
+        .filter_map(|entry| entry.ok())
+        .filter(|entry| {
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            name.starts_with("asobi-") && name.ends_with(".db")
+        })
+        .map(|entry| {
+            let modified = entry
+                .metadata()
+                .and_then(|metadata| metadata.modified())
+                .unwrap_or(std::time::UNIX_EPOCH);
+            (entry.path(), modified)
+        })
+        .collect::<Vec<_>>();
+    backups.sort_by_key(|(_, modified)| Reverse(*modified));
+    for (path, _) in backups.into_iter().skip(keep.max(1)) {
+        std::fs::remove_file(path).map_err(backend_error)?;
+    }
+    Ok(())
+}
+
+fn remove_database_sidecars(path: &Path) -> ApiResult<()> {
+    for suffix in ["-wal", "-shm"] {
+        let mut sidecar = path.as_os_str().to_os_string();
+        sidecar.push(suffix);
+        match std::fs::remove_file(PathBuf::from(sidecar)) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(backend_error(error)),
+        }
+    }
+    Ok(())
 }
 
 impl MaintenanceStore for SqliteStore {
@@ -712,8 +800,5 @@ impl TaskStore for SqliteStore {
     }
     fn claim_next(&self, agent: &str) -> ApiResult<Option<String>> {
         self.write(|tx| { let task:Option<String>=tx.query_row("SELECT t.entity_name FROM asobi_truths t JOIN asobi_entities e ON e.name=t.entity_name WHERE t.key='status' AND t.value='READY_TO_DISPATCH' AND e.entity_type='task' ORDER BY t.entity_name LIMIT 1",[],|r|r.get(0)).optional()?; if let Some(task)=task.as_ref(){tx.execute("UPDATE asobi_truths SET value='DISPATCHED',updated_at=CURRENT_TIMESTAMP WHERE entity_name=? AND key='status' AND value='READY_TO_DISPATCH'",[task])?;tx.execute("INSERT INTO asobi_truths(entity_name,key,value) VALUES (?,'claimed_by',?) ON CONFLICT(entity_name,key) DO UPDATE SET value=excluded.value,updated_at=CURRENT_TIMESTAMP",params![task,agent])?;} Ok(task) })
-    }
-    fn transition(&self, task: &str, from: &str, to: &str) -> ApiResult<()> {
-        self.write(|tx| { let changed=tx.execute("UPDATE asobi_truths SET value=?,updated_at=CURRENT_TIMESTAMP WHERE entity_name=? AND key='status' AND value=?",params![to,normalize(task),from])?; if changed==0 {return Err(rusqlite::Error::QueryReturnedNoRows);} Ok(()) })
     }
 }

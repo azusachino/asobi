@@ -21,7 +21,7 @@ fn task_hot_paths(c: &mut Criterion) {
     c.bench_function("task_claim_compare_and_set", |b| {
         b.iter(|| {
             store
-                .transition("task-1", "DISPATCHED", "READY_TO_DISPATCH")
+                .truth_upsert("task-1", "status", "READY_TO_DISPATCH")
                 .unwrap();
             black_box(store.claim_next("bench-agent").unwrap());
         })

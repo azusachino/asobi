@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import sqlite3
 import subprocess
 import tempfile
 from pathlib import Path
@@ -322,6 +323,21 @@ def main() -> None:
         run(["reset", "--force"], env)
         assert graph(["graph"], env)["entities"] == []
 
+        # A live database may have sidecars from WAL mode. Restore must remove
+        # them before replacing the main file, otherwise SQLite can replay stale
+        # pages into the restored database.
+        live_db = Path(env["ASOBI_DATABASE_URL"])
+        with sqlite3.connect(live_db) as live_connection:
+            live_connection.execute("PRAGMA journal_mode=WAL")
+            live_connection.execute(
+                "CREATE TABLE IF NOT EXISTS restore_sidecar_marker (value TEXT)"
+            )
+            live_connection.execute(
+                "INSERT INTO restore_sidecar_marker(value) VALUES ('stale')"
+            )
+        assert Path(f"{live_db}-wal").exists()
+        assert Path(f"{live_db}-shm").exists()
+
         run(["restore", str(snapshot_file), "--force"], env)
         physically_restored = graph(["graph"], env)
         assert entity_names(physically_restored) == entity_names(restored_graph)
@@ -333,6 +349,23 @@ def main() -> None:
 
         safety_backups = list((Path(tmp) / "backups").glob("pre-restore-*.db"))
         assert len(safety_backups) == 1
+        assert not Path(f"{live_db}-wal").exists()
+        assert not Path(f"{live_db}-shm").exists()
+
+        # Default managed snapshots honor --keep; explicit --output snapshots
+        # remain caller-owned and are not pruned by this retention policy.
+        for _ in range(3):
+            run(["backup", "--keep", "2"], env)
+        managed_backups = list((Path(tmp) / "backups").glob("asobi-*.db"))
+        assert len(managed_backups) == 2, managed_backups
+
+        invalid_source = Path(tmp) / "not-asobi.db"
+        with sqlite3.connect(invalid_source) as invalid_db:
+            invalid_db.execute("CREATE TABLE unrelated (value TEXT)")
+        invalid_restore = run_expect_failure(
+            ["restore", str(invalid_source), "--force"], env
+        )
+        assert "not an Asobi SQLite database" in invalid_restore.stderr
 
     with tempfile.TemporaryDirectory(prefix="asobi-corrupt-") as tmp:
         db_path = Path(tmp) / "corrupt.db"
