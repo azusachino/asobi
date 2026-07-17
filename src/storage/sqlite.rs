@@ -165,8 +165,13 @@ impl SqliteStore {
         operation(&conn).map_err(backend_error)
     }
 
-    fn graph(&self, names: Option<&[String]>, expand: &[String]) -> ApiResult<Graph> {
-        self.read(|conn| graph_from_connection(conn, names, expand))
+    fn graph(
+        &self,
+        names: Option<&[String]>,
+        expand: &[String],
+        include_content: bool,
+    ) -> ApiResult<Graph> {
+        self.read(|conn| graph_from_connection(conn, names, expand, include_content))
     }
 }
 
@@ -174,6 +179,7 @@ fn graph_from_connection(
     conn: &Connection,
     names: Option<&[String]>,
     expand: &[String],
+    include_content: bool,
 ) -> rusqlite::Result<Graph> {
     let mut selected = names.map(|values| values.iter().map(|v| normalize(v)).collect::<Vec<_>>());
     if let Some(values) = selected.as_mut()
@@ -232,20 +238,44 @@ fn graph_from_connection(
             .collect::<rusqlite::Result<Vec<_>>>()?
     };
     let mut entities = Vec::new();
-    let mut obs_stmt = conn
-        .prepare("SELECT id, content FROM asobi_observations WHERE entity_name = ? ORDER BY id")?;
+    let mut obs_stmt = if include_content {
+        Some(conn.prepare(
+            "SELECT id, content FROM asobi_observations WHERE entity_name = ? ORDER BY id",
+        )?)
+    } else {
+        None
+    };
+    let mut obs_count_stmt = if include_content {
+        None
+    } else {
+        Some(conn.prepare("SELECT COUNT(*) FROM asobi_observations WHERE entity_name = ?")?)
+    };
     let mut truth_stmt =
         conn.prepare("SELECT key, value FROM asobi_truths WHERE entity_name = ? ORDER BY key")?;
     for (name, entity_type) in entity_rows {
-        let mut observations = Vec::new();
-        let mut detailed = Vec::new();
-        for obs in obs_stmt.query_map([&name], |r| {
-            Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?))
-        })? {
-            let (id, content) = obs?;
-            observations.push(content.clone());
-            detailed.push(crate::model::DetailedObservation { id, content });
-        }
+        let (observations, observations_detailed, observation_count) = if include_content {
+            let mut observations = Vec::new();
+            let mut detailed = Vec::new();
+            for obs in obs_stmt
+                .as_mut()
+                .expect("content query must be prepared")
+                .query_map([&name], |r| {
+                    Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?))
+                })?
+            {
+                let (id, content) = obs?;
+                observations.push(content.clone());
+                detailed.push(crate::model::DetailedObservation { id, content });
+            }
+            let observation_count = detailed.len();
+            (observations, Some(detailed), observation_count)
+        } else {
+            let count = obs_count_stmt
+                .as_mut()
+                .expect("count query must be prepared")
+                .query_row([&name], |r| r.get::<_, i64>(0))? as usize;
+            (Vec::new(), None, count)
+        };
         let mut truths = BTreeMap::new();
         for truth in truth_stmt.query_map([&name], |r| {
             Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
@@ -253,21 +283,24 @@ fn graph_from_connection(
             let (key, value) = truth?;
             truths.insert(key, value);
         }
-        let body = conn
-            .query_row(
+        let body = if include_content {
+            conn.query_row(
                 "SELECT body FROM asobi_skills WHERE entity_name = ?",
                 [&name],
                 |r| r.get(0),
             )
-            .optional()?;
+            .optional()?
+        } else {
+            None
+        };
         entities.push(EntityOutput {
             name,
             entity_type,
             observations,
             truths,
-            observation_count: detailed.len(),
+            observation_count,
             body,
-            observations_detailed: Some(detailed),
+            observations_detailed,
         });
     }
     let mut relations = Vec::new();
@@ -471,16 +504,16 @@ impl GraphStore for SqliteStore {
         self.read(|conn| { let mut out = Vec::new(); if let Some(key) = key { let mut stmt = conn.prepare("SELECT key,value,valid_from,valid_until FROM asobi_truth_history WHERE entity_name=? AND key=? ORDER BY valid_until DESC")?; for row in stmt.query_map(params![normalize(entity), key], |r| Ok(TruthVersion { key:r.get(0)?, value:r.get(1)?, valid_from:r.get(2)?, valid_until:r.get(3)? }))? { out.push(row?); } } else { let mut stmt = conn.prepare("SELECT key,value,valid_from,valid_until FROM asobi_truth_history WHERE entity_name=? ORDER BY valid_until DESC,key")?; for row in stmt.query_map([normalize(entity)], |r| Ok(TruthVersion { key:r.get(0)?, value:r.get(1)?, valid_from:r.get(2)?, valid_until:r.get(3)? }))? { out.push(row?); } } Ok(out) })
     }
     fn read_graph(&self) -> ApiResult<Graph> {
-        self.graph(None, &[])
+        self.graph(None, &[], false)
     }
     fn read_graph_full(&self) -> ApiResult<Graph> {
-        self.graph(None, &[])
+        self.graph(None, &[], true)
     }
     fn read_graph_scoped(&self, scope: &[String], rationale: bool) -> ApiResult<Graph> {
         self.read(|conn| {
             let names = scoped_names(conn, scope, rationale)?;
             let included: HashSet<_> = names.iter().cloned().collect();
-            let mut graph = graph_from_connection(conn, Some(&names), &[])?;
+            let mut graph = graph_from_connection(conn, Some(&names), &[], true)?;
             graph
                 .relations
                 .retain(|rel| included.contains(&rel.from) && included.contains(&rel.to));
@@ -488,7 +521,7 @@ impl GraphStore for SqliteStore {
         })
     }
     fn open_nodes(&self, req: OpenNodes) -> ApiResult<Graph> {
-        self.graph(Some(&req.names), &req.expand)
+        self.graph(Some(&req.names), &req.expand, true)
     }
 }
 
@@ -534,7 +567,7 @@ impl SearchStore for SqliteStore {
                 }
             }
             names.truncate(limit);
-            graph_from_connection(conn, Some(&names), &[])
+            graph_from_connection(conn, Some(&names), &[], false)
         })
     }
 }
