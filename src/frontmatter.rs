@@ -1,23 +1,23 @@
 //! Shared YAML-frontmatter handling for Markdown topics and skills.
 //!
 //! One place owns the read/write contract so the compact *writer*
-//! ([`quote`]) and the ingest/skills *readers* ([`parse`]) can never drift:
+//! ([`quote`]) and the skills *readers* ([`parse`]) can never drift:
 //! quoting added on write is always reversed on read, the closing `---`
 //! must be a whole line (a thematic break in the body never truncates the
 //! document), and CRLF endings are tolerated everywhere.
 //!
 //! Deliberately *not* a real YAML/Markdown library. Topics carry only a flat,
 //! three-key frontmatter (`title`/`type`/`slug`) over a free-prose body that
-//! gets chunked into the FTS/vector tier verbatim — so a full parser buys no
-//! correctness and a body escaper would pollute recall. We harden just the two
+//! gets written into the graph/Markdown projection verbatim — so a full parser buys no
+//! correctness and a body escaper would pollute the stored context. We harden just the two
 //! edges that actually bite (frontmatter quoting + a non-greedy fence) and keep
 //! the body untouched. See decision `asobi:decision:topic-markdown-no-escaper`.
 //!
 //! Scope of the supported subset: a leading `---` block of `key: value` lines,
 //! values optionally wrapped in matching single/double quotes; everything after
 //! the closing `---` is the opaque body. No nesting, lists, multi-line scalars,
-//! or comments — callers ([`crate::compact`], [`crate::ingest`],
-//! [`crate::skills`]) only ever emit/consume that shape.
+//! or comments — callers ([`crate::compact`] and [`crate::skills`]) only ever
+//! emit/consume that shape.
 
 use std::collections::BTreeMap;
 

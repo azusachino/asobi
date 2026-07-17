@@ -23,7 +23,7 @@ Human-readable confirmations and errors remain on stderr. The schema promise app
 
 ## Schemas
 
-`schemars` derives cover the graph models, API data types, document recall results, and promoted JSON receipts. `asobi schema --command NAME` emits one JSON Schema for the command's direct payload. `asobi schema` emits an index of all schemas available in the current build.
+`schemars` derives cover the graph models, API data types, and promoted JSON receipts. `asobi schema --command NAME` emits one JSON Schema for the command's direct payload. `asobi schema` emits an index of all schemas available in the current build.
 
 The CLI verifier invokes real commands and validates their direct stdout payloads against the matching emitted schemas. It uses `fastjsonschema` via `uv`; the dependency is verification-only and is not part of the Rust binary.
 

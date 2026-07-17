@@ -1,6 +1,6 @@
 ---
 name: asobi
-description: Use Asobi CLI to store and retrieve long-term project memory (Entities, Observations, Relations) via a persistent Knowledge Graph backed by libSQL.
+description: Use Asobi CLI to store and retrieve long-term project memory (Entities, Observations, Relations) via a persistent SQLite Knowledge Graph.
 ---
 
 # Asobi Memory Skill
@@ -120,7 +120,7 @@ List all installed skills, grouped by source.
 asobi skills install <SOURCE> [--all | --select <NAME>...]
 ```
 
-Install skills from a local path or git repository. Pick with `--all`, `--select <NAME>...`, or neither — which prompts an interactive numbered picker (TTY required; otherwise it errors asking for a flag). Git sources are shallow-cloned to a reused cache under `.asobi/caches/<slug>`. Frontmatter gives the metadata (name falls back to the file/dir name); the body is stored, and also embedded into the vector tier when built with `documents`. `--all` is a full **sync**: skills previously installed from the source but no longer present upstream (deleted or renamed) are pruned. `--select` and the interactive picker stay purely additive.
+Install skills from a local path or git repository. Pick with `--all`, `--select <NAME>...`, or neither — which prompts an interactive numbered picker (TTY required; otherwise it errors asking for a flag). Git sources are shallow-cloned to a reused cache under `.asobi/caches/<slug>`. Frontmatter gives the metadata (name falls back to the file/dir name); the body is stored as graph-backed skill data. `--all` is a full **sync**: skills previously installed from the source but no longer present upstream (deleted or renamed) are pruned. `--select` and the interactive picker stay purely additive.
 
 ```
 asobi skills update [SOURCE]
@@ -168,22 +168,6 @@ asobi unlink <FROM> <TO> <RELATION_TYPE>
 
 Removes a single relation by its three-part key.
 
-### Document ingestion / vector recall
-
-Available only in binaries built with Cargo feature `documents` (`cargo build --features documents` or `make build-documents`).
-
-```
-asobi ingest <PATH>
-```
-
-Ingests a file or directory of Markdown files into the document tier (chunks, embeds, stores in libSQL). Used for semantic search across long-form content.
-
-```
-asobi query <QUERY>
-```
-
-Hybrid semantic + FTS keyword search over ingested topics. Returns: `TITLE | (score: X.XX) | PATH` per result.
-
 ### Workspace init
 
 ```
@@ -202,8 +186,7 @@ asobi compact [--older-than <DAYS>]
 Three-step maintenance sweep:
 
 1. Prunes session Markdown files in `.asobi/topics/sessions/` older than `DAYS` (default: 90).
-2. Finds near-duplicate topic clusters in the vector store (cosine ≥ 0.85).
-3. Syncs **durable knowledge** entities (`project`, `concept`, `reference`, `preference`, `standard`) back to a Markdown file in `.asobi/topics/` — including their truths — and re-ingests for FTS/vector freshness. Volatile state (`session`, `task`/epic) and self-indexing `skill` entities are skipped: they stay graph-only (read them with `search` / `show`), and `export` / `backup` cover full archival.
+2. Syncs **durable knowledge** entities (`project`, `concept`, `reference`, `preference`, `standard`) back to a Markdown file in `.asobi/topics/` — including their truths. Volatile state (`session`, `task`/epic) and self-indexing `skill` entities are skipped: they stay graph-only (read them with `search` / `show`), and `export` / `backup` cover full archival.
 
 ### Physical backup and restore
 
@@ -215,19 +198,20 @@ asobi restore /secure/asobi.db        # validate, save current DB, then prompt
 asobi restore /secure/asobi.db --force
 ```
 
-- **Includes:** graph state, skill bodies, and document data.
+- **Includes:** graph state and skill bodies.
 - **Safety:** integrity check, owner-only snapshot, `pre-restore-*.db`, closed handles, atomic replacement, stale sidecar cleanup.
-- **Scope:** libSQL only. Use JSON `export`/`import` for teammate, machine, or backend handoff.
+- **Scope:** the local SQLite database. Use JSON `export`/`import` for teammate or machine handoff.
 - **Retention:** `--keep` applies only to managed snapshots under `backups/`, not an explicit `-o` path.
 
 ### Performance verification
 
 ```bash
-ASOBI_BENCH_SIZES=1000,10000 make bench-libsql
+ASOBI_BENCH_SIZES=1000,10000 make bench-graph
 ASOBI_BENCH_SIZE=10000 make bench-criterion
-ASOBI_VECTOR_BENCH_SIZE=10000 make bench-vector-criterion
 ASOBI_BENCH_SIZE=10000 make bench-alloc
 make bench-sql-plans
+make bench-tasks
+make bench-storage
 ```
 
 Compare Criterion medians and confidence intervals under `target/criterion/`. Open `dhat-heap.json` with DHAT's viewer to find allocation-heavy call stacks. SQL plans should seek `idx_asobi_truths_lookup` for truth filters and use both relation indexes for neighborhood lookup. Use the same dataset size, commit profile, and machine for before/after comparisons.
@@ -274,7 +258,7 @@ asobi truth "<project>:session" "last-updated" "YYYY-MM-DD"
 asobi obs "<project>:session" "next: <one sentence handoff>"
 
 # Session state already lives in the graph; compact only refreshes the
-# knowledge recall index (it skips session/task entities). Use export/backup
+# Markdown topic projection (it skips session/task entities). Use export/backup
 # for full archival.
 asobi compact
 ```
@@ -369,7 +353,7 @@ asobi truth "<project>:session" "status" "IN_PROGRESS"
 ```
 .asobi/
   data/
-    asobi.db        # libSQL: mcp_entities, mcp_observations, mcp_truths, mcp_relations, mcp_skills, topics, topics_fts, chunks
+    asobi.db        # SQLite: entities, observations, truths, relations, skills, and FTS5 index
   caches/              # Persistent shallow clones of git skill sources (skills install/update)
     <slug>/
   topics/              # Markdown snapshots synced by `compact`
@@ -394,7 +378,7 @@ topics_dir = ".asobi/topics"
 ```bash
 # Store a project decision
 asobi new "my-project" "project"
-asobi obs "my-project" "Uses libSQL for storage — chosen for embedded + remote parity"
+asobi obs "my-project" "Uses SQLite WAL for local multi-agent concurrency"
 
 # Store user preference
 asobi new "UserPreferences" "preference"
@@ -407,10 +391,10 @@ asobi link "my-project" "UserPreferences" "follows"
 asobi show "my-project" "UserPreferences"
 
 # Correct a stale observation
-asobi update-obs "my-project" "Uses libSQL for storage — chosen for embedded + remote parity" "Uses libSQL (libsql crate v0.6) — embedded SQLite with Turso remote sync option"
+asobi update-obs "my-project" "Uses SQLite WAL for local multi-agent concurrency" "Uses SQLite WAL with bounded busy timeouts for local multi-agent concurrency"
 
 # Search by keyword
-asobi search "libSQL"
+asobi search "SQLite"
 
 # Deliberately request a larger ranked result set
 asobi search "auth" --limit 500

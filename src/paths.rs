@@ -20,15 +20,9 @@ pub struct AsobiPaths {
 
 pub const ENV_ASOBI_HOME: &str = "ASOBI_HOME";
 
-/// Backend-neutral override for the selected provider's state file. Each storage
-/// provider reads this same variable; the concrete default filename stays private
-/// to the provider (libSQL: `asobi.db`, Turso: `asobi.turso.db`).
+/// Override for the local SQLite state file. The default filename stays private
+/// to the SQLite provider.
 pub const ENV_DATABASE_URL: &str = "ASOBI_DATABASE_URL";
-
-/// Explicit backend selector. libSQL is the default; setting this to `turso`
-/// selects the experimental Turso provider, but only in a build compiled with
-/// `--features turso-experimental` (otherwise the value is ignored).
-pub const ENV_BACKEND: &str = "ASOBI_BACKEND";
 
 /// XDG base directories for the user-level Asobi workspace. A single root
 /// (`$XDG_DATA_HOME/asobi`, honoring the env var on every platform — macOS

@@ -170,6 +170,56 @@ def main() -> None:
         show_stdout = run_cmd(["skills", "show", "test-skill"], db_path)
         assert "This is the body of the test skill." in show_stdout
 
+        # -------------------------------------------------------------
+        # Use-Case 5: Daily agent practice (tasks, compact, archive)
+        # -------------------------------------------------------------
+        print("\n--- Use-Case 5: Daily agent practice ---")
+        run_cmd(
+            [
+                "tasks",
+                "plan",
+                "daily:practice",
+                "--objective",
+                "Record and verify a daily agent handoff",
+                "--task",
+                "Review the graph",
+            ],
+            db_path,
+        )
+        board = json.loads(run_cmd(["tasks", "list", "daily:practice"], db_path))
+        assert any(
+            entity["truths"].get("status") == "READY_TO_DISPATCH"
+            for entity in board["entities"]
+        )
+        run_cmd(
+            ["tasks", "dispatch", "--agent", "daily-agent"],
+            db_path,
+        )
+        run_cmd(
+            [
+                "tasks",
+                "sync",
+                "daily:practice:task-1",
+                "--note",
+                "Daily verification complete",
+                "--status",
+                "DONE",
+            ],
+            db_path,
+        )
+        run_cmd(["tasks", "close", "daily:practice"], db_path)
+        run_cmd(["compact"], db_path)
+        stats = json.loads(run_cmd(["stats", "--json"], db_path))
+        assert stats["entities"] > 0
+
+        # Exercise the portable and physical archival paths used at handoff.
+        export_path = str(Path(tmp_dir) / "daily.json")
+        run_cmd(["export", "-o", export_path], db_path)
+        assert Path(export_path).is_file()
+        backup_path = str(Path(tmp_dir) / "daily.db")
+        run_cmd(["backup", "-o", backup_path], db_path)
+        assert Path(backup_path).is_file()
+
         print("\nAll integration use-cases successfully validated!")
 
 

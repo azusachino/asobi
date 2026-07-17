@@ -1,6 +1,6 @@
 [package]
 name = "asobi"
-version = "0.5.2"
+version = "0.6.0"
 edition = "2024"
 authors = ["haru <azusachino@proton.me>"]
 description = "A persistent, project-local knowledge graph CLI for AI agents."
@@ -13,7 +13,6 @@ categories = ["development-tools"]
 # for local `cargo publish` where a stale workspace would otherwise be swept in.
 exclude = [
   ".asobi/",
-  ".fastembed_cache/",
   "memory_export.json",
   "tools_list.json",
 ]
@@ -26,18 +25,6 @@ pkg-url = "{ repo }/releases/download/v{ version }/{ name }-{ target }.{ archive
 pkg-fmt = "tgz"
 bin-dir = "{ bin }{ binary-ext }"
 
-[features]
-default = []
-documents = [
-    "dep:fastembed",
-]
-# Experimental Turso backend. libSQL is the default provider; Turso is compiled
-# and selectable only when this feature is enabled. See docs/specs for the
-# backend-boundary plan.
-turso-experimental = [
-    "dep:turso",
-]
-
 [dependencies]
 # Core
 anyhow = "1"
@@ -45,8 +32,6 @@ serde = { version = "1", features = ["derive"] }
 thiserror = "2"
 serde_json = "1"
 schemars = "1"
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync", "signal"] }
-uuid = { version = "1", features = ["v7"] }
 
 
 # CLI
@@ -61,40 +46,22 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # Time
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 
-# Chunking & Embedding
-fastembed = { version = "5", optional = true, default-features = false, features = ["ort-download-binaries-rustls-tls", "hf-hub-rustls-tls"] }
-
-
-# Database & Vector Store
-# libSQL is the default backend; Turso is opt-in behind `turso-experimental`.
-# Local embedded use only — disable libSQL's default replication/remote/sync
-# stack (which pulls in tonic, tonic-web, axum, hyper, tower-http). asobi only
-# ever opens local databases via `Builder::new_local`.
-turso = { version = "0.6.1", features = ["fts"], optional = true }
-libsql = { version = "0.9", default-features = false, features = ["core"] }
+# Database
+rusqlite = { version = "0.40", features = ["bundled", "backup"] }
 
 
 [dev-dependencies]
-criterion = { version = "0.7", features = ["async_tokio"] }
+criterion = "0.7"
 dhat = "0.3"
 filetime = "0.2"
 tempfile = "3"
-
-[[bench]]
-name = "graph"
-harness = false
 
 [[bench]]
 name = "normalize"
 harness = false
 
 [[bench]]
-name = "vector"
-harness = false
-required-features = ["documents"]
-
-[[bench]]
-name = "skills"
+name = "graph"
 harness = false
 
 [[bench]]
@@ -102,16 +69,23 @@ name = "graph_criterion"
 harness = false
 
 [[bench]]
-name = "vector_criterion"
-harness = false
-required-features = ["documents"]
-
-[[bench]]
 name = "allocations"
 harness = false
 
 [[bench]]
+name = "tasks"
+harness = false
+
+[[bench]]
 name = "sql_plans"
+harness = false
+
+[[bench]]
+name = "skills"
+harness = false
+
+[[bench]]
+name = "storage"
 harness = false
 
 

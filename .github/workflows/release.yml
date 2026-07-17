@@ -17,6 +17,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: DeterminateSystems/nix-installer-action@main
+      - name: Verify tag matches package version
+        shell: bash
+        run: |
+          tag_version="${GITHUB_REF_NAME#v}"
+          package_version="$(awk -F'"' '/^version = / { print $2; exit }' Cargo.toml)"
+          test "$tag_version" = "$package_version" || {
+            echo "tag $tag_version does not match Cargo.toml version $package_version" >&2
+            exit 1
+          }
       - name: Verify package
         run: nix develop -c cargo publish --locked --dry-run
       - name: Publish to crates.io
@@ -26,9 +35,8 @@ jobs:
     needs: publish-crate
     strategy:
       fail-fast: false
-      # Native runners per target. Cross-compiling the `documents` artifact
-      # (links onnxruntime via `ort`) is unreliable, so we build natively.
-      # cargo-zigbuild would be the lever if musl / arm-linux targets are added.
+      # Native runners per target keep release builds predictable. The shipped
+      # 0.6 product has one SQLite binary with no feature-specific variants.
       matrix:
         include:
           - os: ubuntu-latest
@@ -45,16 +53,10 @@ jobs:
       - name: Package lean binary
         run: tar -czf "asobi-${{ matrix.target }}.tar.gz" -C "target/${{ matrix.target }}/release" asobi
 
-      - name: Build full binary (documents)
-        run: nix develop -c cargo build --release --locked --features documents --target ${{ matrix.target }}
-      - name: Package full binary
-        run: tar -czf "asobi-full-${{ matrix.target }}.tar.gz" -C "target/${{ matrix.target }}/release" asobi
-
       - name: Upload to release
         uses: softprops/action-gh-release@v2
         with:
           files: |
             asobi-${{ matrix.target }}.tar.gz
-            asobi-full-${{ matrix.target }}.tar.gz
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

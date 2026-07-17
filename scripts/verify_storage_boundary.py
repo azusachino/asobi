@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Reject provider-shaped references outside the storage boundary.
 
-The application layer may depend on ``api::v1`` capabilities and on the
+The application layer may depend on ``api::v2`` capabilities and on the
 ``storage::Storage`` composite, but it must not name a concrete provider,
 driver type, SQL module, or provider-owned state path. Backend-specific tests
 must opt in explicitly with ``// storage-boundary: provider-test``.
@@ -16,10 +16,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_PATHS = (ROOT / "src", ROOT / "tests", ROOT / "benches")
-PROVIDER_RE = re.compile(
-    r"(?:crate::storage::(?:turso|libsql)|asobi::storage::(?:turso|libsql)"
-    r"|\b(?:turso|libsql)::|\b(?:TursoStore|LibsqlStore)\b)"
-)
+PROVIDER_RE = re.compile(r"\b(?:turso|libsql|sqlx|TursoStore|LibsqlStore)\b", re.I)
 ALLOW_MARKER = "storage-boundary: provider-test"
 
 

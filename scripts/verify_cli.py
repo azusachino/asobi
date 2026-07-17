@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import sqlite3
 import subprocess
 import tempfile
 from pathlib import Path
@@ -161,7 +162,7 @@ def main() -> None:
             [
                 "obs",
                 "project-a",
-                "Uses Turso native FTS for graph recall.",
+                "Uses SQLite FTS5 for graph recall.",
             ],
             env,
         )
@@ -194,7 +195,7 @@ def main() -> None:
             }
         ]
 
-        keyword_match = graph(["search", "Turso"], env)
+        keyword_match = graph(["search", "SQLite"], env)
         assert "project-a" in entity_names(keyword_match)
 
         for idx in range(5):
@@ -310,7 +311,7 @@ def main() -> None:
         assert truths(restored, "project-a") == {"edition": "2024"}
 
         # Physical backup -> mutation -> restore must preserve the complete
-        # libSQL database. This is distinct from the portable JSON snapshot
+        # SQLite database. This is distinct from the portable JSON snapshot
         # above and guards the BackupStore CLI wiring.
         snapshot_file = Path(tmp) / "snapshot.db"
         run(["backup", "--output", str(snapshot_file)], env)
@@ -321,6 +322,26 @@ def main() -> None:
 
         run(["reset", "--force"], env)
         assert graph(["graph"], env)["entities"] == []
+
+        # A live database may have sidecars from WAL mode. Restore must remove
+        # them before replacing the main file, otherwise SQLite can replay stale
+        # pages into the restored database.
+        live_db = Path(env["ASOBI_DATABASE_URL"])
+        live_connection = sqlite3.connect(live_db)
+        with live_connection:
+            live_connection.execute("PRAGMA journal_mode=WAL")
+            live_connection.execute(
+                "CREATE TABLE IF NOT EXISTS restore_sidecar_marker (value TEXT)"
+            )
+            live_connection.execute(
+                "INSERT INTO restore_sidecar_marker(value) VALUES ('stale')"
+            )
+        assert Path(f"{live_db}-wal").exists()
+        assert Path(f"{live_db}-shm").exists()
+        # `with` only commits/rolls back; the connection itself stays open and
+        # keeps a lock on the file unless closed explicitly, which would
+        # otherwise fight the CLI process for the file lock below.
+        live_connection.close()
 
         run(["restore", str(snapshot_file), "--force"], env)
         physically_restored = graph(["graph"], env)
@@ -333,6 +354,23 @@ def main() -> None:
 
         safety_backups = list((Path(tmp) / "backups").glob("pre-restore-*.db"))
         assert len(safety_backups) == 1
+        assert not Path(f"{live_db}-wal").exists()
+        assert not Path(f"{live_db}-shm").exists()
+
+        # Default managed snapshots honor --keep; explicit --output snapshots
+        # remain caller-owned and are not pruned by this retention policy.
+        for _ in range(3):
+            run(["backup", "--keep", "2"], env)
+        managed_backups = list((Path(tmp) / "backups").glob("asobi-*.db"))
+        assert len(managed_backups) == 2, managed_backups
+
+        invalid_source = Path(tmp) / "not-asobi.db"
+        with sqlite3.connect(invalid_source) as invalid_db:
+            invalid_db.execute("CREATE TABLE unrelated (value TEXT)")
+        invalid_restore = run_expect_failure(
+            ["restore", str(invalid_source), "--force"], env
+        )
+        assert "not an Asobi SQLite database" in invalid_restore.stderr
 
     with tempfile.TemporaryDirectory(prefix="asobi-corrupt-") as tmp:
         db_path = Path(tmp) / "corrupt.db"
@@ -345,6 +383,7 @@ def main() -> None:
     batch_and_json_checks()
     skills_checks()
     agent_feature_checks()
+    task_checks()
     scoped_export_checks()
 
     print("CLI graph integration checks passed")
@@ -624,6 +663,101 @@ def skills_checks() -> None:
             no_git_env,
         )
         assert "git" in no_git.stderr.lower()
+
+
+def task_checks() -> None:
+    """Exercise task planning, lifecycle transitions, and rejection paths."""
+    with tempfile.TemporaryDirectory(prefix="asobi-tasks-") as tmp:
+        env = os.environ.copy()
+        env["ASOBI_DATABASE_URL"] = str(Path(tmp) / "asobi.db")
+
+        for help_args in [
+            ["--help"],
+            ["tasks", "--help"],
+            ["tasks", "plan", "--help"],
+            ["tasks", "list", "--help"],
+            ["tasks", "dispatch", "--help"],
+            ["tasks", "sync", "--help"],
+            ["tasks", "close", "--help"],
+        ]:
+            assert run(help_args, env).returncode == 0
+
+        for round_no in range(3):
+            epic = f"verify:tasks-{round_no}"
+            task_1 = f"{epic}:task-1"
+            task_2 = f"{epic}:task-2"
+            planned = validate_response(
+                [
+                    "tasks",
+                    "plan",
+                    epic,
+                    "--objective",
+                    "verify task lifecycle",
+                    "--task",
+                    "first task",
+                    "--task",
+                    "second task",
+                    "--json",
+                ],
+                env,
+                "tasks-plan",
+            )
+            assert {e["name"] for e in planned["entities"]} == {
+                epic,
+                task_1,
+                task_2,
+            }
+            board = validate_response(["tasks", "list", epic], env, "tasks-list")
+            assert board["entities"][1]["truths"]["status"] == "READY_TO_DISPATCH"
+
+            duplicate = run_expect_failure(
+                [
+                    "tasks",
+                    "plan",
+                    epic,
+                    "--objective",
+                    "duplicate",
+                    "--task",
+                    "should fail",
+                ],
+                env,
+            )
+            assert "already exists" in duplicate.stderr
+
+            dispatch = validate_response(
+                ["tasks", "dispatch", "--json"], env, "tasks-dispatch"
+            )
+            assert dispatch["status"] == "DISPATCHED"
+            not_ready = run_expect_failure(
+                ["tasks", "dispatch", dispatch["entity"]], env
+            )
+            assert "READY_TO_DISPATCH" in not_ready.stderr
+
+            invalid_status = run_expect_failure(
+                ["tasks", "sync", task_1, "--status", "NOT_A_STATUS"], env
+            )
+            assert "invalid task status" in invalid_status.stderr
+            missing = run_expect_failure(
+                ["tasks", "sync", "verify:missing", "--status", "DONE"], env
+            )
+            assert "not found" in missing.stderr
+            early_close = run_expect_failure(["tasks", "close", epic], env)
+            assert "every child task" in early_close.stderr
+
+            validate_response(
+                ["tasks", "sync", task_1, "--status", "DONE", "--json"],
+                env,
+                "tasks-sync",
+            )
+            validate_response(
+                ["tasks", "sync", task_2, "--status", "DONE", "--json"],
+                env,
+                "tasks-sync",
+            )
+            closed = validate_response(
+                ["tasks", "close", epic, "--json"], env, "tasks-close"
+            )
+            assert closed["status"] == "DONE"
 
 
 def agent_feature_checks() -> None:
