@@ -129,7 +129,7 @@ pub fn resolve_selection(
 }
 
 #[cfg(not(feature = "documents"))]
-pub async fn install_skills_from_dir<S: crate::api::v1::SkillStore>(
+pub fn install_skills_from_dir<S: crate::api::SkillStore>(
     store: &S,
     dir_path: &Path,
     source: &str,
@@ -163,14 +163,13 @@ pub async fn install_skills_from_dir<S: crate::api::v1::SkillStore>(
             .map(|n| crate::normalize::normalize_key(&format!("skill:{}:{}", slug, n)))
             .collect();
         let orphans = store
-            .list_skills()
-            .await?
+            .list_skills()?
             .into_iter()
             .filter(|s| derive_source_slug(&s.source) == slug && !fresh.contains(&s.entity_name))
             .map(|s| s.entity_name)
             .collect::<Vec<_>>();
         if !orphans.is_empty() {
-            store.remove_skills(orphans).await?;
+            store.remove_skills(orphans)?;
         }
     }
     for name in selected_names {
@@ -182,15 +181,13 @@ pub async fn install_skills_from_dir<S: crate::api::v1::SkillStore>(
             .find(|(n, _)| n == &name)
             .map(|(_, d)| d.clone())
             .unwrap_or_default();
-        store
-            .upsert_skill(crate::api::v1::SkillRecord {
-                entity_name: crate::normalize::normalize_key(&format!("skill:{}:{}", slug, name)),
-                body,
-                source: source.to_string(),
-                version: version.to_string(),
-                description,
-            })
-            .await?;
+        store.upsert_skill(crate::api::SkillRecord {
+            entity_name: crate::normalize::normalize_key(&format!("skill:{}:{}", slug, name)),
+            body,
+            source: source.to_string(),
+            version: version.to_string(),
+            description,
+        })?;
     }
     Ok(())
 }
@@ -199,7 +196,7 @@ pub async fn install_skills_from_dir<S: crate::api::v1::SkillStore>(
 // Install + document-index in one pass: the store, document store, embedder,
 // and per-source install options are all genuinely distinct inputs.
 #[allow(clippy::too_many_arguments)]
-pub async fn install_skills_from_store<S, D, E>(
+pub fn install_skills_from_store<S, D, E>(
     store: &S,
     document_store: &D,
     embedder: &E,
@@ -211,8 +208,8 @@ pub async fn install_skills_from_store<S, D, E>(
     prune: bool,
 ) -> Result<()>
 where
-    S: crate::api::v1::SkillStore,
-    D: crate::api::v1::DocumentStore,
+    S: crate::api::SkillStore,
+    D: crate::api::DocumentStore,
     E: crate::embed::EmbeddingProvider,
 {
     let mut parsed_skills = Vec::new();
@@ -240,14 +237,13 @@ where
             .map(|n| crate::normalize::normalize_key(&format!("skill:{}:{}", slug, n)))
             .collect();
         let orphans = store
-            .list_skills()
-            .await?
+            .list_skills()?
             .into_iter()
             .filter(|s| derive_source_slug(&s.source) == slug && !fresh.contains(&s.entity_name))
             .map(|s| s.entity_name)
             .collect::<Vec<_>>();
         if !orphans.is_empty() {
-            store.remove_skills(orphans).await?;
+            store.remove_skills(orphans)?;
         }
     }
     for name in selected_names {
@@ -260,25 +256,23 @@ where
             .map(|(_, d)| d.clone())
             .unwrap_or_default();
         let entity_name = crate::normalize::normalize_key(&format!("skill:{}:{}", slug, name));
-        store
-            .upsert_skill(crate::api::v1::SkillRecord {
-                entity_name: entity_name.clone(),
-                body: body.clone(),
-                source: source.to_string(),
-                version: version.to_string(),
-                description,
-            })
-            .await?;
+        store.upsert_skill(crate::api::SkillRecord {
+            entity_name: entity_name.clone(),
+            body: body.clone(),
+            source: source.to_string(),
+            version: version.to_string(),
+            description,
+        })?;
 
-        document_store.delete_chunks_by_topic(&entity_name).await?;
+        document_store.delete_chunks_by_topic(&entity_name)?;
         let texts = crate::chunk::chunk_text(&body, 512, 64);
         if !texts.is_empty() {
-            let vectors = embedder.embed(&texts).await?;
+            let vectors = embedder.embed(&texts)?;
             let chunks = texts
                 .into_iter()
                 .zip(vectors)
                 .enumerate()
-                .map(|(i, (text, embedding))| crate::api::v1::DocumentChunk {
+                .map(|(i, (text, embedding))| crate::api::DocumentChunk {
                     id: uuid::Uuid::now_v7().to_string(),
                     topic_id: entity_name.clone(),
                     chunk_idx: i as u32,
@@ -287,16 +281,14 @@ where
                     embedding,
                 })
                 .collect();
-            document_store.insert_chunks(chunks).await?;
+            document_store.insert_chunks(chunks)?;
         }
-        document_store
-            .upsert_topic(crate::api::v1::TopicSnapshot {
-                id: entity_name,
-                title: name,
-                file_path: source.to_string(),
-                body,
-            })
-            .await?;
+        document_store.upsert_topic(crate::api::TopicSnapshot {
+            id: entity_name,
+            title: name,
+            file_path: source.to_string(),
+            body,
+        })?;
     }
     Ok(())
 }
@@ -304,7 +296,7 @@ where
 #[cfg(all(test, not(feature = "documents")))]
 mod tests {
     use super::*;
-    use crate::api::v1::SkillStore;
+    use crate::api::SkillStore;
     use crate::storage::Storage;
 
     #[test]
@@ -375,8 +367,8 @@ mod tests {
         assert_eq!(selected, vec!["skill-b"]);
     }
 
-    #[tokio::test]
-    async fn test_install_from_local_git_repo() {
+    #[test]
+    fn test_install_from_local_git_repo() {
         use tempfile::tempdir;
         let git_dir = tempdir().unwrap();
         let repo_path = git_dir.path();
@@ -444,7 +436,7 @@ mod tests {
                 db_dir.path().join("test.db").to_str().unwrap(),
             );
         }
-        let storage = Storage::open_default().await.unwrap();
+        let storage = Storage::open_default().unwrap();
 
         // 5. Clone and install
         let clone_temp_dir = tempdir().unwrap();
@@ -465,11 +457,10 @@ mod tests {
             false,
             true,
         )
-        .await
         .unwrap();
 
         // 6. Verify skill installed
-        let skills = storage.list_skills().await.unwrap();
+        let skills = storage.list_skills().unwrap();
         assert_eq!(skills.len(), 1);
         assert_eq!(
             skills[0].entity_name,
@@ -482,8 +473,8 @@ mod tests {
     }
 
     #[cfg(feature = "documents")]
-    #[tokio::test]
-    async fn test_install_skills_document_embedding() {
+    #[test]
+    fn test_install_skills_document_embedding() {
         use tempfile::tempdir;
         let git_dir = tempdir().unwrap();
         let repo_path = git_dir.path();
@@ -551,7 +542,7 @@ mod tests {
                 db_dir.path().join("test.db").to_str().unwrap(),
             );
         }
-        let storage = Storage::open_default().await.unwrap();
+        let storage = Storage::open_default().unwrap();
 
         struct FakeEmbedder(usize);
         impl crate::embed::EmbeddingProvider for FakeEmbedder {
@@ -585,13 +576,10 @@ mod tests {
             false,
             true,
         )
-        .await
         .unwrap();
 
         // 6. Verify skill is queryable via recall
-        let results = crate::recall::recall("cryptography", &storage, &embedder, 5)
-            .await
-            .unwrap();
+        let results = crate::recall::recall("cryptography", &storage, &embedder, 5).unwrap();
         assert!(!results.is_empty(), "expected skill to be queryable");
 
         // Topic ID should be the normalized skill entity name
@@ -603,8 +591,8 @@ mod tests {
         assert!(results[0].snippet.contains("quantum cryptography"));
     }
 
-    #[tokio::test]
-    async fn test_sync_prunes_orphaned_skills() {
+    #[test]
+    fn test_sync_prunes_orphaned_skills() {
         use tempfile::tempdir;
         let src_dir = tempdir().unwrap();
         let src = src_dir.path();
@@ -628,32 +616,30 @@ mod tests {
                 db_dir.path().join("test.db").to_str().unwrap(),
             );
         }
-        let storage = Storage::open_default().await.unwrap();
+        let storage = Storage::open_default().unwrap();
 
         let source = src.to_str().unwrap();
         let slug = derive_source_slug(source);
 
         install_skills_from_dir(&storage, src, source, "v1", SelectionMode::All, false, true)
-            .await
             .unwrap();
-        assert_eq!(storage.list_skills().await.unwrap().len(), 2);
+        assert_eq!(storage.list_skills().unwrap().len(), 2);
 
         // Upstream removes `beta`; a sync (install --all) must prune it.
         std::fs::remove_file(src.join("beta.md")).unwrap();
 
         install_skills_from_dir(&storage, src, source, "v2", SelectionMode::All, false, true)
-            .await
             .unwrap();
 
-        let skills = storage.list_skills().await.unwrap();
+        let skills = storage.list_skills().unwrap();
         assert_eq!(skills.len(), 1);
         let alpha = crate::normalize::normalize_key(&format!("skill:{}:alpha", slug));
         assert_eq!(skills[0].entity_name, alpha);
         assert_eq!(skills[0].version, "v2");
     }
 
-    #[tokio::test]
-    async fn test_select_does_not_prune() {
+    #[test]
+    fn test_select_does_not_prune() {
         use tempfile::tempdir;
         let src_dir = tempdir().unwrap();
         let src = src_dir.path();
@@ -676,7 +662,7 @@ mod tests {
                 db_dir.path().join("test.db").to_str().unwrap(),
             );
         }
-        let storage = Storage::open_default().await.unwrap();
+        let storage = Storage::open_default().unwrap();
         let source = src.to_str().unwrap();
 
         // Install only alpha, then only beta — both must survive (additive).
@@ -690,15 +676,14 @@ mod tests {
                 false,
                 false,
             )
-            .await
             .unwrap();
         }
 
-        assert_eq!(storage.list_skills().await.unwrap().len(), 2);
+        assert_eq!(storage.list_skills().unwrap().len(), 2);
     }
 
-    #[tokio::test]
-    async fn test_install_skills_with_fallbacks() {
+    #[test]
+    fn test_install_skills_with_fallbacks() {
         use tempfile::tempdir;
         let git_dir = tempdir().unwrap();
         let repo_path = git_dir.path();
@@ -776,7 +761,7 @@ mod tests {
                 db_dir.path().join("test.db").to_str().unwrap(),
             );
         }
-        let storage = Storage::open_default().await.unwrap();
+        let storage = Storage::open_default().unwrap();
 
         // 5. Clone and install
         let clone_temp_dir = tempdir().unwrap();
@@ -797,11 +782,10 @@ mod tests {
             false,
             true,
         )
-        .await
         .unwrap();
 
         // 6. Verify skills installed correctly with fallbacks
-        let skills = storage.list_skills().await.unwrap();
+        let skills = storage.list_skills().unwrap();
         assert_eq!(skills.len(), 2);
 
         let slug = derive_source_slug(repo_path.to_str().unwrap());

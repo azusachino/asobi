@@ -1,26 +1,24 @@
 use super::commands::SkillsCommands;
 use super::runtime::*;
-use crate::api::v1::SkillStore;
+use crate::api::SkillStore;
 use crate::paths::AsobiPaths;
 use anyhow::Result;
 use std::io::IsTerminal;
 use tracing::{info, warn};
 
-pub(crate) async fn run(
+pub(crate) fn run(
     backend: &crate::storage::Storage,
     paths: &AsobiPaths,
     subcommand: Option<SkillsCommands>,
 ) -> Result<()> {
     match subcommand {
         None => {
-            let skills = backend.list_skills().await?;
+            let skills = backend.list_skills()?;
             if skills.is_empty() {
                 println!("No skills installed.");
             } else {
-                let mut grouped: std::collections::BTreeMap<
-                    String,
-                    Vec<crate::api::v1::SkillRecord>,
-                > = std::collections::BTreeMap::new();
+                let mut grouped: std::collections::BTreeMap<String, Vec<crate::api::SkillRecord>> =
+                    std::collections::BTreeMap::new();
                 for s in skills {
                     grouped.entry(s.source.clone()).or_default().push(s);
                 }
@@ -69,27 +67,10 @@ pub(crate) async fn run(
 
             let is_tty = std::io::stdin().is_terminal();
 
-            #[cfg(feature = "documents")]
-            let embedder = init_embedder(paths)?;
-
             // `--all` is a full sync of the source: prune skills that
             // vanished upstream. `--select` / interactive stay additive.
             let prune = matches!(mode, crate::skills::SelectionMode::All);
 
-            #[cfg(feature = "documents")]
-            crate::skills::install_skills_from_store(
-                backend,
-                backend,
-                embedder.as_ref(),
-                &target_path,
-                &git_url,
-                &version,
-                mode,
-                is_tty,
-                prune,
-            )
-            .await?;
-            #[cfg(not(feature = "documents"))]
             crate::skills::install_skills_from_dir(
                 backend,
                 &target_path,
@@ -98,16 +79,12 @@ pub(crate) async fn run(
                 mode,
                 is_tty,
                 prune,
-            )
-            .await?;
+            )?;
 
             info!("Skills installed successfully.");
         }
         Some(SkillsCommands::Update { source }) => {
-            #[cfg(feature = "documents")]
-            let embedder = init_embedder(paths)?;
-
-            let skills = backend.list_skills().await?;
+            let skills = backend.list_skills()?;
             let mut unique_sources = std::collections::HashSet::new();
             for s in skills {
                 if let Some(ref filter_src) = source {
@@ -157,20 +134,6 @@ pub(crate) async fn run(
                     (local_path.to_path_buf(), "local".to_string())
                 };
 
-                #[cfg(feature = "documents")]
-                crate::skills::install_skills_from_store(
-                    backend,
-                    backend,
-                    embedder.as_ref(),
-                    &target_path,
-                    &git_url,
-                    &version,
-                    crate::skills::SelectionMode::All,
-                    false,
-                    true,
-                )
-                .await?;
-                #[cfg(not(feature = "documents"))]
                 crate::skills::install_skills_from_dir(
                     backend,
                     &target_path,
@@ -179,13 +142,12 @@ pub(crate) async fn run(
                     crate::skills::SelectionMode::All,
                     false,
                     true,
-                )
-                .await?;
+                )?;
                 info!("Successfully updated skills from {}.", src);
             }
         }
         Some(SkillsCommands::Remove { target }) => {
-            let skills = backend.list_skills().await?;
+            let skills = backend.list_skills()?;
             let mut entities_to_delete = Vec::new();
             for s in skills {
                 let slug = crate::skills::derive_source_slug(&s.source);
@@ -196,11 +158,11 @@ pub(crate) async fn run(
 
             if !entities_to_delete.is_empty() {
                 info!("Deleting {} skill entities...", entities_to_delete.len());
-                backend.remove_skills(entities_to_delete).await?;
+                backend.remove_skills(entities_to_delete)?;
                 info!("Skills removed successfully.");
             } else if target.starts_with("skill:") {
                 info!("Deleting skill entity {}...", target);
-                backend.remove_skills(vec![target.clone()]).await?;
+                backend.remove_skills(vec![target.clone()])?;
                 info!("Skills removed successfully.");
             } else {
                 anyhow::bail!("No installed skills found matching target {:?}", target);
@@ -209,7 +171,7 @@ pub(crate) async fn run(
         Some(SkillsCommands::Show { name }) => {
             let mut entity_name = name.clone();
             if !entity_name.starts_with("skill:") {
-                let skills = backend.list_skills().await?;
+                let skills = backend.list_skills()?;
                 let matches: Vec<_> = skills
                     .iter()
                     .filter(|s| {
@@ -234,7 +196,7 @@ pub(crate) async fn run(
                 }
             }
 
-            match backend.skill_body(&entity_name).await? {
+            match backend.skill_body(&entity_name)? {
                 Some(body) => {
                     print!("{}", body);
                 }

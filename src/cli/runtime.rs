@@ -1,9 +1,4 @@
-use super::commands::Commands;
-#[cfg(feature = "documents")]
-use crate::paths::AsobiPaths;
 use anyhow::Result;
-#[cfg(feature = "documents")]
-use std::sync::Arc;
 use tracing::info;
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::fmt::format::Writer;
@@ -16,34 +11,6 @@ impl FormatTime for LocalTimer {
     fn format_time(&self, w: &mut Writer<'_>) -> std::fmt::Result {
         write!(w, "{}", chrono::Local::now().format("%Y-%m-%d %H:%M:%S"))
     }
-}
-
-#[cfg(feature = "documents")]
-pub(crate) fn needs_vector(cmd: &Commands) -> bool {
-    matches!(
-        cmd,
-        Commands::Ingest { .. } | Commands::Query { .. } | Commands::Compact { .. }
-    )
-}
-
-#[cfg(not(feature = "documents"))]
-pub(crate) fn needs_vector(_: &Commands) -> bool {
-    false
-}
-
-#[cfg(feature = "documents")]
-pub const ENV_FASTEMBED_CACHE_DIR: &str = "ASOBI_FASTEMBED_CACHE_DIR";
-#[cfg(feature = "documents")]
-pub const ENV_TOPICS_DIR: &str = "ASOBI_TOPICS_DIR";
-
-#[cfg(feature = "documents")]
-pub(crate) fn init_embedder(paths: &AsobiPaths) -> Result<Arc<crate::embed::FastEmbedProvider>> {
-    let cache_dir = std::env::var(ENV_FASTEMBED_CACHE_DIR)
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|_| paths.data_dir.join("fastembed_cache"));
-    let embedder: Arc<crate::embed::FastEmbedProvider> =
-        Arc::new(crate::embed::FastEmbedProvider::new(cache_dir)?);
-    Ok(embedder)
 }
 
 /// Initialise the global tracing subscriber. Logs go to **stderr** so the

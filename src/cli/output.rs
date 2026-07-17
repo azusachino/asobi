@@ -43,13 +43,11 @@ pub(crate) struct CapabilitiesReceipt {
 /// stdout — the `--json` echo after a mutation, so a caller can confirm the
 /// write without a second `show` round-trip. Names are normalized inside
 /// `open_nodes`, so raw user input matches what was just stored.
-pub(crate) async fn emit_nodes(store: &impl GraphStore, names: Vec<String>) -> Result<()> {
-    let graph = store
-        .open_nodes(OpenNodes {
-            names,
-            ..Default::default()
-        })
-        .await?;
+pub(crate) fn emit_nodes(store: &impl GraphStore, names: Vec<String>) -> Result<()> {
+    let graph = store.open_nodes(OpenNodes {
+        names,
+        ..Default::default()
+    })?;
     print_json(graph)?;
     Ok(())
 }
@@ -80,10 +78,7 @@ fn schema_registry() -> Vec<SchemaRow> {
         ("capabilities", schema_for_data::<CapabilitiesReceipt>),
         ("export", schema_for_data::<Graph>),
         ("graph", schema_for_data::<Graph>),
-        (
-            "history",
-            schema_for_data::<Vec<crate::api::v1::TruthVersion>>,
-        ),
+        ("history", schema_for_data::<Vec<crate::api::TruthVersion>>),
         ("link", schema_for_data::<Graph>),
         ("new", schema_for_data::<Graph>),
         ("obs", schema_for_data::<Graph>),
@@ -105,12 +100,6 @@ fn schema_registry() -> Vec<SchemaRow> {
         ("unlink", schema_for_data::<Graph>),
         ("update-obs", schema_for_data::<Graph>),
     ];
-    #[cfg(feature = "documents")]
-    let rows = {
-        let mut rows = rows;
-        rows.push(("query", schema_for_data::<Vec<crate::recall::RecallResult>>));
-        rows
-    };
     rows
 }
 

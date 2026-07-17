@@ -10,11 +10,11 @@ use tracing::error;
 
 use commands::Cli;
 
-pub async fn run() {
+pub fn run() {
     runtime::init_tracing();
     let cli = Cli::parse();
     let json = cli.json;
-    if let Err(error) = dispatch::run_cli(cli).await {
+    if let Err(error) = dispatch::run_cli(cli) {
         if json {
             let error_json = serde_json::json!({
                 "status": "failed",

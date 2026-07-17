@@ -1,17 +1,11 @@
-#[cfg(not(feature = "turso-experimental"))]
 use asobi::api::{GraphStore, OpenNodes, SearchQuery, SearchStore};
-#[cfg(not(feature = "turso-experimental"))]
 use asobi::storage::Storage;
-#[cfg(not(feature = "turso-experimental"))]
 use std::{env, hint::black_box};
-#[cfg(not(feature = "turso-experimental"))]
 use tempfile::tempdir;
 
-#[cfg(not(feature = "turso-experimental"))]
 #[global_allocator]
 static ALLOCATOR: dhat::Alloc = dhat::Alloc;
 
-#[cfg(not(feature = "turso-experimental"))]
 fn main() {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -62,9 +56,4 @@ fn main() {
                 .expect("open nodes"),
         );
     });
-}
-
-#[cfg(feature = "turso-experimental")]
-fn main() {
-    eprintln!("allocation profiling is libSQL-only; omit turso-experimental");
 }

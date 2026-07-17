@@ -1,27 +1,15 @@
-//! Asobi — Knowledge Graph & Document Memory
+//! Asobi — Knowledge Graph Memory
 
-// Graph + optional Document/Vector (libSQL) tiers
 pub mod api;
 pub mod application;
-#[cfg(feature = "documents")]
-pub mod chunk;
 pub mod cli;
-#[cfg(feature = "documents")]
 pub mod compact;
-#[cfg(feature = "documents")]
-pub mod embed;
-pub mod storage;
-// Shared Utilities
 pub mod frontmatter;
-#[cfg(feature = "documents")]
-pub mod ingest;
 pub mod init;
 pub mod model;
 pub mod normalize;
 pub mod paths;
-#[cfg(feature = "documents")]
-pub mod recall;
 pub mod skills;
+pub mod storage;
 pub mod tasks;
 pub use anyhow::{Result, anyhow, bail};
-pub use tokio::task::JoinHandle;

@@ -16,24 +16,6 @@ pub(crate) struct Cli {
 
 #[derive(Subcommand)]
 pub(crate) enum Commands {
-    /// Ingest a file or directory into the document tier
-    #[cfg(feature = "documents")]
-    Ingest {
-        /// Path to file or directory
-        path: String,
-    },
-    /// Query topics or chunks using hybrid semantic + keyword search
-    #[cfg(feature = "documents")]
-    Query {
-        /// Query string
-        query: String,
-        /// Maximum number of matched topics to return
-        #[arg(long, default_value_t = 5)]
-        limit: usize,
-        /// Print results as JSON
-        #[arg(long)]
-        json: bool,
-    },
     /// Create new entities in the knowledge graph.
     ///
     /// Accepts one or more `NAME TYPE` pairs:
@@ -123,8 +105,7 @@ pub(crate) enum Commands {
         #[arg(long)]
         with_ids: bool,
     },
-    /// Report near-duplicate topics, prune sessions, and sync Graph to MD
-    #[cfg(feature = "documents")]
+    /// Prune old sessions and sync the graph to Markdown topics
     Compact {
         /// Prune sessions older than N days
         #[arg(long, default_value = "90")]

@@ -5,11 +5,13 @@
 //! are only a migration convenience for current callers.
 
 pub mod v1;
+pub mod v2;
 
-pub use v1::{
+pub use v2::{
     API_VERSION, ApiError, ApiResult, BackendCapabilities, BackendHealth, BackendInfo,
-    BackupReceipt, BackupRequest, BackupStore, DocumentChunk, DocumentMaintenanceStore,
-    DocumentSearchResult, DocumentStore, GraphStore, ImportReport, MaintenanceStore, OpenNodes,
-    SNAPSHOT_FORMAT_VERSION, SearchQuery, SearchResult, SearchStore, SkillRecord, SkillStore,
-    Snapshot, SnapshotStore, Stats, TopicSnapshot,
+    BackupReceipt, BackupRequest, BackupStore, GraphStore, ImportReport, MaintenanceStore,
+    SNAPSHOT_FORMAT_VERSION, SearchStore, SkillRecord, SkillStore, Snapshot, SnapshotStore, Stats,
+    TaskStore,
 };
+
+pub use v1::{OpenNodes, SearchQuery, TruthVersion};

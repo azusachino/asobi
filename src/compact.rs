@@ -1,5 +1,4 @@
-use crate::api::v1::{DocumentStore, GraphStore};
-use crate::ingest::ingest_file;
+use crate::api::GraphStore;
 use crate::model::EntityOutput;
 use crate::normalize::slugify;
 use anyhow::Result;
@@ -8,18 +7,14 @@ use std::io::Write as _;
 use std::path::PathBuf;
 use std::time::{Duration, SystemTime};
 
-pub async fn sync_graph_to_markdown(
-    graph_store: &impl GraphStore,
-    document_store: &impl DocumentStore,
-    embedder: &impl crate::embed::EmbeddingProvider,
-) -> Result<usize> {
+pub fn sync_graph_to_markdown(graph_store: &impl GraphStore) -> Result<usize> {
     let paths = crate::paths::AsobiPaths::resolve();
     let topics_dir = paths.topics_dir;
     if !topics_dir.exists() {
         std::fs::create_dir_all(&topics_dir)?;
     }
 
-    let graph = graph_store.read_graph_full().await?;
+    let graph = graph_store.read_graph_full()?;
     let today = chrono::Local::now().format("%Y-%m-%d %H:%M").to_string();
     let mut count = 0;
 
@@ -50,8 +45,6 @@ pub async fn sync_graph_to_markdown(
         if should_write {
             let content = render_entity_markdown(entity, &slug, &graph.relations, &compacted_time);
             std::fs::File::create(&file_path)?.write_all(content.as_bytes())?;
-            // Refresh the Vector/FTS tier from the rendered file.
-            ingest_file(&file_path, document_store, embedder).await?;
             count += 1;
         }
     }
@@ -59,7 +52,7 @@ pub async fn sync_graph_to_markdown(
     Ok(count)
 }
 
-/// The recall tier (Markdown topics + FTS/vector index) holds durable
+/// Markdown topics hold durable
 /// *knowledge*, not volatile *state* or self-indexing content. We skip:
 ///
 /// - `session` / `task` (epics are `task` too, so they skip with their tasks):
@@ -233,18 +226,6 @@ pub fn prune_old_sessions(topics_root: &str, days: u32) -> Result<usize> {
     Ok(pruned)
 }
 
-/// Fetch all topic title embeddings and cluster by similarity.
-/// Returns clusters of topic IDs with pairwise cosine similarity > threshold.
-pub async fn find_duplicate_clusters(
-    _store: &impl crate::api::v1::DocumentMaintenanceStore,
-    _threshold: f32,
-) -> anyhow::Result<Vec<Vec<String>>> {
-    _store
-        .find_duplicate_clusters(_threshold)
-        .await
-        .map_err(Into::into)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -287,25 +268,6 @@ mod tests {
         assert!(!should_sync("task"));
         // Skills are already indexed by the installer; syncing would duplicate.
         assert!(!should_sync("skill"));
-    }
-
-    struct FakeMaintenance;
-
-    impl crate::api::v1::DocumentMaintenanceStore for FakeMaintenance {
-        async fn find_duplicate_clusters(
-            &self,
-            _threshold: f32,
-        ) -> crate::api::v1::ApiResult<Vec<Vec<String>>> {
-            Ok(vec![vec!["topic-a".into(), "topic-b".into()]])
-        }
-    }
-
-    #[tokio::test]
-    async fn test_find_duplicate_clusters_uses_storage_capability() {
-        let clusters = find_duplicate_clusters(&FakeMaintenance, 0.99)
-            .await
-            .unwrap();
-        assert_eq!(clusters, vec![vec!["topic-a", "topic-b"]]);
     }
 
     fn entity(name: &str, entity_type: &str) -> EntityOutput {

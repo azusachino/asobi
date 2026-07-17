@@ -7,11 +7,7 @@ use crate::api::{
 use anyhow::Result;
 use tracing::info;
 
-pub(crate) async fn run(
-    backend: &crate::storage::Storage,
-    command: Commands,
-    json: bool,
-) -> Result<()> {
+pub(crate) fn run(backend: &crate::storage::Storage, command: Commands, json: bool) -> Result<()> {
     match command {
         Commands::New {
             pairs,
@@ -32,10 +28,10 @@ pub(crate) async fn run(
                 })
                 .collect();
             let names: Vec<String> = entities.iter().map(|e| e.name.clone()).collect();
-            backend.create_entities(entities).await?;
+            backend.create_entities(entities)?;
             info!("{} entit{} created.", names.len(), plural(names.len()));
             if json {
-                emit_nodes(backend, names).await?;
+                emit_nodes(backend, names)?;
             }
         }
         Commands::Link { triples } => {
@@ -58,10 +54,10 @@ pub(crate) async fn run(
                 .flat_map(|r| [r.from.clone(), r.to.clone()])
                 .collect();
             let count = relations.len();
-            backend.create_relations(relations).await?;
+            backend.create_relations(relations)?;
             info!("{} relation{} created.", count, suffix(count));
             if json {
-                emit_nodes(backend, involved).await?;
+                emit_nodes(backend, involved)?;
             }
         }
         Commands::Obs { name, contents } => {
@@ -70,41 +66,39 @@ pub(crate) async fn run(
                 .ok()
                 .and_then(|v| v.parse::<usize>().ok())
                 .unwrap_or(paths.observation_limit.unwrap_or(200));
-            backend
-                .add_observations(
-                    vec![crate::model::ObservationInput {
-                        entity_name: name.clone(),
-                        contents,
-                    }],
-                    limit,
-                )
-                .await?;
+            backend.add_observations(
+                vec![crate::model::ObservationInput {
+                    entity_name: name.clone(),
+                    contents,
+                }],
+                limit,
+            )?;
             info!("Observation added.");
             if json {
-                emit_nodes(backend, vec![name]).await?;
+                emit_nodes(backend, vec![name])?;
             }
         }
         Commands::Truth { name, key, value } => {
-            backend.truth_upsert(&name, &key, &value).await?;
+            backend.truth_upsert(&name, &key, &value)?;
             info!("Truth added.");
             if json {
-                emit_nodes(backend, vec![name]).await?;
+                emit_nodes(backend, vec![name])?;
             }
         }
         Commands::RmTruth { name, key } => {
-            backend.truth_delete(&name, &key).await?;
+            backend.truth_delete(&name, &key)?;
             info!("Truth deleted.");
             if json {
-                emit_nodes(backend, vec![name]).await?;
+                emit_nodes(backend, vec![name])?;
             }
         }
         Commands::History { name, key } => {
-            let history = backend.truth_history(&name, key.as_deref()).await?;
+            let history = backend.truth_history(&name, key.as_deref())?;
             print_json(history)?;
         }
         Commands::Rm { names } => {
             let deleted = names.clone();
-            backend.delete_entities(names).await?;
+            backend.delete_entities(names)?;
             info!("Entities deleted.");
             if json {
                 print_json(DeletedReceipt { deleted })?;
@@ -118,18 +112,16 @@ pub(crate) async fn run(
                         content
                     )
                 })?;
-                backend.delete_observation_by_id(&name, parsed_id).await?;
+                backend.delete_observation_by_id(&name, parsed_id)?;
             } else {
-                backend
-                    .delete_observations(vec![crate::model::ObservationDeletion {
-                        entity_name: name.clone(),
-                        observations: vec![content],
-                    }])
-                    .await?;
+                backend.delete_observations(vec![crate::model::ObservationDeletion {
+                    entity_name: name.clone(),
+                    observations: vec![content],
+                }])?;
             }
             info!("Observations deleted.");
             if json {
-                emit_nodes(backend, vec![name]).await?;
+                emit_nodes(backend, vec![name])?;
             }
         }
         Commands::UpdateObs {
@@ -145,17 +137,13 @@ pub(crate) async fn run(
                         old_content
                     )
                 })?;
-                backend
-                    .update_observation_by_id(&name, parsed_id, &new_content)
-                    .await?;
+                backend.update_observation_by_id(&name, parsed_id, &new_content)?;
             } else {
-                backend
-                    .update_observation(&name, &old_content, &new_content)
-                    .await?;
+                backend.update_observation(&name, &old_content, &new_content)?;
             }
             info!("Observation updated.");
             if json {
-                emit_nodes(backend, vec![name]).await?;
+                emit_nodes(backend, vec![name])?;
             }
         }
         Commands::Unlink {
@@ -163,20 +151,18 @@ pub(crate) async fn run(
             to,
             relation_type,
         } => {
-            backend
-                .delete_relations(vec![crate::model::RelationInput {
-                    from: from.clone(),
-                    to: to.clone(),
-                    relation_type,
-                }])
-                .await?;
+            backend.delete_relations(vec![crate::model::RelationInput {
+                from: from.clone(),
+                to: to.clone(),
+                relation_type,
+            }])?;
             info!("Relations deleted.");
             if json {
-                emit_nodes(backend, vec![from, to]).await?;
+                emit_nodes(backend, vec![from, to])?;
             }
         }
         Commands::Graph => {
-            let graph = backend.read_graph().await?;
+            let graph = backend.read_graph()?;
             print_json(graph)?;
         }
         Commands::Search {
@@ -193,13 +179,11 @@ pub(crate) async fn run(
                 }
             }
             let query_str = query.unwrap_or_default();
-            let graph = backend
-                .search_nodes(SearchQuery {
-                    query: query_str,
-                    limit,
-                    filters: parsed_filters,
-                })
-                .await?;
+            let graph = backend.search_nodes(SearchQuery {
+                query: query_str,
+                limit,
+                filters: parsed_filters,
+            })?;
             print_json(graph)?;
         }
         Commands::Show {
@@ -207,13 +191,11 @@ pub(crate) async fn run(
             expand,
             with_ids,
         } => {
-            let graph = backend
-                .open_nodes(OpenNodes {
-                    names,
-                    with_ids,
-                    expand,
-                })
-                .await?;
+            let graph = backend.open_nodes(OpenNodes {
+                names,
+                with_ids,
+                expand,
+            })?;
             print_json(graph)?;
         }
         Commands::Stats { per_entity } => {
@@ -224,7 +206,7 @@ pub(crate) async fn run(
                 entities,
                 relations,
                 observations,
-            } = backend.stats().await?;
+            } = backend.stats()?;
             if json {
                 let entities_detailed = if per_entity {
                     let paths = crate::paths::AsobiPaths::resolve();
@@ -233,7 +215,7 @@ pub(crate) async fn run(
                         .and_then(|v| v.parse::<usize>().ok())
                         .unwrap_or(paths.observation_limit.unwrap_or(200));
 
-                    let list = backend.stats_per_entity().await?;
+                    let list = backend.stats_per_entity()?;
                     Some(
                         list.iter()
                             .map(|(name, count)| {
@@ -279,7 +261,7 @@ pub(crate) async fn run(
                         .and_then(|v| v.parse::<usize>().ok())
                         .unwrap_or(paths.observation_limit.unwrap_or(200));
 
-                    let list = backend.stats_per_entity().await?;
+                    let list = backend.stats_per_entity()?;
                     if !list.is_empty() {
                         println!("\nEntities by Observation Count:");
                         for (name, count) in &list {
@@ -302,8 +284,8 @@ pub(crate) async fn run(
             }
         }
         Commands::Capabilities => {
-            let capabilities = backend.capabilities().await?;
-            let health = backend.health().await?;
+            let capabilities = backend.capabilities()?;
+            let health = backend.health()?;
             print_json(CapabilitiesReceipt {
                 api_version: crate::api::API_VERSION,
                 capabilities,
@@ -317,9 +299,9 @@ pub(crate) async fn run(
             rationale,
         } => {
             let graph = if scope.is_empty() {
-                backend.read_graph_full().await?
+                backend.read_graph_full()?
             } else {
-                backend.read_graph_scoped(&scope, rationale).await?
+                backend.read_graph_scoped(&scope, rationale)?
             };
             if let Some(path) = output {
                 let json = serde_json::to_string_pretty(&graph)?;
@@ -336,7 +318,7 @@ pub(crate) async fn run(
 
             let had_entities = !graph.entities.is_empty();
             let had_relations = !graph.relations.is_empty();
-            import_graph(backend, graph).await?;
+            import_graph(backend, graph)?;
             if had_entities {
                 info!("Imported entities, observations, and truths.");
             }
@@ -357,16 +339,14 @@ pub(crate) async fn run(
                     return Ok(());
                 }
             }
-            backend.reset().await?;
+            backend.reset()?;
             info!("Knowledge graph reset successfully.");
         }
         Commands::Backup { output, keep } => {
-            let receipt = backend
-                .backup(crate::api::v1::BackupRequest {
-                    destination: output.map(std::path::PathBuf::from).unwrap_or_default(),
-                    keep,
-                })
-                .await?;
+            let receipt = backend.backup(crate::api::BackupRequest {
+                destination: output.map(std::path::PathBuf::from).unwrap_or_default(),
+                keep,
+            })?;
             info!("Backup written to {}", receipt.path.display());
         }
         Commands::Restore { .. } => unreachable!("restore handled before borrowing storage"),

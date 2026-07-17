@@ -1,4 +1,3 @@
-#[tokio::main]
-async fn main() {
-    asobi::cli::run().await;
+fn main() {
+    asobi::cli::run();
 }
