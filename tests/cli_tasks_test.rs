@@ -1,4 +1,6 @@
 use std::process::Command;
+use std::sync::{Arc, Barrier};
+use std::thread;
 use tempfile::tempdir;
 
 fn asobi() -> std::path::PathBuf {
@@ -77,4 +79,51 @@ fn task_dispatcher_commands_and_help_work() {
         .output()
         .unwrap();
     assert!(output.status.success(), "sync failed: {output:?}");
+}
+
+#[test]
+fn only_one_concurrent_dispatcher_claims_a_task() {
+    let dir = tempdir().unwrap();
+    let db = dir.path().join("contended-tasks.db");
+    let db = db.to_str().unwrap().to_owned();
+    let output = Command::new(asobi())
+        .args([
+            "tasks",
+            "plan",
+            "asobi:contention",
+            "--objective",
+            "Claim exactly once",
+            "--task",
+            "One winner",
+        ])
+        .env("ASOBI_DATABASE_URL", &db)
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "plan failed: {output:?}");
+
+    let workers = 8;
+    let barrier = Arc::new(Barrier::new(workers));
+    let db = Arc::new(db);
+    let mut handles = Vec::new();
+    for index in 0..workers {
+        let barrier = Arc::clone(&barrier);
+        let db = Arc::clone(&db);
+        handles.push(thread::spawn(move || {
+            barrier.wait();
+            Command::new(asobi())
+                .args(["tasks", "dispatch", "--agent", &format!("agent-{index}")])
+                .env("ASOBI_DATABASE_URL", db.as_ref())
+                .output()
+                .unwrap()
+                .status
+                .success()
+        }));
+    }
+
+    let winners = handles
+        .into_iter()
+        .map(|handle| handle.join().unwrap())
+        .filter(|success| *success)
+        .count();
+    assert_eq!(winners, 1, "exactly one agent must claim the task");
 }

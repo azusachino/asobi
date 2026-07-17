@@ -1,14 +1,15 @@
-use crate::api::v1::{OpenNodes, SearchQuery, TruthVersion};
 use crate::api::v2::{
     ApiError, ApiResult, BackendCapabilities, BackendHealth, BackupReceipt, BackupRequest,
-    BackupStore, GraphStore, ImportReport, MaintenanceStore, SearchStore, SkillRecord, SkillStore,
-    Snapshot, SnapshotStore, Stats, TaskStore,
+    BackupStore, GraphStore, ImportReport, MaintenanceStore, OpenNodes, SearchQuery, SearchStore,
+    SkillRecord, SkillStore, Snapshot, SnapshotStore, Stats, TaskStore, TruthVersion,
 };
 use crate::model::{
     EntityInput, EntityOutput, Graph, ObservationDeletion, ObservationInput, RelationInput,
 };
-use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
-use std::collections::BTreeMap;
+use rusqlite::{
+    Connection, OptionalExtension, Transaction, TransactionBehavior, params, params_from_iter,
+};
+use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
@@ -172,33 +173,34 @@ fn graph_from_connection(
     expand: &[String],
 ) -> rusqlite::Result<Graph> {
     let mut selected = names.map(|values| values.iter().map(|v| normalize(v)).collect::<Vec<_>>());
-    if let Some(values) = selected.as_mut() {
-        if !expand.is_empty() && !values.is_empty() {
-            let placeholders = (0..values.len()).map(|_| "?").collect::<Vec<_>>().join(",");
-            let mut stmt = conn.prepare(&format!("SELECT from_entity, to_entity, relation_type FROM asobi_relations WHERE from_entity IN ({placeholders}) OR to_entity IN ({placeholders})"))?;
-            let mut params_vec: Vec<&dyn rusqlite::ToSql> = Vec::new();
-            for value in values.iter() {
-                params_vec.push(value);
-            }
-            for value in values.iter() {
-                params_vec.push(value);
-            }
-            let rows = stmt.query_map(rusqlite::params_from_iter(params_vec), |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, String>(2)?,
-                ))
-            })?;
-            for row in rows {
-                let (from, to, kind) = row?;
-                if expand.iter().any(|wanted| wanted == &kind) {
-                    if !values.contains(&from) {
-                        values.push(from);
-                    }
-                    if !values.contains(&to) {
-                        values.push(to);
-                    }
+    if let Some(values) = selected.as_mut()
+        && !expand.is_empty()
+        && !values.is_empty()
+    {
+        let placeholders = (0..values.len()).map(|_| "?").collect::<Vec<_>>().join(",");
+        let mut stmt = conn.prepare(&format!("SELECT from_entity, to_entity, relation_type FROM asobi_relations WHERE from_entity IN ({placeholders}) OR to_entity IN ({placeholders})"))?;
+        let mut params_vec: Vec<&dyn rusqlite::ToSql> = Vec::new();
+        for value in values.iter() {
+            params_vec.push(value);
+        }
+        for value in values.iter() {
+            params_vec.push(value);
+        }
+        let rows = stmt.query_map(rusqlite::params_from_iter(params_vec), |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        })?;
+        for row in rows {
+            let (from, to, kind) = row?;
+            if expand.iter().any(|wanted| wanted == &kind) {
+                if !values.contains(&from) {
+                    values.push(from);
+                }
+                if !values.contains(&to) {
+                    values.push(to);
                 }
             }
         }
@@ -288,6 +290,66 @@ fn graph_from_connection(
         entities,
         relations,
     })
+}
+
+fn scoped_names(
+    conn: &Connection,
+    roots: &[String],
+    rationale: bool,
+) -> rusqlite::Result<Vec<String>> {
+    let mut selected: HashSet<String> = roots.iter().map(|name| normalize(name)).collect();
+    let relations = conn
+        .prepare("SELECT from_entity, to_entity, relation_type FROM asobi_relations")?
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+
+    // Expand only inward `part_of` edges, so selecting an epic never drags in
+    // its parent project or a sibling epic.
+    loop {
+        let before = selected.len();
+        for (from, to, kind) in &relations {
+            if kind == "part_of" && selected.contains(to) {
+                selected.insert(from.clone());
+            }
+        }
+        if selected.len() == before {
+            break;
+        }
+    }
+
+    // Include one-hop rationale/dependency targets from the selected subtree.
+    let cited: Vec<String> = relations
+        .iter()
+        .filter(|(from, _, kind)| {
+            selected.contains(from) && (kind == "depends_on" || (rationale && kind == "extends"))
+        })
+        .map(|(_, to, _)| to.clone())
+        .collect();
+    selected.extend(cited);
+    if rationale {
+        let rationale_targets: Vec<String> = relations
+            .iter()
+            .filter(|(from, _, kind)| selected.contains(from) && kind == "extends")
+            .map(|(_, to, _)| to.clone())
+            .collect();
+        selected.extend(rationale_targets);
+    }
+    let excluded: HashSet<String> = conn
+        .prepare(
+            "SELECT name FROM asobi_entities WHERE entity_type IN ('session','preference','standard')",
+        )?
+        .query_map([], |row| row.get(0))?
+        .collect::<rusqlite::Result<HashSet<_>>>()?;
+    selected.retain(|name| !excluded.contains(name));
+    let mut names: Vec<_> = selected.into_iter().collect();
+    names.sort();
+    Ok(names)
 }
 
 impl GraphStore for SqliteStore {
@@ -412,8 +474,16 @@ impl GraphStore for SqliteStore {
     fn read_graph_full(&self) -> ApiResult<Graph> {
         self.graph(None, &[])
     }
-    fn read_graph_scoped(&self, scope: &[String], _rationale: bool) -> ApiResult<Graph> {
-        self.graph(Some(scope), &[])
+    fn read_graph_scoped(&self, scope: &[String], rationale: bool) -> ApiResult<Graph> {
+        self.read(|conn| {
+            let names = scoped_names(conn, scope, rationale)?;
+            let included: HashSet<_> = names.iter().cloned().collect();
+            let mut graph = graph_from_connection(conn, Some(&names), &[])?;
+            graph
+                .relations
+                .retain(|rel| included.contains(&rel.from) && included.contains(&rel.to));
+            Ok(graph)
+        })
     }
     fn open_nodes(&self, req: OpenNodes) -> ApiResult<Graph> {
         self.graph(Some(&req.names), &req.expand)
@@ -427,12 +497,41 @@ impl SearchStore for SqliteStore {
         self.read(|conn| {
             let mut names = Vec::new();
             if !term.is_empty() {
+                let search_limit = if query.filters.is_empty() {
+                    limit as i64
+                } else {
+                    -1
+                };
                 let mut stmt = conn.prepare("SELECT DISTINCT o.entity_name FROM asobi_obs_fts JOIN asobi_observations o ON asobi_obs_fts.rowid=o.rowid WHERE asobi_obs_fts MATCH ? ORDER BY bm25(asobi_obs_fts) LIMIT ?")?;
-                for row in stmt.query_map(params![term, limit as i64], |r| r.get::<_, String>(0))? { names.push(row?); }
+                if let Ok(rows) = stmt.query_map(params![term, search_limit], |r| r.get::<_, String>(0)) {
+                    for row in rows.flatten() {
+                        names.push(row);
+                    }
+                }
                 let like = format!("%{}%", term);
                 let mut stmt = conn.prepare("SELECT name FROM asobi_entities WHERE name LIKE ? OR entity_type LIKE ? ORDER BY name LIMIT ?")?;
-                for row in stmt.query_map(params![like, format!("%{}%", term), limit as i64], |r| r.get::<_, String>(0))? { let name = row?; if !names.contains(&name) { names.push(name); } }
+                for row in stmt.query_map(params![like, format!("%{}%", term), search_limit], |r| r.get::<_, String>(0))? { let name = row?; if !names.contains(&name) { names.push(name); } }
             }
+            if !query.filters.is_empty() {
+                let mut sql = String::from("SELECT e.name FROM asobi_entities e");
+                let mut values = Vec::with_capacity(query.filters.len() * 2);
+                for (idx, (key, value)) in query.filters.iter().enumerate() {
+                    sql.push_str(&format!(" JOIN asobi_truths t{idx} ON t{idx}.entity_name=e.name AND t{idx}.key=? AND t{idx}.value=?"));
+                    values.push(key.clone());
+                    values.push(value.clone());
+                }
+                sql.push_str(" ORDER BY e.name");
+                let mut stmt = conn.prepare(&sql)?;
+                let eligible = stmt
+                    .query_map(params_from_iter(values.iter()), |r| r.get::<_, String>(0))?
+                    .collect::<rusqlite::Result<std::collections::HashSet<_>>>()?;
+                if names.is_empty() {
+                    names.extend(eligible);
+                } else {
+                    names.retain(|name| eligible.contains(name));
+                }
+            }
+            names.truncate(limit);
             graph_from_connection(conn, Some(&names), &[])
         })
     }
@@ -523,6 +622,19 @@ impl BackupStore for SqliteStore {
             )));
         }
         drop(check);
+        if db_path.exists() {
+            let backup_dir = db_path
+                .parent()
+                .unwrap_or_else(|| Path::new("."))
+                .join("backups");
+            std::fs::create_dir_all(&backup_dir).map_err(backend_error)?;
+            let stamp = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_err(backend_error)?
+                .as_nanos();
+            std::fs::copy(&db_path, backup_dir.join(format!("pre-restore-{stamp}.db")))
+                .map_err(backend_error)?;
+        }
         drop(self);
         std::fs::copy(source, db_path)
             .map(|_| ())
@@ -577,6 +689,27 @@ impl MaintenanceStore for SqliteStore {
 }
 
 impl TaskStore for SqliteStore {
+    fn dispatch(
+        &self,
+        task: Option<&str>,
+        agent: &str,
+        observation_limit: usize,
+    ) -> ApiResult<Option<String>> {
+        self.write(|tx| {
+            let target: Option<String> = match task {
+                Some(task) => Some(normalize(task)),
+                None => tx.query_row("SELECT t.entity_name FROM asobi_truths t JOIN asobi_entities e ON e.name=t.entity_name WHERE t.key='status' AND t.value='READY_TO_DISPATCH' AND e.entity_type='task' ORDER BY t.entity_name LIMIT 1", [], |r| r.get(0)).optional()?,
+            };
+            let Some(target) = target else { return Ok(None); };
+            let changed = tx.execute("UPDATE asobi_truths SET value='DISPATCHED',updated_at=CURRENT_TIMESTAMP WHERE entity_name=? AND key='status' AND value='READY_TO_DISPATCH'", [&target])?;
+            if changed == 0 { return Ok(None); }
+            tx.execute("INSERT INTO asobi_truths(entity_name,key,value) VALUES (?,'claimed_by',?) ON CONFLICT(entity_name,key) DO UPDATE SET value=excluded.value,updated_at=CURRENT_TIMESTAMP", params![target, agent])?;
+            tx.execute("INSERT INTO asobi_observations(entity_name,content) VALUES (?,?)", params![target, format!("dispatched to {agent}")])?;
+            let cap = if observation_limit == 0 { DEFAULT_OBSERVATION_LIMIT } else { observation_limit };
+            tx.execute("DELETE FROM asobi_observations WHERE entity_name=? AND id NOT IN (SELECT id FROM asobi_observations WHERE entity_name=? ORDER BY id DESC LIMIT ?)", params![target, target, cap as i64])?;
+            Ok(Some(target))
+        })
+    }
     fn claim_next(&self, agent: &str) -> ApiResult<Option<String>> {
         self.write(|tx| { let task:Option<String>=tx.query_row("SELECT t.entity_name FROM asobi_truths t JOIN asobi_entities e ON e.name=t.entity_name WHERE t.key='status' AND t.value='READY_TO_DISPATCH' AND e.entity_type='task' ORDER BY t.entity_name LIMIT 1",[],|r|r.get(0)).optional()?; if let Some(task)=task.as_ref(){tx.execute("UPDATE asobi_truths SET value='DISPATCHED',updated_at=CURRENT_TIMESTAMP WHERE entity_name=? AND key='status' AND value='READY_TO_DISPATCH'",[task])?;tx.execute("INSERT INTO asobi_truths(entity_name,key,value) VALUES (?,'claimed_by',?) ON CONFLICT(entity_name,key) DO UPDATE SET value=excluded.value,updated_at=CURRENT_TIMESTAMP",params![task,agent])?;} Ok(task) })
     }

@@ -1,4 +1,4 @@
-use crate::api::{GraphStore, SearchQuery, SearchStore};
+use crate::api::{GraphStore, SearchStore, TaskStore};
 use anyhow::Result;
 use clap::Subcommand;
 use schemars::JsonSchema;
@@ -58,7 +58,7 @@ pub enum TasksCommands {
 }
 
 pub fn run(
-    backend: &(impl GraphStore + SearchStore),
+    backend: &(impl GraphStore + SearchStore + TaskStore),
     subcommand: Option<TasksCommands>,
     json: bool,
 ) -> Result<()> {
@@ -168,43 +168,13 @@ pub fn run(
             if agent.trim().is_empty() {
                 anyhow::bail!("dispatch agent must be non-empty");
             }
-            let task = if let Some(task) = task {
-                task
-            } else {
-                let graph = backend.search_nodes(SearchQuery {
-                    query: String::new(),
-                    limit: 100,
-                    filters: vec![("status".to_string(), "READY_TO_DISPATCH".to_string())],
+            let task = backend
+                .dispatch(task.as_deref(), &agent, observation_limit())?
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "no READY_TO_DISPATCH task found or task was claimed by another agent"
+                    )
                 })?;
-                graph
-                    .entities
-                    .into_iter()
-                    .find(|entity| entity.entity_type == "task")
-                    .map(|entity| entity.name)
-                    .ok_or_else(|| anyhow::anyhow!("no READY_TO_DISPATCH task found"))?
-            };
-            let graph = backend.open_nodes(crate::api::OpenNodes {
-                names: vec![task.clone()],
-                ..Default::default()
-            })?;
-            let entity = graph
-                .entities
-                .first()
-                .ok_or_else(|| anyhow::anyhow!("task not found: {task}"))?;
-            if entity.entity_type != "task" {
-                anyhow::bail!("entity is not a task: {task}");
-            }
-            if entity.truths.get("status").map(String::as_str) != Some("READY_TO_DISPATCH") {
-                anyhow::bail!("task is not READY_TO_DISPATCH: {task}");
-            }
-            backend.truth_upsert(&task, "status", "DISPATCHED")?;
-            backend.add_observations(
-                vec![crate::model::ObservationInput {
-                    entity_name: task.clone(),
-                    contents: vec![format!("dispatched to {agent}")],
-                }],
-                observation_limit(),
-            )?;
             if json {
                 print_json(TaskReceipt {
                     action: "dispatch",

@@ -1,7 +1,7 @@
 //! Application composition for the command layer.
 //!
 //! This module is the only place that chooses a concrete storage composite for
-//! an application run. Command code receives the stable `api::v1` capabilities
+//! an application run. Command code receives the stable `api::v2` capabilities
 //! through [`AsobiRuntime`] and never needs to name a provider or its state
 //! file.
 

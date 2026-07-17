@@ -60,10 +60,9 @@ pub fn sync_graph_to_markdown(graph_store: &impl GraphStore) -> Result<usize> {
 ///   from the graph via `search --where status=…` / `show`. Embedding it only
 ///   churns the index and pollutes semantic `query` results; full archival
 ///   lives in `export` / `backup`, not here.
-/// - `skill`: the installer already chunks the full skill body into the
-///   document tier under `topic_id = entity_name`. Syncing it here would emit a
-///   second topic under the slug and double-index the same content, so a skill
-///   stays graph- and installer-owned — recall it via `query` or `skills show`.
+/// - `skill`: the installer owns skill records. Syncing them here would emit a
+///   second topic under the slug, so a skill stays graph- and installer-owned —
+///   read it via `search`, `show`, or `skills show`.
 ///
 /// Denylist (not allowlist) so new knowledge types persist by default.
 fn should_sync(entity_type: &str) -> bool {
@@ -257,7 +256,7 @@ mod tests {
 
     #[test]
     fn test_should_sync_skips_volatile_and_skill_types() {
-        // Knowledge → persisted to the recall tier.
+        // Knowledge -> persisted to the Markdown projection.
         assert!(should_sync("project"));
         assert!(should_sync("concept"));
         assert!(should_sync("reference"));

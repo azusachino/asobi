@@ -1,49 +1,31 @@
 # Asobi architecture
 
-Asobi has a versioned, backend-neutral API above a concrete storage backend. The current backend is Turso; PostgreSQL and RocksDB remain design targets, not supported runtime backends.
+Asobi 0.6 is a focused, synchronous knowledge-graph CLI. `main.rs` is only the process entry point; command routing, API contracts, storage, tasks, skills, and compaction live in their own modules.
 
 ```text
-CLI / document workflows
-          |
-       api::v1
-  GraphStore  SearchStore  DocumentStore  MaintenanceStore  SnapshotStore
-          |
-   backend::turso::TursoBackend
-          |
-  Turso schema, native FTS, vector32, WAL/retry, and SQL
+CLI commands
+    |
+api::v2 capability traits
+    |
+storage::SqliteStore
+    |
+SQLite + WAL + FTS5
 ```
 
 ## API boundary
 
-`src/api/v1.rs` contains only domain requests, results, capabilities, snapshots, and stable errors. It does not import Turso, SQL, rows, pragmas, or connection handles. The CLI receives a `TursoBackend` at startup and calls the capability traits; a future backend can satisfy the same contract without changing the domain-facing operations.
+`src/api/v2.rs` contains domain requests, results, errors, snapshots, and capability traits. It does not expose SQL statements, connection handles, or SQLite row types. The application composes `SqliteStore`, while commands depend only on the API traits.
 
-The API contract is versioned independently from the storage schema. Optional features are reported through `BackendCapabilities`, and unsupported operations return `ApiError::Unsupported` rather than silently doing nothing.
+The API is synchronous because this is a local SQLite CLI: each operation is a short transaction, and SQLite's WAL mode allows readers to proceed while a writer commits. The task dispatcher claims a READY task and records its claim observation in one immediate transaction.
 
-## Turso backend
+## SQLite storage
 
-All Turso-specific code lives under `src/backend/turso/`:
+`src/storage/sqlite.rs` owns schema creation, migrations, connection settings, queries, and physical backup/restore. The database uses foreign keys, WAL, bounded busy timeouts, and an external-content FTS5 index with porter stemming and BM25 ranking. Truth filters are applied in SQL and combine with keyword search through AND semantics.
 
-- `db.rs` — graph schema, CRUD, search, and migrations;
-- `constant.rs` — Turso-owned SQL and schema statements;
-- `vector.rs` — optional `vector32` storage and exact cosine search;
-- `tx.rs` — multi-process WAL startup and immediate-transaction retries.
+## Durable projections
 
-Graph keyword search uses Turso native `USING fts` indexes with `fts_match` and `fts_score`. It does not use SQLite FTS5 virtual tables, external-content triggers, porter stemming, or `bm25()`.
-
-The document tier stores embeddings with `vector32` and searches with `vector_distance_cos` over the chunks table. This is exact/brute-force search, which is appropriate for the current project-document scale; no `libsql_vector_idx` or ANN index is assumed.
-
-Turso's experimental multi-process WAL is enabled at open. Database opening and `BEGIN IMMEDIATE` writes retry transient lock contention with bounded backoff. Legacy journal-mode and busy-timeout environment overrides are not supported.
-
-## Database initialization
-
-v0.5 initializes `data/asobi.turso.db` with the current schema, native FTS indexes, and optional vector tables. A future file-backed backend should use a backend-qualified filename of its own; remote backends do not need a local DB file. If an old `asobi.db` is present while the Turso file is absent, startup warns and still creates a fresh Turso database.
+`compact` renders durable graph entities to Markdown topics. It is a deterministic graph-to-Markdown projection; it does not ingest documents or build embeddings. Sessions, tasks, and skills remain graph data and are available through graph, search, show, export, and backup.
 
 ## Verification
 
-The backend contract test checks that `TursoBackend` implements `api::v1::Backend` and reports its capabilities. The real CLI checks are split into:
-
-- `scripts/verify_cli.py` — backend-neutral graph behavior;
-- `scripts/verify_cli.turso.py` — Turso backend identity/capabilities and native keyword search;
-- `scripts/verify_documents_cli.py` — optional document workflow.
-
-The first alternate backend should add its own backend-specific verifier while reusing the API contract tests and backend-neutral CLI checks.
+The quality gate combines the v2 backend contract tests, CLI integration tests, multi-process concurrency tests, benchmark compilation, formatting, linting, and the storage-boundary verifier. Benchmark sources remain under `benches/` so storage, graph, task, allocation, and SQL-plan behavior can be measured as the implementation evolves.

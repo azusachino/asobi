@@ -58,15 +58,11 @@ filetime = "0.2"
 tempfile = "3"
 
 [[bench]]
-name = "graph"
-harness = false
-
-[[bench]]
 name = "normalize"
 harness = false
 
 [[bench]]
-name = "skills"
+name = "graph"
 harness = false
 
 [[bench]]
@@ -78,11 +74,19 @@ name = "allocations"
 harness = false
 
 [[bench]]
+name = "tasks"
+harness = false
+
+[[bench]]
 name = "sql_plans"
 harness = false
 
 [[bench]]
-name = "tasks"
+name = "skills"
+harness = false
+
+[[bench]]
+name = "storage"
 harness = false
 
 

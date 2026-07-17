@@ -1,49 +1,51 @@
 use asobi::api::{GraphStore, OpenNodes, SearchQuery, SearchStore};
-use asobi::storage::Storage;
+use asobi::model::EntityInput;
+use asobi::storage::SqliteStore;
 use criterion::{Criterion, criterion_group, criterion_main};
 use std::hint::black_box;
 use tempfile::tempdir;
 
-fn graph_hot_paths(c: &mut Criterion) {
+fn storage_hot_paths(c: &mut Criterion) {
     let dir = tempdir().expect("tempdir");
-    let store = Storage::open_at(&dir.path().join("criterion.db")).expect("open storage");
+    let store = SqliteStore::open_at(&dir.path().join("bench.db")).expect("open storage");
     store
         .create_entities(
             (0..1_000)
-                .map(|i| asobi::model::EntityInput {
+                .map(|i| EntityInput {
                     name: format!("entity-{i}"),
                     entity_type: "bench".into(),
                     observations: vec![format!("commonterm observation {i}")],
                 })
                 .collect(),
         )
-        .expect("seed");
-    c.bench_function("search_fts", |b| {
+        .expect("seed graph");
+
+    c.bench_function("sqlite_fts_search", |b| {
         b.iter(|| {
             black_box(
                 store
                     .search_nodes(SearchQuery {
                         query: black_box("commonterm").into(),
                         limit: 20,
-                        filters: vec![],
+                        filters: Vec::new(),
                     })
-                    .unwrap(),
+                    .expect("search"),
             )
         })
     });
-    c.bench_function("open_nodes", |b| {
+    c.bench_function("sqlite_open_nodes", |b| {
         b.iter(|| {
             black_box(
                 store
                     .open_nodes(OpenNodes {
-                        names: vec!["entity-10".into()],
+                        names: vec!["entity-10".into(), "entity-999".into()],
                         ..Default::default()
                     })
-                    .unwrap(),
+                    .expect("open nodes"),
             )
         })
     });
 }
 
-criterion_group!(benches, graph_hot_paths);
+criterion_group!(benches, storage_hot_paths);
 criterion_main!(benches);

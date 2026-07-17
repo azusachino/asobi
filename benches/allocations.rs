@@ -1,59 +1,46 @@
 use asobi::api::{GraphStore, OpenNodes, SearchQuery, SearchStore};
 use asobi::storage::Storage;
-use std::{env, hint::black_box};
+use std::env;
+use std::hint::black_box;
 use tempfile::tempdir;
 
 #[global_allocator]
 static ALLOCATOR: dhat::Alloc = dhat::Alloc;
 
 fn main() {
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .expect("build tokio runtime");
-    let entity_count = env::var("ASOBI_BENCH_SIZE")
+    let count = env::var("ASOBI_BENCH_SIZE")
         .ok()
-        .and_then(|value| value.parse().ok())
+        .and_then(|v| v.parse().ok())
         .unwrap_or(1_000);
     let dir = tempdir().expect("tempdir");
-    let db_path = dir.path().join("allocations.db");
-    unsafe {
-        env::set_var("ASOBI_DATABASE_URL", db_path.to_str().expect("utf-8 path"));
-    }
-    let store = runtime.block_on(async {
-        let store = Storage::open_default().await.expect("open storage");
-        let entities = (0..entity_count)
-            .map(|i| asobi::model::EntityInput {
-                name: format!("entity-{i}"),
-                entity_type: "bench".into(),
-                observations: vec![format!("commonterm allocation observation {i}")],
-            })
-            .collect();
-        store.create_entities(entities).await.expect("seed graph");
-        store
-    });
-
+    let store = Storage::open_at(&dir.path().join("allocations.db")).expect("open storage");
+    store
+        .create_entities(
+            (0..count)
+                .map(|i| asobi::model::EntityInput {
+                    name: format!("entity-{i}"),
+                    entity_type: "bench".into(),
+                    observations: vec![format!("commonterm observation {i}")],
+                })
+                .collect(),
+        )
+        .expect("seed");
     let _profiler = dhat::Profiler::new_heap();
-    runtime.block_on(async {
-        black_box(
-            store
-                .search_nodes(SearchQuery {
-                    query: "commonterm".into(),
-                    limit: entity_count,
-                    filters: Vec::new(),
-                })
-                .await
-                .expect("broad search"),
-        );
-        black_box(
-            store
-                .open_nodes(OpenNodes {
-                    names: vec!["entity-10".into(), format!("entity-{}", entity_count - 1)],
-                    with_ids: false,
-                    expand: Vec::new(),
-                })
-                .await
-                .expect("open nodes"),
-        );
-    });
+    black_box(
+        store
+            .search_nodes(SearchQuery {
+                query: "commonterm".into(),
+                limit: count,
+                filters: vec![],
+            })
+            .expect("search"),
+    );
+    black_box(
+        store
+            .open_nodes(OpenNodes {
+                names: vec!["entity-10".into()],
+                ..Default::default()
+            })
+            .expect("open"),
+    );
 }

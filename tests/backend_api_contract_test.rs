@@ -50,6 +50,9 @@ fn graph_truth_search_and_task_claim_are_atomic_surfaces() {
     store
         .truth_upsert("asobi:task-1", "status", "READY_TO_DISPATCH")
         .unwrap();
+    store
+        .truth_upsert("project:asobi", "status", "ACTIVE")
+        .unwrap();
 
     let graph = store
         .search_nodes(SearchQuery {
@@ -59,6 +62,16 @@ fn graph_truth_search_and_task_claim_are_atomic_surfaces() {
         })
         .unwrap();
     assert_eq!(graph.entities[0].name, "project:asobi");
+
+    let filtered = store
+        .search_nodes(SearchQuery {
+            query: "concurrent".into(),
+            limit: 10,
+            filters: vec![("status".into(), "ACTIVE".into())],
+        })
+        .unwrap();
+    assert_eq!(filtered.entities.len(), 1);
+    assert_eq!(filtered.entities[0].name, "project:asobi");
 
     assert_eq!(
         store.claim_next("agent-a").unwrap().as_deref(),

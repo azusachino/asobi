@@ -1,41 +1,26 @@
-.PHONY: help build build-documents run test test-documents test-scripts test-turso-scripts test-documents-scripts verify-storage-boundary verify-libsql verify-turso bench-libsql bench-turso bench-criterion bench-vector-criterion bench-alloc bench-sql-plans bench-tasks fmt fmt-check lint check check-documents check-turso bench clean init
+.PHONY: help build run test test-scripts verify-storage-boundary bench bench-graph bench-criterion bench-alloc bench-sql-plans bench-tasks bench-storage fmt fmt-check lint check clean init
 
-# Default task: Show help
 help:
 	@echo "Available tasks:"
-	@echo "  build         - Compile the Asobi CLI and library"
-	@echo "  build-documents - Compile with fastembed document commands"
-	@echo "  run           - Run the Asobi CLI via cargo"
-	@echo "  test          - Run all Rust tests"
-	@echo "  test-documents - Run tests with the fastembed document feature"
-	@echo "  test-scripts  - Run uv-managed graph-tier CLI integration checks"
-	@echo "  test-turso-scripts - Run experimental Turso CLI integration checks"
-	@echo "  test-documents-scripts - Run uv-managed document-tier CLI checks"
-	@echo "  verify-storage-boundary - Reject provider references outside src/storage"
-	@echo "  verify-libsql - Run the default libSQL CLI verification"
-	@echo "  verify-turso - Run the experimental Turso CLI verification"
-	@echo "  bench-libsql - Run graph benchmarks against the default build"
-	@echo "  bench-turso - Build the Turso graph benchmark (set ASOBI_BACKEND=turso to select it)"
-	@echo "  bench-criterion - Run statistical graph hot-path benchmarks"
-	@echo "  bench-vector-criterion - Run statistical vector-search benchmarks"
-	@echo "  bench-alloc   - Write a DHAT allocation profile for graph hot paths"
-	@echo "  bench-sql-plans - Print query plans for graph hot-path SQL"
-	@echo "  bench-tasks   - Benchmark task-board search and epic expansion"
-	@echo "  fmt           - Format Rust, Python, JSON, YAML, and Markdown"
-	@echo "  fmt-check     - Verify formatting without writing (gate; run fmt to fix)"
-	@echo "  lint          - Run Rust clippy and Python ruff"
-	@echo "  check         - Run format check, lint, and tests (CI baseline, libSQL only)"
-	@echo "  check-documents - Run document feature build and tests"
-	@echo "  check-turso   - Build/test/verify the experimental Turso backend (opt-in)"
-	@echo "  bench         - Run graph-tier benchmark harness"
-	@echo "  clean         - Remove build artifacts"
-	@echo "  init          - Print dev environment setup (nix develop)"
+	@echo "  build                 Compile the Asobi CLI and library"
+	@echo "  run                   Run the Asobi CLI via cargo"
+	@echo "  test                  Run all Rust tests serially"
+	@echo "  test-scripts          Run built-CLI integration checks"
+	@echo "  verify-storage-boundary  Check provider encapsulation"
+	@echo "  bench                 Run all benchmark harnesses"
+	@echo "  bench-graph           Run graph benchmarks"
+	@echo "  bench-criterion       Run graph Criterion benchmarks"
+	@echo "  bench-alloc           Write a DHAT allocation profile"
+	@echo "  bench-sql-plans       Print SQLite query plans"
+	@echo "  bench-tasks           Benchmark task dispatch"
+	@echo "  bench-storage         Benchmark SQLite storage hot paths"
+	@echo "  fmt / fmt-check       Format or verify Rust, Python, JSON, YAML, and Markdown"
+	@echo "  lint                  Run Rust clippy and Python ruff"
+	@echo "  check                 Run the complete local quality gate"
+	@echo "  clean                 Remove build artifacts"
 
 build:
 	cargo build
-
-build-documents:
-	cargo build --features documents
 
 run:
 	cargo run -- $(ARGS)
@@ -43,42 +28,20 @@ run:
 test:
 	cargo test -- --test-threads=1
 
-test-documents:
-	cargo test --features documents -- --test-threads=1
-
-test-scripts:
+test-scripts: build
 	uv run --with fastjsonschema scripts/verify_cli.py
-
-test-turso-scripts:
-	uv run scripts/verify_cli.turso.py
-
-test-documents-scripts:
-	uv run scripts/verify_documents_cli.py
 
 verify-storage-boundary:
 	uv run --no-project python scripts/verify_storage_boundary.py
 
-verify-libsql: build
-	uv run --with fastjsonschema scripts/verify_cli.py
+bench:
+	cargo bench
 
-verify-turso:
-	cargo build --features turso-experimental
-	uv run scripts/verify_cli.turso.py
-
-bench-libsql:
+bench-graph:
 	cargo bench --bench graph
-
-# Turso is outside the default gate; libSQL is the supported default. To run
-# this benchmark against Turso rather than the default backend, select it:
-#   ASOBI_BACKEND=turso make bench-turso
-bench-turso:
-	cargo bench --features turso-experimental --bench graph
 
 bench-criterion:
 	cargo bench --bench graph_criterion
-
-bench-vector-criterion:
-	cargo bench --features documents --bench vector_criterion
 
 bench-alloc:
 	cargo bench --bench allocations
@@ -88,6 +51,9 @@ bench-sql-plans:
 
 bench-tasks:
 	cargo bench --bench tasks
+
+bench-storage:
+	cargo bench --bench storage
 
 fmt:
 	cargo fmt
@@ -101,29 +67,13 @@ fmt-check:
 
 lint:
 	cargo clippy -- -D warnings
-	cargo clippy --features documents -- -D warnings
 	ruff check .
 
-check: verify-storage-boundary fmt-check lint test test-scripts check-documents
-
-check-documents: build-documents test-documents test-documents-scripts
-
-# Experimental Turso backend is opt-in and not part of the default `check`
-# baseline (which ships libSQL). Run this to exercise the feature-gated matrix.
-check-turso:
-	cargo clippy --features turso-experimental -- -D warnings
-	cargo test --features turso-experimental -- --test-threads=1
-	cargo build --features turso-experimental
-	uv run scripts/verify_cli.turso.py
-
-bench:
-	cargo bench
+check: verify-storage-boundary fmt-check lint test test-scripts
 
 clean:
 	cargo clean
-	rm -rf target/
 
 init:
 	@echo "Nix serves this repo. Enter the dev shell with:"
 	@echo "  nix develop"
-	@echo "(provides rust, uv, ruff, bun, and make)"

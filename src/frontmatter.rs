@@ -8,15 +8,15 @@
 //!
 //! Deliberately *not* a real YAML/Markdown library. Topics carry only a flat,
 //! three-key frontmatter (`title`/`type`/`slug`) over a free-prose body that
-//! gets chunked into the FTS/vector tier verbatim — so a full parser buys no
-//! correctness and a body escaper would pollute recall. We harden just the two
+//! gets written into the graph/Markdown projection verbatim — so a full parser buys no
+//! correctness and a body escaper would pollute the stored context. We harden just the two
 //! edges that actually bite (frontmatter quoting + a non-greedy fence) and keep
 //! the body untouched. See decision `asobi:decision:topic-markdown-no-escaper`.
 //!
 //! Scope of the supported subset: a leading `---` block of `key: value` lines,
 //! values optionally wrapped in matching single/double quotes; everything after
 //! the closing `---` is the opaque body. No nesting, lists, multi-line scalars,
-//! or comments — callers ([`crate::compact`], [`crate::ingest`],
+//! or comments — callers ([`crate::compact`], [`crate::skills`],
 //! [`crate::skills`]) only ever emit/consume that shape.
 
 use std::collections::BTreeMap;

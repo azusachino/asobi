@@ -161,7 +161,7 @@ def main() -> None:
             [
                 "obs",
                 "project-a",
-                "Uses Turso native FTS for graph recall.",
+                "Uses SQLite FTS5 for graph recall.",
             ],
             env,
         )
@@ -194,7 +194,7 @@ def main() -> None:
             }
         ]
 
-        keyword_match = graph(["search", "Turso"], env)
+        keyword_match = graph(["search", "SQLite"], env)
         assert "project-a" in entity_names(keyword_match)
 
         for idx in range(5):

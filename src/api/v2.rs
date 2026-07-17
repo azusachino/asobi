@@ -1,15 +1,63 @@
 //! Version 2 of Asobi's backend-neutral core storage API.
 //!
 //! v2 is deliberately about the graph and its durable projections. It has no
-//! document, embedding, vector, SQL, or filesystem-handle requirements. v1 is
-//! retained for compatibility with the removed document/vector integration.
+//! document, embedding, vector, SQL, or filesystem-handle requirements.
 
 use crate::model::{EntityInput, Graph, ObservationDeletion, ObservationInput, RelationInput};
 
 pub const API_VERSION: u32 = 2;
 pub const SNAPSHOT_FORMAT_VERSION: u32 = 1;
 
-pub use super::v1::{ApiError, ApiResult, OpenNodes, SearchQuery, SkillRecord, TruthVersion};
+#[derive(Debug, thiserror::Error)]
+pub enum ApiError {
+    #[error("not found: {0}")]
+    NotFound(String),
+    #[error("conflict: {0}")]
+    Conflict(String),
+    #[error("unsupported by backend: {0}")]
+    Unsupported(&'static str),
+    #[error("backend unavailable: {0}")]
+    Unavailable(String),
+    #[error("invalid request: {0}")]
+    Invalid(String),
+    #[error("backend error: {0}")]
+    Backend(String),
+}
+
+pub type ApiResult<T> = std::result::Result<T, ApiError>;
+
+#[derive(Debug, Clone, Default)]
+pub struct OpenNodes {
+    pub names: Vec<String>,
+    pub with_ids: bool,
+    pub expand: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct SearchQuery {
+    pub query: String,
+    pub limit: usize,
+    pub filters: Vec<(String, String)>,
+}
+
+#[derive(Debug, Clone, schemars::JsonSchema, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TruthVersion {
+    pub key: String,
+    pub value: String,
+    pub valid_from: String,
+    pub valid_until: String,
+}
+
+#[derive(Debug, Clone, schemars::JsonSchema, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SkillRecord {
+    pub entity_name: String,
+    pub body: String,
+    pub source: String,
+    pub version: String,
+    pub description: String,
+}
 
 #[derive(Debug, Clone, Default, schemars::JsonSchema, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -147,6 +195,12 @@ pub trait MaintenanceStore {
 }
 
 pub trait TaskStore {
+    fn dispatch(
+        &self,
+        task: Option<&str>,
+        agent: &str,
+        observation_limit: usize,
+    ) -> ApiResult<Option<String>>;
     fn claim_next(&self, agent: &str) -> ApiResult<Option<String>>;
     fn transition(&self, task: &str, from: &str, to: &str) -> ApiResult<()>;
 }

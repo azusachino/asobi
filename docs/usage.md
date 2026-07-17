@@ -21,7 +21,6 @@ Or build locally:
 ```bash
 git clone https://github.com/azusachino/asobi && cd asobi
 make build            # graph CLI at ./target/debug/asobi
-make build-documents  # includes ingest/query/compact
 ```
 
 ### Workspace setup
@@ -80,7 +79,7 @@ asobi new "CLAUDE.md" "reference"
 asobi link "project-x" "UserPreferences" "follows"
 ```
 
-**Search (supports Turso FTS, segment matching, and truth filters):**
+**Search (supports SQLite FTS5, segment matching, and truth filters):**
 
 ```bash
 asobi search "tokio"           # finds "tokio" and "tokio-util"
@@ -101,10 +100,10 @@ Use `graph` for full export. `search` is intentionally top-K by default so a bro
 asobi truth "my-project:session" "status" "DONE"
 asobi truth "my-project:session" "last-updated" "2026-05-21"
 asobi obs "my-project:session" "next: implement FTS5 index"
-asobi compact  # refreshes the recall index; session state already lives in the graph
+asobi compact  # render durable graph topics to Markdown
 ```
 
-`compact` syncs only durable _knowledge_ entities (project, decisions, references, preferences) to Markdown + the FTS/vector index. Volatile state (`session`, `task`) and self-indexing `skill` entities stay graph-only — query them with `search` / `show`, and use `export` / `backup` for full archival.
+`compact` syncs only durable _knowledge_ entities (project, decisions, references, preferences) to Markdown. Volatile state (`session`, `task`) and self-indexing `skill` entities stay graph-only — query them with `search` / `show`, and use `export` / `backup` for full archival.
 
 **Inspect the full graph:**
 
@@ -119,7 +118,7 @@ asobi graph | jq '.entities[] | select(.entityType == "session")'
 | --- | --- | --- |
 | Portable handoff | `asobi export -o graph.json` | Entities, observations, truths, relations |
 | Scoped handoff | `asobi export --scope "proj:epic" -o epic.json` | One epic subtree |
-| Full libSQL archive | `asobi backup` | Complete database, including skills and documents |
+| Full SQLite archive | `asobi backup` | Complete database, including skills and task state |
 
 ```bash
 asobi import graph.json
@@ -133,7 +132,6 @@ asobi restore /secure/asobi.db --force
 - `--keep` applies only to managed snapshots, not an explicit `-o` path.
 - Snapshots are integrity-checked and owner-only on Unix.
 - Restore writes `backups/pre-restore-*.db`, closes live handles, atomically replaces the database, and removes stale WAL sidecars.
-- Turso does not support physical backup/restore; use JSON export/import instead.
 
 Scoped export is designed for handing an epic to another agent:
 
@@ -180,15 +178,6 @@ asobi tasks close "project:epic"
 ```
 
 Use `asobi tasks --help` or `asobi tasks <command> --help` for the complete argument reference. These are graph-backed commands: status is a truth, implementation notes are observations, and child tasks link to their epic via `part_of`.
-
-**Ingest Markdown into the document tier (optional):**
-
-These commands require a binary built with `--features documents`:
-
-```bash
-asobi ingest ./notes/             # directory of .md files
-asobi query "async cancellation"  # semantic + FTS search
-```
 
 ---
 
@@ -345,7 +334,7 @@ No files to pass, no state to reconstruct. The graph is the handoff.
 
 ### Search tips
 
-`search` uses Turso's native full-text index. Queries match indexed terms; there is no SQLite FTS5 porter stemming. Practical implications:
+`search` uses SQLite FTS5 with porter stemming and BM25 ranking, followed by a name/type substring fallback. Practical implications:
 
 - `search "run"` → matches the indexed term "run" (use the exact term when needed)
 - `search "implement"` → matches the indexed term "implement"
@@ -384,6 +373,6 @@ You can override Asobi's home or database locations using environment variables:
 - **`ASOBI_HOME`**: Changes the base directory under which Asobi looks for configuration, data, and topics (e.g. `ASOBI_HOME=/tmp/asobi`).
 - **`ASOBI_DATABASE_URL`**: Specifies the direct path to the database file itself (e.g. `ASOBI_DATABASE_URL=/tmp/asobi-custom.db`).
 
-### Turso concurrency
+### SQLite concurrency
 
-Turso uses experimental multi-process WAL with bounded retries for startup and immediate write transactions. Legacy `ASOBI_BUSY_TIMEOUT` and `ASOBI_JOURNAL_MODE` overrides are not supported.
+SQLite is opened in WAL mode with foreign keys enabled and a bounded `ASOBI_BUSY_TIMEOUT` (15 seconds by default). Writes use immediate transactions, so multiple agents can read concurrently while writes serialize safely. Task dispatch claims the task and records the claim observation atomically.
