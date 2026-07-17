@@ -16,7 +16,7 @@ fn task_hot_paths(c: &mut Criterion) {
         }])
         .unwrap();
     store
-        .truth_upsert("task-1", "status", "READY_TO_DISPATCH")
+        .truth_upsert("task-1", "status", "DISPATCHED")
         .unwrap();
     c.bench_function("task_claim_compare_and_set", |b| {
         b.iter(|| {
