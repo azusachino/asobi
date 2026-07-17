@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposed for the 0.6.x line.
+Implemented in 0.6.1 for shell completions and preview-first operational purging.
 
 ## Context
 
@@ -43,12 +43,12 @@ The existing per-entity observation cap remains the immediate bounded-storage gu
 
 ### Retention workflow
 
-The future maintenance UX should be preview-first:
+The maintenance UX is preview-first:
 
 ```text
-asobi purge --dry-run --type session --older-than 30d
-asobi purge --dry-run --type task --status DONE --older-than 90d
-asobi purge --apply --type session --older-than 30d
+asobi purge --dry-run --type session --older-than 30
+asobi purge --dry-run --type task --status DONE --older-than 90
+asobi purge --apply --type session --older-than 30
 ```
 
 Required safeguards:
@@ -64,7 +64,7 @@ Required safeguards:
 
 “Last activity” is the newest of observation creation, truth update, or entity update timestamps. Creation time alone is insufficient because a long-lived session can still be active.
 
-The initial implementation should purge operational observations or clearly terminal entities only after the preview contract is tested. It should not run implicitly during `graph`, `search`, `compact`, or application startup. Teams that want regular cleanup can schedule the explicit dry-run/apply workflow.
+The 0.6.1 implementation purges clearly terminal entities transactionally. It does not run implicitly during `graph`, `search`, `compact`, or application startup. Teams that want regular cleanup can schedule the explicit dry-run/apply workflow.
 
 ### Compaction and physical storage
 

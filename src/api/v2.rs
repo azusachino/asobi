@@ -67,6 +67,35 @@ pub struct Stats {
     pub observations: usize,
 }
 
+#[derive(Debug, Clone, schemars::JsonSchema, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PurgeRequest {
+    pub entity_types: Vec<String>,
+    pub statuses: Vec<String>,
+    pub older_than_days: u32,
+    pub apply: bool,
+}
+
+#[derive(Debug, Clone, schemars::JsonSchema, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PurgeCandidate {
+    pub name: String,
+    pub entity_type: String,
+    pub status: String,
+    pub last_activity: String,
+    pub observations: usize,
+    pub relations: usize,
+}
+
+#[derive(Debug, Clone, schemars::JsonSchema, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PurgeReport {
+    pub dry_run: bool,
+    pub older_than_days: u32,
+    pub candidates: Vec<PurgeCandidate>,
+    pub deleted: usize,
+}
+
 /// Backend capabilities describe behavior that callers may adapt to. They do
 /// not expose a driver, SQL dialect, or storage layout.
 #[derive(Debug, Clone, Default, schemars::JsonSchema, serde::Serialize, serde::Deserialize)]
@@ -197,6 +226,7 @@ pub trait BackupStore {
 pub trait MaintenanceStore {
     fn stats(&self) -> ApiResult<Stats>;
     fn stats_per_entity(&self) -> ApiResult<Vec<(String, usize)>>;
+    fn purge(&self, request: PurgeRequest) -> ApiResult<PurgeReport>;
     fn reset(&self) -> ApiResult<()>;
     fn capabilities(&self) -> ApiResult<BackendCapabilities>;
     fn health(&self) -> ApiResult<BackendHealth>;

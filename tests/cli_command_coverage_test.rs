@@ -20,6 +20,7 @@ fn every_top_level_and_nested_subcommand_has_help() {
         "search",
         "show",
         "compact",
+        "purge",
         "init",
         "stats",
         "schema",

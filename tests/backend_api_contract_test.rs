@@ -1,6 +1,6 @@
 use asobi::api::{
-    BackupRequest, BackupStore, GraphStore, MaintenanceStore, OpenNodes, SearchQuery, SearchStore,
-    SkillRecord, SkillStore, SnapshotStore, TaskStore,
+    BackupRequest, BackupStore, GraphStore, MaintenanceStore, OpenNodes, PurgeRequest, SearchQuery,
+    SearchStore, SkillRecord, SkillStore, SnapshotStore, TaskStore,
 };
 use asobi::model::{EntityInput, RelationInput};
 use asobi::storage::SqliteStore;
@@ -162,6 +162,123 @@ fn graph_and_search_keep_observations_and_skill_bodies_lazy() {
         exported.entities[0].body.as_deref(),
         Some("heavy skill instructions")
     );
+}
+
+#[test]
+fn purge_is_preview_first_and_rejects_durable_types() {
+    let (dir, store) = store();
+    store
+        .create_entities(vec![
+            EntityInput {
+                name: "project:session".into(),
+                entity_type: "session".into(),
+                observations: vec!["old session note".into()],
+            },
+            EntityInput {
+                name: "project:task".into(),
+                entity_type: "task".into(),
+                observations: vec!["old task note".into()],
+            },
+            EntityInput {
+                name: "project:concept".into(),
+                entity_type: "concept".into(),
+                observations: vec!["durable note".into()],
+            },
+        ])
+        .unwrap();
+    store
+        .truth_upsert("project:session", "status", "DONE")
+        .unwrap();
+    store
+        .truth_upsert("project:task", "status", "DONE")
+        .unwrap();
+
+    let db = dir.path().join("contract.db");
+    let conn = Connection::open(db).unwrap();
+    conn.execute_batch(
+        "UPDATE asobi_entities SET created_at = datetime('now', '-90 days');
+         UPDATE asobi_observations SET created_at = datetime('now', '-90 days');
+         UPDATE asobi_truths SET updated_at = datetime('now', '-90 days');",
+    )
+    .unwrap();
+    drop(conn);
+
+    let request = PurgeRequest {
+        entity_types: vec!["session".into(), "task".into()],
+        statuses: vec!["DONE".into()],
+        older_than_days: 30,
+        apply: false,
+    };
+    let preview = store.purge(request.clone()).unwrap();
+    assert!(preview.dry_run);
+    assert_eq!(preview.deleted, 0);
+    assert_eq!(preview.candidates.len(), 2);
+    assert!(
+        store
+            .open_nodes(OpenNodes {
+                names: vec!["project:task".into()],
+                ..Default::default()
+            })
+            .unwrap()
+            .entities
+            .len()
+            == 1
+    );
+
+    let applied = store
+        .purge(PurgeRequest {
+            apply: true,
+            ..request
+        })
+        .unwrap();
+    assert!(!applied.dry_run);
+    assert_eq!(applied.deleted, 2);
+    assert!(
+        store
+            .open_nodes(OpenNodes {
+                names: vec!["project:task".into()],
+                ..Default::default()
+            })
+            .unwrap()
+            .entities
+            .is_empty()
+    );
+    assert!(
+        store
+            .search_nodes(SearchQuery {
+                query: "old task note".into(),
+                limit: 10,
+                filters: vec![],
+            })
+            .unwrap()
+            .entities
+            .is_empty()
+    );
+    assert_eq!(store.read_graph().unwrap().entities.len(), 1);
+
+    let error = store
+        .purge(PurgeRequest {
+            entity_types: vec!["concept".into()],
+            statuses: vec!["DONE".into()],
+            older_than_days: 30,
+            apply: true,
+        })
+        .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("restricted to operational entity types")
+    );
+
+    let error = store
+        .purge(PurgeRequest {
+            entity_types: vec!["task".into()],
+            statuses: vec!["IN_PROGRESS".into()],
+            older_than_days: 30,
+            apply: false,
+        })
+        .unwrap_err();
+    assert!(error.to_string().contains("only accepts terminal statuses"));
 }
 
 #[test]

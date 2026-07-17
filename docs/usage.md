@@ -124,6 +124,21 @@ asobi obs "my-project:session" "next: implement FTS5 index"
 asobi compact  # render durable graph topics to Markdown
 ```
 
+**Preview and purge stale operational state:**
+
+```bash
+# Preview only (the default): terminal sessions/tasks inactive for 30 days
+asobi purge
+
+# Narrow the policy to completed tasks older than 90 days
+asobi purge --type task --status DONE --older-than 90
+
+# Apply exactly the previewed policy
+asobi purge --type task --status DONE --older-than 90 --apply
+```
+
+Purge is restricted to `session` and `task` entities. Durable knowledge and installed skills are never accepted by this command. Use `--json` for a machine-readable candidate report, and review the dry-run output before adding `--apply` to a scheduled job.
+
 `compact` syncs only durable _knowledge_ entities (project, decisions, references, preferences) to Markdown. Volatile state (`session`, `task`) and self-indexing `skill` entities stay graph-only — query them with `search` / `show`, and use `export` / `backup` for full archival.
 
 **Inspect the full graph:**

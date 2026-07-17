@@ -88,7 +88,7 @@ asobi rm-obs "my-project" 1 --id
 - `asobi new <name> <type> --obs "..."` / `obs <name> "..."` / `update-obs <name> <old/id> <new> [--id]` / `rm-obs <name> <content/id> [--id]` — manage observations (supports updates and deletions by unique sequential IDs).
 - `asobi truth <name> <key> <value>` / `rm-truth <name> <key>` / `history <name> [key]` — manage truths and read their change history (overwrites are archived with valid-time; history is opt-in and never shown in `graph`/`search`/`show`).
 - `asobi skills install <src> --all` / `update` / `skills` / `skills show <name>` — manage skills (`--all` and `update` sync, pruning skills dropped upstream; `--select` is additive).
-- `asobi stats` / `export -o graph.json` / `import graph.json` / `reset` — inspect & manage.
+- `asobi stats` / `purge` / `export -o graph.json` / `import graph.json` / `reset` — inspect & manage.
 - `asobi backup` / `restore <snapshot> [--force]` — full-fidelity SQLite backups; see the [usage guide](docs/usage.md#backup-restore-and-portable-export).
 
 ## 🔒 Sandboxed Environments

@@ -1,14 +1,15 @@
 use crate::api::v2::{
     ApiError, ApiResult, BackendCapabilities, BackendHealth, BackupReceipt, BackupRequest,
-    BackupStore, GraphStore, ImportReport, MaintenanceStore, OpenNodes, SearchQuery, SearchStore,
-    SkillRecord, SkillStore, Snapshot, SnapshotStore, Stats, StorageLocation, TaskStore,
-    TruthVersion,
+    BackupStore, GraphStore, ImportReport, MaintenanceStore, OpenNodes, PurgeCandidate,
+    PurgeReport, PurgeRequest, SearchQuery, SearchStore, SkillRecord, SkillStore, Snapshot,
+    SnapshotStore, Stats, StorageLocation, TaskStore, TruthVersion,
 };
 use crate::model::{
     EntityInput, EntityOutput, Graph, ObservationDeletion, ObservationInput, RelationInput,
 };
 use rusqlite::{
-    Connection, OptionalExtension, Transaction, TransactionBehavior, params, params_from_iter,
+    Connection, OptionalExtension, ToSql, Transaction, TransactionBehavior, params,
+    params_from_iter,
 };
 use std::cmp::Reverse;
 use std::collections::{BTreeMap, HashSet};
@@ -19,6 +20,8 @@ const SCHEMA_VERSION: i64 = 4;
 const DEFAULT_DATABASE_FILENAME: &str = "asobi.db";
 const DEFAULT_BUSY_TIMEOUT_MS: u64 = 15_000;
 const DEFAULT_OBSERVATION_LIMIT: usize = 200;
+const PURGEABLE_ENTITY_TYPES: &[&str] = &["session", "task"];
+const PURGEABLE_STATUSES: &[&str] = &["DONE", "CLOSED", "ABANDONED"];
 
 fn backend_error(error: impl std::fmt::Display) -> ApiError {
     ApiError::Backend(error.to_string())
@@ -26,6 +29,103 @@ fn backend_error(error: impl std::fmt::Display) -> ApiError {
 
 fn normalize(value: &str) -> String {
     crate::normalize::normalize_key(value)
+}
+
+fn validate_purge_request(request: &PurgeRequest) -> ApiResult<()> {
+    if request.entity_types.is_empty() {
+        return Err(ApiError::Invalid(
+            "purge requires at least one entity type".into(),
+        ));
+    }
+    if let Some(entity_type) = request
+        .entity_types
+        .iter()
+        .find(|entity_type| !PURGEABLE_ENTITY_TYPES.contains(&entity_type.as_str()))
+    {
+        return Err(ApiError::Invalid(format!(
+            "purge is restricted to operational entity types: session, task (got {entity_type})"
+        )));
+    }
+    if request.statuses.is_empty() {
+        return Err(ApiError::Invalid(
+            "purge requires at least one terminal status".into(),
+        ));
+    }
+    if let Some(status) = request
+        .statuses
+        .iter()
+        .find(|status| !PURGEABLE_STATUSES.contains(&status.as_str()))
+    {
+        return Err(ApiError::Invalid(format!(
+            "purge only accepts terminal statuses: DONE, CLOSED, ABANDONED (got {status})"
+        )));
+    }
+    Ok(())
+}
+
+fn collect_purge_candidates(
+    conn: &Connection,
+    request: &PurgeRequest,
+) -> rusqlite::Result<Vec<PurgeCandidate>> {
+    let type_placeholders = std::iter::repeat_n("?", request.entity_types.len())
+        .collect::<Vec<_>>()
+        .join(",");
+    let status_placeholders = std::iter::repeat_n("?", request.statuses.len())
+        .collect::<Vec<_>>()
+        .join(",");
+    let sql = format!(
+        r#"
+        SELECT name, entity_type, status, last_activity, observations, relations
+        FROM (
+            SELECT e.name, e.entity_type,
+                COALESCE(
+                    (SELECT value FROM asobi_truths
+                     WHERE entity_name = e.name AND key = 'status'),
+                    ''
+                ) AS status,
+                MAX(
+                    e.created_at,
+                    COALESCE(
+                        (SELECT MAX(created_at) FROM asobi_observations
+                         WHERE entity_name = e.name),
+                        e.created_at
+                    ),
+                    COALESCE(
+                        (SELECT MAX(updated_at) FROM asobi_truths
+                         WHERE entity_name = e.name),
+                        e.created_at
+                    )
+                ) AS last_activity,
+                (SELECT COUNT(*) FROM asobi_observations
+                 WHERE entity_name = e.name) AS observations,
+                (SELECT COUNT(*) FROM asobi_relations
+                 WHERE from_entity = e.name OR to_entity = e.name) AS relations
+            FROM asobi_entities e
+            WHERE e.entity_type IN ({type_placeholders})
+        ) candidates
+        WHERE status IN ({status_placeholders})
+          AND last_activity < datetime('now', ?)
+        ORDER BY last_activity, name
+        "#
+    );
+    let cutoff = format!("-{} days", request.older_than_days);
+    let mut values: Vec<&dyn ToSql> = Vec::new();
+    values.extend(request.entity_types.iter().map(|value| value as &dyn ToSql));
+    values.extend(request.statuses.iter().map(|value| value as &dyn ToSql));
+    values.push(&cutoff);
+
+    let mut stmt = conn.prepare(&sql)?;
+    stmt.query_map(params_from_iter(values), |row| {
+        Ok(PurgeCandidate {
+            name: row.get(0)?,
+            entity_type: row.get(1)?,
+            status: row.get(2)?,
+            last_activity: row.get(3)?,
+            observations: row.get::<_, i64>(4)? as usize,
+            relations: row.get::<_, i64>(5)? as usize,
+        })
+    })?
+    .collect()
 }
 
 pub struct SqliteStore {
@@ -784,6 +884,29 @@ impl MaintenanceStore for SqliteStore {
     }
     fn stats_per_entity(&self) -> ApiResult<Vec<(String, usize)>> {
         self.read(|conn| { let mut stmt=conn.prepare("SELECT e.name,count(o.id) FROM asobi_entities e LEFT JOIN asobi_observations o ON o.entity_name=e.name GROUP BY e.name ORDER BY e.name")?; let mut out=Vec::new(); for row in stmt.query_map([],|r|Ok((r.get(0)?,r.get::<_,i64>(1)? as usize)))?{out.push(row?);} Ok(out) })
+    }
+    fn purge(&self, request: PurgeRequest) -> ApiResult<PurgeReport> {
+        validate_purge_request(&request)?;
+        self.write(|tx| {
+            let candidates = collect_purge_candidates(tx, &request)?;
+            let deleted = if request.apply {
+                for candidate in &candidates {
+                    tx.execute(
+                        "DELETE FROM asobi_entities WHERE name = ?",
+                        [&candidate.name],
+                    )?;
+                }
+                candidates.len()
+            } else {
+                0
+            };
+            Ok(PurgeReport {
+                dry_run: !request.apply,
+                older_than_days: request.older_than_days,
+                candidates,
+                deleted,
+            })
+        })
     }
     fn reset(&self) -> ApiResult<()> {
         self.write(|tx| { tx.execute_batch("DELETE FROM asobi_relations; DELETE FROM asobi_truth_history; DELETE FROM asobi_truths; DELETE FROM asobi_observations; DELETE FROM asobi_skills; DELETE FROM asobi_entities;")?; Ok(()) })
