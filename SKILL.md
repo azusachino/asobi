@@ -21,12 +21,12 @@ Asobi maintains a persistent Knowledge Graph of project facts, user preferences,
 One graph, a few node parts — knowing which to write is the skill:
 
 - **Entity** — a named node with a `type`.
-- **Observation** — append-only log line, capped (oldest evicted past the limit, default 50). The _trail_.
+- **Observation** — append-only log line, capped (oldest evicted past the limit, default 200). The _trail_.
 - **Truth** — a `key→value` fact that upserts. The _current state_ (`status`, `version`).
 - **Relation** — directed edge `(from, to, type)`.
 - **Skill** — an installed instruction: Markdown body + `description`/`source`/`version` truths.
 
-`graph`/`search` return truths + `observationCount` only (cheap); `show` also returns observations and the skill body.
+`graph`/`search` return a lean entity index with truths, `observationCount`, and relations only (cheap); `show` also returns observations and the skill body. Use `export` or `backup` when a complete archival payload is required.
 
 ---
 
@@ -64,7 +64,7 @@ Creates one or more directed relations in a single call — pass repeated `FROM 
 asobi graph
 ```
 
-Returns the full graph as `{ "entities": [...], "relations": [...] }`; each entity includes all its observations. Use `asobi schema --command graph` for the payload contract.
+Returns the full lean graph as `{ "entities": [...], "relations": [...] }`; entities include truths and observation counts, while observation bodies remain lazy. Use `show` for selected observations and `asobi schema --command graph` for the payload contract.
 
 ```
 asobi search <QUERY> [--limit <N>] [--where KEY=VALUE ...]
@@ -87,6 +87,8 @@ Returns a subgraph for the named entities plus relations between them. Takes one
 
 - `--expand <RELATION_TYPE>`: repeatably expand relations of a given type. Useful for loading subtrees (e.g. `--expand part_of` to eagerly load related epic tasks).
 - `--with-ids`: include `observationsDetailed` list showing exact unique integer IDs (`id`) for each observation.
+
+Do not use `graph` or broad `search` as a document export. Fetch heavy content only for the specific entities needed with `show`.
 
 ### Truths
 
@@ -187,6 +189,21 @@ Three-step maintenance sweep:
 
 1. Prunes session Markdown files in `.asobi/topics/sessions/` older than `DAYS` (default: 90).
 2. Syncs **durable knowledge** entities (`project`, `concept`, `reference`, `preference`, `standard`) back to a Markdown file in `.asobi/topics/` — including their truths. Volatile state (`session`, `task`/epic) and self-indexing `skill` entities are skipped: they stay graph-only (read them with `search` / `show`), and `export` / `backup` cover full archival.
+
+```bash
+asobi purge [--dry-run]
+asobi purge --type task --status DONE --older-than 90 --apply
+```
+
+`purge` is dry-run by default and accepts only `session` plus terminal `task` statuses (`DONE`, `CLOSED`, or `ABANDONED`). It never accepts durable knowledge or skills. Review the candidate report before adding `--apply`; it does not run implicitly during `graph`, `search`, `compact`, or startup.
+
+### Shell completion
+
+```bash
+asobi completions bash|elvish|fish|powershell|zsh
+```
+
+Generate completion scripts from the installed binary so command and flag names stay aligned with the running Asobi version.
 
 ### Physical backup and restore
 

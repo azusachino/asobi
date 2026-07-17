@@ -1,5 +1,21 @@
 # Changelog
 
+## v0.6.1 — Lean agent reads and safe retention
+
+### Added
+
+- Preview-first `purge` for stale terminal `session` and `task` entities, with transactional deletion, relation/FTS cleanup, JSON reports, and durable-knowledge safeguards.
+- Shell completion generation for Bash, Elvish, Fish, PowerShell, and Zsh through `asobi completions <shell>`.
+
+### Changed
+
+- `graph` and `search` now return lean entity indexes: observations and skill bodies are lazy and available through explicit `show`, `export`, `backup`, or `skills show` operations.
+- Updated the usage guide and retention ADR with the 0.6.1 maintenance and completion workflows.
+
+### Verification
+
+`make check` passes, including storage-boundary checks, Clippy, Rust tests, CLI integration checks, use cases, and benchmark compilation. Tarpaulin reports 62.60% line coverage (1,053/1,682).
+
 ## v0.6.0 — Curated SQLite graph storage
 
 ### Added
