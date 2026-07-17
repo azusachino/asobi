@@ -345,6 +345,7 @@ def main() -> None:
     batch_and_json_checks()
     skills_checks()
     agent_feature_checks()
+    task_checks()
     scoped_export_checks()
 
     print("CLI graph integration checks passed")
@@ -624,6 +625,101 @@ def skills_checks() -> None:
             no_git_env,
         )
         assert "git" in no_git.stderr.lower()
+
+
+def task_checks() -> None:
+    """Exercise task planning, lifecycle transitions, and rejection paths."""
+    with tempfile.TemporaryDirectory(prefix="asobi-tasks-") as tmp:
+        env = os.environ.copy()
+        env["ASOBI_DATABASE_URL"] = str(Path(tmp) / "asobi.db")
+
+        for help_args in [
+            ["--help"],
+            ["tasks", "--help"],
+            ["tasks", "plan", "--help"],
+            ["tasks", "list", "--help"],
+            ["tasks", "dispatch", "--help"],
+            ["tasks", "sync", "--help"],
+            ["tasks", "close", "--help"],
+        ]:
+            assert run(help_args, env).returncode == 0
+
+        for round_no in range(3):
+            epic = f"verify:tasks-{round_no}"
+            task_1 = f"{epic}:task-1"
+            task_2 = f"{epic}:task-2"
+            planned = validate_response(
+                [
+                    "tasks",
+                    "plan",
+                    epic,
+                    "--objective",
+                    "verify task lifecycle",
+                    "--task",
+                    "first task",
+                    "--task",
+                    "second task",
+                    "--json",
+                ],
+                env,
+                "tasks-plan",
+            )
+            assert {e["name"] for e in planned["entities"]} == {
+                epic,
+                task_1,
+                task_2,
+            }
+            board = validate_response(["tasks", "list", epic], env, "tasks-list")
+            assert board["entities"][1]["truths"]["status"] == "READY_TO_DISPATCH"
+
+            duplicate = run_expect_failure(
+                [
+                    "tasks",
+                    "plan",
+                    epic,
+                    "--objective",
+                    "duplicate",
+                    "--task",
+                    "should fail",
+                ],
+                env,
+            )
+            assert "already exists" in duplicate.stderr
+
+            dispatch = validate_response(
+                ["tasks", "dispatch", "--json"], env, "tasks-dispatch"
+            )
+            assert dispatch["status"] == "DISPATCHED"
+            not_ready = run_expect_failure(
+                ["tasks", "dispatch", dispatch["entity"]], env
+            )
+            assert "READY_TO_DISPATCH" in not_ready.stderr
+
+            invalid_status = run_expect_failure(
+                ["tasks", "sync", task_1, "--status", "NOT_A_STATUS"], env
+            )
+            assert "invalid task status" in invalid_status.stderr
+            missing = run_expect_failure(
+                ["tasks", "sync", "verify:missing", "--status", "DONE"], env
+            )
+            assert "not found" in missing.stderr
+            early_close = run_expect_failure(["tasks", "close", epic], env)
+            assert "every child task" in early_close.stderr
+
+            validate_response(
+                ["tasks", "sync", task_1, "--status", "DONE", "--json"],
+                env,
+                "tasks-sync",
+            )
+            validate_response(
+                ["tasks", "sync", task_2, "--status", "DONE", "--json"],
+                env,
+                "tasks-sync",
+            )
+            closed = validate_response(
+                ["tasks", "close", epic, "--json"], env, "tasks-close"
+            )
+            assert closed["status"] == "DONE"
 
 
 def agent_feature_checks() -> None:

@@ -5,6 +5,7 @@ pub mod api;
 pub mod application;
 #[cfg(feature = "documents")]
 pub mod chunk;
+pub mod cli;
 #[cfg(feature = "documents")]
 pub mod compact;
 #[cfg(feature = "documents")]

@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.5.3 — Durable Task Dispatcher
+
+### Added
+
+- Added `tasks plan|list|dispatch|sync|close` with nested Clap help.
+- Added lifecycle validation, JSON response schemas, repeated CLI verifier coverage, and task-board Criterion benchmarks.
+
 ## v0.5.2 — Versioned CLI Responses
 
 ### Breaking / Upgrade

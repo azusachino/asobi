@@ -1,7 +1,24 @@
 use crate::api::{GraphStore, SearchQuery, SearchStore};
 use anyhow::Result;
 use clap::Subcommand;
+use schemars::JsonSchema;
 use serde::Serialize;
+
+#[derive(Debug, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct TaskReceipt {
+    pub action: &'static str,
+    pub entity: String,
+    pub status: String,
+}
+
+const TASK_STATUSES: &[&str] = &[
+    "READY_TO_DISPATCH",
+    "DISPATCHED",
+    "REVIEW",
+    "AWAITING_VERIFY",
+    "DONE",
+];
 
 #[derive(Subcommand, Debug)]
 pub enum TasksCommands {
@@ -54,7 +71,29 @@ pub async fn run(
             objective,
             tasks,
         }) => {
+            if epic.trim().is_empty() || objective.trim().is_empty() {
+                anyhow::bail!("plan requires a non-empty epic and objective");
+            }
+            if tasks.iter().any(|title| title.trim().is_empty()) {
+                anyhow::bail!("plan task titles must be non-empty");
+            }
             let epic_name = epic.clone();
+            let child_names: Vec<String> = tasks
+                .iter()
+                .enumerate()
+                .map(|(idx, _)| format!("{epic}:task-{}", idx + 1))
+                .collect();
+            let existing = backend
+                .open_nodes(crate::api::v1::OpenNodes {
+                    names: std::iter::once(epic.clone())
+                        .chain(child_names.iter().cloned())
+                        .collect(),
+                    ..Default::default()
+                })
+                .await?;
+            if !existing.entities.is_empty() {
+                anyhow::bail!("plan target already exists: {}", existing.entities[0].name);
+            }
             backend
                 .create_entities(vec![crate::model::EntityInput {
                     name: epic.clone(),
@@ -63,11 +102,6 @@ pub async fn run(
                 }])
                 .await?;
 
-            let child_names: Vec<String> = tasks
-                .iter()
-                .enumerate()
-                .map(|(idx, _)| format!("{epic}:task-{}", idx + 1))
-                .collect();
             backend
                 .create_entities(
                     child_names
@@ -115,13 +149,17 @@ pub async fn run(
         }
         Some(TasksCommands::List { epic }) => {
             let graph = if let Some(epic) = epic {
-                backend
+                let graph = backend
                     .open_nodes(crate::api::v1::OpenNodes {
-                        names: vec![epic],
+                        names: vec![epic.clone()],
                         expand: vec!["part_of".to_string()],
                         ..Default::default()
                     })
-                    .await?
+                    .await?;
+                if graph.entities.is_empty() {
+                    anyhow::bail!("epic not found: {epic}");
+                }
+                graph
             } else {
                 let mut graph = backend.read_graph().await?;
                 let task_names: std::collections::HashSet<_> = graph
@@ -141,6 +179,9 @@ pub async fn run(
             print_json(graph)?;
         }
         Some(TasksCommands::Dispatch { task, agent }) => {
+            if agent.trim().is_empty() {
+                anyhow::bail!("dispatch agent must be non-empty");
+            }
             let task = if let Some(task) = task {
                 task
             } else {
@@ -171,6 +212,9 @@ pub async fn run(
             if entity.entity_type != "task" {
                 anyhow::bail!("entity is not a task: {task}");
             }
+            if entity.truths.get("status").map(String::as_str) != Some("READY_TO_DISPATCH") {
+                anyhow::bail!("task is not READY_TO_DISPATCH: {task}");
+            }
             backend.truth_upsert(&task, "status", "DISPATCHED").await?;
             backend
                 .add_observations(
@@ -181,7 +225,15 @@ pub async fn run(
                     observation_limit(),
                 )
                 .await?;
-            println!("Dispatched {task} to {agent}.");
+            if json {
+                print_json(TaskReceipt {
+                    action: "dispatch",
+                    entity: task,
+                    status: "DISPATCHED".to_string(),
+                })?;
+            } else {
+                println!("Dispatched {task} to {agent}.");
+            }
         }
         Some(TasksCommands::Sync {
             task,
@@ -194,6 +246,16 @@ pub async fn run(
                     ..Default::default()
                 })
                 .await?;
+            let entity = graph
+                .entities
+                .first()
+                .ok_or_else(|| anyhow::anyhow!("task not found: {task}"))?;
+            if entity.entity_type != "task" {
+                anyhow::bail!("entity is not a task: {task}");
+            }
+            if !TASK_STATUSES.contains(&status.as_str()) && !status.starts_with("BLOCKED_ON ") {
+                anyhow::bail!("invalid task status: {status}");
+            }
             if graph.entities.is_empty() {
                 anyhow::bail!("task not found: {task}");
             }
@@ -209,7 +271,15 @@ pub async fn run(
                     .await?;
             }
             backend.truth_upsert(&task, "status", &status).await?;
-            println!("Synced {task} as {status}.");
+            if json {
+                print_json(TaskReceipt {
+                    action: "sync",
+                    entity: task,
+                    status,
+                })?;
+            } else {
+                println!("Synced {task} as {status}.");
+            }
         }
         Some(TasksCommands::Close { epic, lessons }) => {
             let graph = backend
@@ -224,6 +294,12 @@ pub async fn run(
                 .iter()
                 .filter(|entity| entity.name != epic && entity.entity_type == "task")
                 .collect();
+            if graph.entities.is_empty() {
+                anyhow::bail!("epic not found: {epic}");
+            }
+            if children.is_empty() {
+                anyhow::bail!("cannot close {epic}: no child tasks found");
+            }
             if children
                 .iter()
                 .any(|entity| entity.truths.get("status").map(String::as_str) != Some("DONE"))
@@ -264,7 +340,15 @@ pub async fn run(
                     observation_limit(),
                 )
                 .await?;
-            println!("Closed {epic}.");
+            if json {
+                print_json(TaskReceipt {
+                    action: "close",
+                    entity: epic,
+                    status: "DONE".to_string(),
+                })?;
+            } else {
+                println!("Closed {epic}.");
+            }
         }
     };
     Ok(())

@@ -1,4 +1,4 @@
-.PHONY: help build build-documents run test test-documents test-scripts test-turso-scripts test-documents-scripts verify-storage-boundary verify-libsql verify-turso bench-libsql bench-turso bench-criterion bench-vector-criterion bench-alloc bench-sql-plans fmt fmt-check lint check check-documents check-turso bench clean init
+.PHONY: help build build-documents run test test-documents test-scripts test-turso-scripts test-documents-scripts verify-storage-boundary verify-libsql verify-turso bench-libsql bench-turso bench-criterion bench-vector-criterion bench-alloc bench-sql-plans bench-tasks fmt fmt-check lint check check-documents check-turso bench clean init
 
 # Default task: Show help
 help:
@@ -20,6 +20,7 @@ help:
 	@echo "  bench-vector-criterion - Run statistical vector-search benchmarks"
 	@echo "  bench-alloc   - Write a DHAT allocation profile for graph hot paths"
 	@echo "  bench-sql-plans - Print query plans for graph hot-path SQL"
+	@echo "  bench-tasks   - Benchmark task-board search and epic expansion"
 	@echo "  fmt           - Format Rust, Python, JSON, YAML, and Markdown"
 	@echo "  fmt-check     - Verify formatting without writing (gate; run fmt to fix)"
 	@echo "  lint          - Run Rust clippy and Python ruff"
@@ -84,6 +85,9 @@ bench-alloc:
 
 bench-sql-plans:
 	cargo bench --bench sql_plans
+
+bench-tasks:
+	cargo bench --bench tasks
 
 fmt:
 	cargo fmt
