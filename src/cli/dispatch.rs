@@ -1,12 +1,19 @@
 use super::commands::{Cli, Commands};
 use super::output::*;
-use crate::api::{BackupStore, GraphStore};
+use crate::api::{BackupStore, GraphStore, MaintenanceStore, PurgeRequest};
 use crate::application::AsobiRuntime;
 use crate::paths::AsobiPaths;
 use anyhow::Result;
+use clap::CommandFactory;
 use tracing::info;
 
 pub(crate) fn run_cli(cli: Cli) -> Result<()> {
+    if let Commands::Completions { shell } = cli.command {
+        let mut command = Cli::command();
+        let shell: clap_complete::Shell = shell.into();
+        clap_complete::generate(shell, &mut command, "asobi", &mut std::io::stdout());
+        return Ok(());
+    }
     if let Commands::Schema { command } = cli.command {
         emit_schema(command.as_deref())?;
         return Ok(());
@@ -46,6 +53,54 @@ pub(crate) fn run_cli(cli: Cli) -> Result<()> {
             info!("Pruned {} old session files.", pruned);
             let synced = crate::compact::sync_graph_to_markdown(backend)?;
             info!("Done. Synced {} entities to Markdown.", synced);
+        }
+        Commands::Purge {
+            entity_types,
+            statuses,
+            older_than,
+            apply,
+            dry_run,
+        } => {
+            let report = backend.purge(PurgeRequest {
+                entity_types,
+                statuses,
+                older_than_days: older_than,
+                apply: apply && !dry_run,
+            })?;
+            if json {
+                print_json(report)?;
+            } else {
+                let action = if report.dry_run {
+                    "would purge"
+                } else {
+                    "purged"
+                };
+                println!(
+                    "Purge {}: {} candidate(s), {} entity/entities {}.",
+                    if report.dry_run {
+                        "preview"
+                    } else {
+                        "complete"
+                    },
+                    report.candidates.len(),
+                    report.deleted,
+                    action
+                );
+                for candidate in &report.candidates {
+                    println!(
+                        "  {} [{} / {}] last activity {} · {} observations · {} relations",
+                        candidate.name,
+                        candidate.entity_type,
+                        candidate.status,
+                        candidate.last_activity,
+                        candidate.observations,
+                        candidate.relations
+                    );
+                }
+                if report.dry_run && !report.candidates.is_empty() {
+                    println!("Re-run with --apply to delete these entities.");
+                }
+            }
         }
         Commands::Tasks { subcommand } => crate::tasks::run(backend, subcommand, json)?,
         Commands::Skills { subcommand } => super::skills::run(backend, &paths, subcommand)?,

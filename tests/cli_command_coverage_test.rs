@@ -20,6 +20,7 @@ fn every_top_level_and_nested_subcommand_has_help() {
         "search",
         "show",
         "compact",
+        "purge",
         "init",
         "stats",
         "schema",
@@ -28,6 +29,7 @@ fn every_top_level_and_nested_subcommand_has_help() {
         "reset",
         "backup",
         "restore",
+        "completions",
         "skills",
         "tasks",
     ];
@@ -60,6 +62,29 @@ fn every_top_level_and_nested_subcommand_has_help() {
             "help failed for {:?}: {}",
             args,
             String::from_utf8_lossy(&output.stderr)
+        );
+    }
+}
+
+#[test]
+fn completions_generate_for_supported_shells() {
+    for shell in ["bash", "elvish", "fish", "powershell", "zsh"] {
+        let output = Command::new(asobi())
+            .args(["completions", shell])
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "completion generation failed for {shell}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            !output.stdout.is_empty(),
+            "empty completion script for {shell}"
+        );
+        assert!(
+            String::from_utf8_lossy(&output.stdout).contains("asobi"),
+            "completion script does not mention asobi for {shell}"
         );
     }
 }

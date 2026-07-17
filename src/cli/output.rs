@@ -83,6 +83,7 @@ fn schema_registry() -> Vec<SchemaRow> {
         ("link", schema_for_data::<Graph>),
         ("new", schema_for_data::<Graph>),
         ("obs", schema_for_data::<Graph>),
+        ("purge", schema_for_data::<crate::api::PurgeReport>),
         ("rm", schema_for_data::<DeletedReceipt>),
         ("rm-obs", schema_for_data::<Graph>),
         ("rm-truth", schema_for_data::<Graph>),

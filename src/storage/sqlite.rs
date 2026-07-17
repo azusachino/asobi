@@ -1,14 +1,15 @@
 use crate::api::v2::{
     ApiError, ApiResult, BackendCapabilities, BackendHealth, BackupReceipt, BackupRequest,
-    BackupStore, GraphStore, ImportReport, MaintenanceStore, OpenNodes, SearchQuery, SearchStore,
-    SkillRecord, SkillStore, Snapshot, SnapshotStore, Stats, StorageLocation, TaskStore,
-    TruthVersion,
+    BackupStore, GraphStore, ImportReport, MaintenanceStore, OpenNodes, PurgeCandidate,
+    PurgeReport, PurgeRequest, SearchQuery, SearchStore, SkillRecord, SkillStore, Snapshot,
+    SnapshotStore, Stats, StorageLocation, TaskStore, TruthVersion,
 };
 use crate::model::{
     EntityInput, EntityOutput, Graph, ObservationDeletion, ObservationInput, RelationInput,
 };
 use rusqlite::{
-    Connection, OptionalExtension, Transaction, TransactionBehavior, params, params_from_iter,
+    Connection, OptionalExtension, ToSql, Transaction, TransactionBehavior, params,
+    params_from_iter,
 };
 use std::cmp::Reverse;
 use std::collections::{BTreeMap, HashSet};
@@ -19,6 +20,8 @@ const SCHEMA_VERSION: i64 = 4;
 const DEFAULT_DATABASE_FILENAME: &str = "asobi.db";
 const DEFAULT_BUSY_TIMEOUT_MS: u64 = 15_000;
 const DEFAULT_OBSERVATION_LIMIT: usize = 200;
+const PURGEABLE_ENTITY_TYPES: &[&str] = &["session", "task"];
+const PURGEABLE_STATUSES: &[&str] = &["DONE", "CLOSED", "ABANDONED"];
 
 fn backend_error(error: impl std::fmt::Display) -> ApiError {
     ApiError::Backend(error.to_string())
@@ -26,6 +29,103 @@ fn backend_error(error: impl std::fmt::Display) -> ApiError {
 
 fn normalize(value: &str) -> String {
     crate::normalize::normalize_key(value)
+}
+
+fn validate_purge_request(request: &PurgeRequest) -> ApiResult<()> {
+    if request.entity_types.is_empty() {
+        return Err(ApiError::Invalid(
+            "purge requires at least one entity type".into(),
+        ));
+    }
+    if let Some(entity_type) = request
+        .entity_types
+        .iter()
+        .find(|entity_type| !PURGEABLE_ENTITY_TYPES.contains(&entity_type.as_str()))
+    {
+        return Err(ApiError::Invalid(format!(
+            "purge is restricted to operational entity types: session, task (got {entity_type})"
+        )));
+    }
+    if request.statuses.is_empty() {
+        return Err(ApiError::Invalid(
+            "purge requires at least one terminal status".into(),
+        ));
+    }
+    if let Some(status) = request
+        .statuses
+        .iter()
+        .find(|status| !PURGEABLE_STATUSES.contains(&status.as_str()))
+    {
+        return Err(ApiError::Invalid(format!(
+            "purge only accepts terminal statuses: DONE, CLOSED, ABANDONED (got {status})"
+        )));
+    }
+    Ok(())
+}
+
+fn collect_purge_candidates(
+    conn: &Connection,
+    request: &PurgeRequest,
+) -> rusqlite::Result<Vec<PurgeCandidate>> {
+    let type_placeholders = std::iter::repeat_n("?", request.entity_types.len())
+        .collect::<Vec<_>>()
+        .join(",");
+    let status_placeholders = std::iter::repeat_n("?", request.statuses.len())
+        .collect::<Vec<_>>()
+        .join(",");
+    let sql = format!(
+        r#"
+        SELECT name, entity_type, status, last_activity, observations, relations
+        FROM (
+            SELECT e.name, e.entity_type,
+                COALESCE(
+                    (SELECT value FROM asobi_truths
+                     WHERE entity_name = e.name AND key = 'status'),
+                    ''
+                ) AS status,
+                MAX(
+                    e.created_at,
+                    COALESCE(
+                        (SELECT MAX(created_at) FROM asobi_observations
+                         WHERE entity_name = e.name),
+                        e.created_at
+                    ),
+                    COALESCE(
+                        (SELECT MAX(updated_at) FROM asobi_truths
+                         WHERE entity_name = e.name),
+                        e.created_at
+                    )
+                ) AS last_activity,
+                (SELECT COUNT(*) FROM asobi_observations
+                 WHERE entity_name = e.name) AS observations,
+                (SELECT COUNT(*) FROM asobi_relations
+                 WHERE from_entity = e.name OR to_entity = e.name) AS relations
+            FROM asobi_entities e
+            WHERE e.entity_type IN ({type_placeholders})
+        ) candidates
+        WHERE status IN ({status_placeholders})
+          AND last_activity < datetime('now', ?)
+        ORDER BY last_activity, name
+        "#
+    );
+    let cutoff = format!("-{} days", request.older_than_days);
+    let mut values: Vec<&dyn ToSql> = Vec::new();
+    values.extend(request.entity_types.iter().map(|value| value as &dyn ToSql));
+    values.extend(request.statuses.iter().map(|value| value as &dyn ToSql));
+    values.push(&cutoff);
+
+    let mut stmt = conn.prepare(&sql)?;
+    stmt.query_map(params_from_iter(values), |row| {
+        Ok(PurgeCandidate {
+            name: row.get(0)?,
+            entity_type: row.get(1)?,
+            status: row.get(2)?,
+            last_activity: row.get(3)?,
+            observations: row.get::<_, i64>(4)? as usize,
+            relations: row.get::<_, i64>(5)? as usize,
+        })
+    })?
+    .collect()
 }
 
 pub struct SqliteStore {
@@ -165,8 +265,13 @@ impl SqliteStore {
         operation(&conn).map_err(backend_error)
     }
 
-    fn graph(&self, names: Option<&[String]>, expand: &[String]) -> ApiResult<Graph> {
-        self.read(|conn| graph_from_connection(conn, names, expand))
+    fn graph(
+        &self,
+        names: Option<&[String]>,
+        expand: &[String],
+        include_content: bool,
+    ) -> ApiResult<Graph> {
+        self.read(|conn| graph_from_connection(conn, names, expand, include_content))
     }
 }
 
@@ -174,6 +279,7 @@ fn graph_from_connection(
     conn: &Connection,
     names: Option<&[String]>,
     expand: &[String],
+    include_content: bool,
 ) -> rusqlite::Result<Graph> {
     let mut selected = names.map(|values| values.iter().map(|v| normalize(v)).collect::<Vec<_>>());
     if let Some(values) = selected.as_mut()
@@ -232,20 +338,44 @@ fn graph_from_connection(
             .collect::<rusqlite::Result<Vec<_>>>()?
     };
     let mut entities = Vec::new();
-    let mut obs_stmt = conn
-        .prepare("SELECT id, content FROM asobi_observations WHERE entity_name = ? ORDER BY id")?;
+    let mut obs_stmt = if include_content {
+        Some(conn.prepare(
+            "SELECT id, content FROM asobi_observations WHERE entity_name = ? ORDER BY id",
+        )?)
+    } else {
+        None
+    };
+    let mut obs_count_stmt = if include_content {
+        None
+    } else {
+        Some(conn.prepare("SELECT COUNT(*) FROM asobi_observations WHERE entity_name = ?")?)
+    };
     let mut truth_stmt =
         conn.prepare("SELECT key, value FROM asobi_truths WHERE entity_name = ? ORDER BY key")?;
     for (name, entity_type) in entity_rows {
-        let mut observations = Vec::new();
-        let mut detailed = Vec::new();
-        for obs in obs_stmt.query_map([&name], |r| {
-            Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?))
-        })? {
-            let (id, content) = obs?;
-            observations.push(content.clone());
-            detailed.push(crate::model::DetailedObservation { id, content });
-        }
+        let (observations, observations_detailed, observation_count) = if include_content {
+            let mut observations = Vec::new();
+            let mut detailed = Vec::new();
+            for obs in obs_stmt
+                .as_mut()
+                .expect("content query must be prepared")
+                .query_map([&name], |r| {
+                    Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?))
+                })?
+            {
+                let (id, content) = obs?;
+                observations.push(content.clone());
+                detailed.push(crate::model::DetailedObservation { id, content });
+            }
+            let observation_count = detailed.len();
+            (observations, Some(detailed), observation_count)
+        } else {
+            let count = obs_count_stmt
+                .as_mut()
+                .expect("count query must be prepared")
+                .query_row([&name], |r| r.get::<_, i64>(0))? as usize;
+            (Vec::new(), None, count)
+        };
         let mut truths = BTreeMap::new();
         for truth in truth_stmt.query_map([&name], |r| {
             Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
@@ -253,21 +383,24 @@ fn graph_from_connection(
             let (key, value) = truth?;
             truths.insert(key, value);
         }
-        let body = conn
-            .query_row(
+        let body = if include_content {
+            conn.query_row(
                 "SELECT body FROM asobi_skills WHERE entity_name = ?",
                 [&name],
                 |r| r.get(0),
             )
-            .optional()?;
+            .optional()?
+        } else {
+            None
+        };
         entities.push(EntityOutput {
             name,
             entity_type,
             observations,
             truths,
-            observation_count: detailed.len(),
+            observation_count,
             body,
-            observations_detailed: Some(detailed),
+            observations_detailed,
         });
     }
     let mut relations = Vec::new();
@@ -471,16 +604,16 @@ impl GraphStore for SqliteStore {
         self.read(|conn| { let mut out = Vec::new(); if let Some(key) = key { let mut stmt = conn.prepare("SELECT key,value,valid_from,valid_until FROM asobi_truth_history WHERE entity_name=? AND key=? ORDER BY valid_until DESC")?; for row in stmt.query_map(params![normalize(entity), key], |r| Ok(TruthVersion { key:r.get(0)?, value:r.get(1)?, valid_from:r.get(2)?, valid_until:r.get(3)? }))? { out.push(row?); } } else { let mut stmt = conn.prepare("SELECT key,value,valid_from,valid_until FROM asobi_truth_history WHERE entity_name=? ORDER BY valid_until DESC,key")?; for row in stmt.query_map([normalize(entity)], |r| Ok(TruthVersion { key:r.get(0)?, value:r.get(1)?, valid_from:r.get(2)?, valid_until:r.get(3)? }))? { out.push(row?); } } Ok(out) })
     }
     fn read_graph(&self) -> ApiResult<Graph> {
-        self.graph(None, &[])
+        self.graph(None, &[], false)
     }
     fn read_graph_full(&self) -> ApiResult<Graph> {
-        self.graph(None, &[])
+        self.graph(None, &[], true)
     }
     fn read_graph_scoped(&self, scope: &[String], rationale: bool) -> ApiResult<Graph> {
         self.read(|conn| {
             let names = scoped_names(conn, scope, rationale)?;
             let included: HashSet<_> = names.iter().cloned().collect();
-            let mut graph = graph_from_connection(conn, Some(&names), &[])?;
+            let mut graph = graph_from_connection(conn, Some(&names), &[], true)?;
             graph
                 .relations
                 .retain(|rel| included.contains(&rel.from) && included.contains(&rel.to));
@@ -488,7 +621,7 @@ impl GraphStore for SqliteStore {
         })
     }
     fn open_nodes(&self, req: OpenNodes) -> ApiResult<Graph> {
-        self.graph(Some(&req.names), &req.expand)
+        self.graph(Some(&req.names), &req.expand, true)
     }
 }
 
@@ -534,7 +667,7 @@ impl SearchStore for SqliteStore {
                 }
             }
             names.truncate(limit);
-            graph_from_connection(conn, Some(&names), &[])
+            graph_from_connection(conn, Some(&names), &[], false)
         })
     }
 }
@@ -751,6 +884,29 @@ impl MaintenanceStore for SqliteStore {
     }
     fn stats_per_entity(&self) -> ApiResult<Vec<(String, usize)>> {
         self.read(|conn| { let mut stmt=conn.prepare("SELECT e.name,count(o.id) FROM asobi_entities e LEFT JOIN asobi_observations o ON o.entity_name=e.name GROUP BY e.name ORDER BY e.name")?; let mut out=Vec::new(); for row in stmt.query_map([],|r|Ok((r.get(0)?,r.get::<_,i64>(1)? as usize)))?{out.push(row?);} Ok(out) })
+    }
+    fn purge(&self, request: PurgeRequest) -> ApiResult<PurgeReport> {
+        validate_purge_request(&request)?;
+        self.write(|tx| {
+            let candidates = collect_purge_candidates(tx, &request)?;
+            let deleted = if request.apply {
+                for candidate in &candidates {
+                    tx.execute(
+                        "DELETE FROM asobi_entities WHERE name = ?",
+                        [&candidate.name],
+                    )?;
+                }
+                candidates.len()
+            } else {
+                0
+            };
+            Ok(PurgeReport {
+                dry_run: !request.apply,
+                older_than_days: request.older_than_days,
+                candidates,
+                deleted,
+            })
+        })
     }
     fn reset(&self) -> ApiResult<()> {
         self.write(|tx| { tx.execute_batch("DELETE FROM asobi_relations; DELETE FROM asobi_truth_history; DELETE FROM asobi_truths; DELETE FROM asobi_observations; DELETE FROM asobi_skills; DELETE FROM asobi_entities;")?; Ok(()) })

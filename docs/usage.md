@@ -23,6 +23,27 @@ git clone https://github.com/azusachino/asobi && cd asobi
 make build            # graph CLI at ./target/debug/asobi
 ```
 
+### Shell completion
+
+Generate completions from the installed binary so the script always matches the version of Asobi being used:
+
+```bash
+# zsh
+mkdir -p ~/.zfunc
+asobi completions zsh > ~/.zfunc/_asobi
+# Add this once before compinit in ~/.zshrc:
+# fpath=(~/.zfunc $fpath)
+
+# bash
+mkdir -p ~/.local/share/bash-completion/completions
+asobi completions bash > ~/.local/share/bash-completion/completions/asobi
+
+# fish
+asobi completions fish > ~/.config/fish/completions/asobi.fish
+```
+
+The command also supports `elvish` and `powershell`. Completions cover commands, flags, enum values, and help text; entity names remain dynamic graph data and are intentionally resolved through `search` rather than a stale completion cache.
+
 ### Workspace setup
 
 Run once on a new machine — defaults to user-level XDG paths:
@@ -102,6 +123,21 @@ asobi truth "my-project:session" "last-updated" "2026-05-21"
 asobi obs "my-project:session" "next: implement FTS5 index"
 asobi compact  # render durable graph topics to Markdown
 ```
+
+**Preview and purge stale operational state:**
+
+```bash
+# Preview only (the default): terminal sessions/tasks inactive for 30 days
+asobi purge
+
+# Narrow the policy to completed tasks older than 90 days
+asobi purge --type task --status DONE --older-than 90
+
+# Apply exactly the previewed policy
+asobi purge --type task --status DONE --older-than 90 --apply
+```
+
+Purge is restricted to `session` and `task` entities. Durable knowledge and installed skills are never accepted by this command. Use `--json` for a machine-readable candidate report, and review the dry-run output before adding `--apply` to a scheduled job.
 
 `compact` syncs only durable _knowledge_ entities (project, decisions, references, preferences) to Markdown. Volatile state (`session`, `task`) and self-indexing `skill` entities stay graph-only — query them with `search` / `show`, and use `export` / `backup` for full archival.
 

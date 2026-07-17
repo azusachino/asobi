@@ -1,4 +1,4 @@
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 
 #[derive(Parser)]
 #[command(name = "asobi")]
@@ -111,6 +111,24 @@ pub(crate) enum Commands {
         #[arg(long, default_value = "90")]
         older_than: u32,
     },
+    /// Preview or delete stale terminal sessions and tasks
+    Purge {
+        /// Operational entity type to inspect (repeatable)
+        #[arg(long = "type", value_name = "ENTITY_TYPE", default_values = ["session", "task"])]
+        entity_types: Vec<String>,
+        /// Terminal status to inspect (repeatable)
+        #[arg(long = "status", value_name = "STATUS", default_values = ["DONE", "CLOSED", "ABANDONED"])]
+        statuses: Vec<String>,
+        /// Only consider entities inactive for at least this many days
+        #[arg(long, default_value_t = 30)]
+        older_than: u32,
+        /// Apply the deletion; without this flag purge is a dry run
+        #[arg(long)]
+        apply: bool,
+        /// Make the preview mode explicit (the default)
+        #[arg(long, conflicts_with = "apply")]
+        dry_run: bool,
+    },
     /// Initialise a Asobi workspace (XDG by default, `--local` for cwd)
     Init {
         /// Create `.asobi/` and `asobi.toml` in the current directory
@@ -131,6 +149,12 @@ pub(crate) enum Commands {
         /// Restrict output to one command's response schema
         #[arg(long)]
         command: Option<String>,
+    },
+    /// Generate shell completion scripts
+    Completions {
+        /// Shell to generate completions for
+        #[arg(value_enum)]
+        shell: CompletionShell,
     },
 
     /// Export the knowledge graph to a JSON file
@@ -186,6 +210,28 @@ pub(crate) enum Commands {
         #[command(subcommand)]
         subcommand: Option<crate::tasks::TasksCommands>,
     },
+}
+
+#[derive(Clone, Debug, ValueEnum)]
+pub(crate) enum CompletionShell {
+    Bash,
+    Elvish,
+    Fish,
+    #[value(name = "powershell")]
+    PowerShell,
+    Zsh,
+}
+
+impl From<CompletionShell> for clap_complete::Shell {
+    fn from(shell: CompletionShell) -> Self {
+        match shell {
+            CompletionShell::Bash => Self::Bash,
+            CompletionShell::Elvish => Self::Elvish,
+            CompletionShell::Fish => Self::Fish,
+            CompletionShell::PowerShell => Self::PowerShell,
+            CompletionShell::Zsh => Self::Zsh,
+        }
+    }
 }
 
 #[derive(Subcommand, Debug)]
