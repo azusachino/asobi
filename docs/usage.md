@@ -23,6 +23,27 @@ git clone https://github.com/azusachino/asobi && cd asobi
 make build            # graph CLI at ./target/debug/asobi
 ```
 
+### Shell completion
+
+Generate completions from the installed binary so the script always matches the version of Asobi being used:
+
+```bash
+# zsh
+mkdir -p ~/.zfunc
+asobi completions zsh > ~/.zfunc/_asobi
+# Add this once before compinit in ~/.zshrc:
+# fpath=(~/.zfunc $fpath)
+
+# bash
+mkdir -p ~/.local/share/bash-completion/completions
+asobi completions bash > ~/.local/share/bash-completion/completions/asobi
+
+# fish
+asobi completions fish > ~/.config/fish/completions/asobi.fish
+```
+
+The command also supports `elvish` and `powershell`. Completions cover commands, flags, enum values, and help text; entity names remain dynamic graph data and are intentionally resolved through `search` rather than a stale completion cache.
+
 ### Workspace setup
 
 Run once on a new machine — defaults to user-level XDG paths:

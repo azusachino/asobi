@@ -4,9 +4,16 @@ use crate::api::{BackupStore, GraphStore};
 use crate::application::AsobiRuntime;
 use crate::paths::AsobiPaths;
 use anyhow::Result;
+use clap::CommandFactory;
 use tracing::info;
 
 pub(crate) fn run_cli(cli: Cli) -> Result<()> {
+    if let Commands::Completions { shell } = cli.command {
+        let mut command = Cli::command();
+        let shell: clap_complete::Shell = shell.into();
+        clap_complete::generate(shell, &mut command, "asobi", &mut std::io::stdout());
+        return Ok(());
+    }
     if let Commands::Schema { command } = cli.command {
         emit_schema(command.as_deref())?;
         return Ok(());

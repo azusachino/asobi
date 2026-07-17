@@ -1,6 +1,6 @@
 [package]
 name = "asobi"
-version = "0.6.0"
+version = "0.6.1"
 edition = "2024"
 authors = ["haru <azusachino@proton.me>"]
 description = "A persistent, project-local knowledge graph CLI for AI agents."
@@ -36,6 +36,7 @@ schemars = "1"
 
 # CLI
 clap = { version = "4.6", default-features = false, features = ["std", "derive", "help", "usage", "error-context"] }
+clap_complete = "4.6"
 walkdir = "2"
 toml = "1"
 

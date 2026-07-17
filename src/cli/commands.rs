@@ -1,4 +1,4 @@
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 
 #[derive(Parser)]
 #[command(name = "asobi")]
@@ -132,6 +132,12 @@ pub(crate) enum Commands {
         #[arg(long)]
         command: Option<String>,
     },
+    /// Generate shell completion scripts
+    Completions {
+        /// Shell to generate completions for
+        #[arg(value_enum)]
+        shell: CompletionShell,
+    },
 
     /// Export the knowledge graph to a JSON file
     Export {
@@ -186,6 +192,28 @@ pub(crate) enum Commands {
         #[command(subcommand)]
         subcommand: Option<crate::tasks::TasksCommands>,
     },
+}
+
+#[derive(Clone, Debug, ValueEnum)]
+pub(crate) enum CompletionShell {
+    Bash,
+    Elvish,
+    Fish,
+    #[value(name = "powershell")]
+    PowerShell,
+    Zsh,
+}
+
+impl From<CompletionShell> for clap_complete::Shell {
+    fn from(shell: CompletionShell) -> Self {
+        match shell {
+            CompletionShell::Bash => Self::Bash,
+            CompletionShell::Elvish => Self::Elvish,
+            CompletionShell::Fish => Self::Fish,
+            CompletionShell::PowerShell => Self::PowerShell,
+            CompletionShell::Zsh => Self::Zsh,
+        }
+    }
 }
 
 #[derive(Subcommand, Debug)]
