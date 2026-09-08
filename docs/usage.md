@@ -1,5 +1,9 @@
 # Asobi: Usage Guide
 
+This is Asobi's interface reference: what each command does, what it accepts, and what it returns. It describes the CLI and nothing more.
+
+It deliberately does not prescribe a session workflow — when to read the graph, what to write at closeout, how to sequence a task board. That guidance is agent policy rather than a property of the tool, it differs between users, and keeping a copy here produced a set of documents that drifted into contradicting each other. Workflow lives in the [`asobi` skill](https://github.com/azusachino/harus-skills/blob/main/skills/asobi/SKILL.md), which cites this document for exact contracts.
+
 ## For humans
 
 ### Installation
@@ -81,7 +85,7 @@ Add `.asobi/` to `.gitignore`; the `asobi.toml` itself can be checked in.
 
 ### Common workflows
 
-**Start a work session — load prior context:**
+**Recall stored state by truth or by name:**
 
 ```bash
 asobi search --where status=IN_PROGRESS
@@ -110,21 +114,22 @@ asobi search "mobile"          # finds "ame:mobile-support:task-1" (segment matc
 asobi search "auth*"           # prefix: matches "auth", "authentication", "authorize"
 asobi search "async AND error" # both words must appear
 asobi search "deploy OR ship"  # either word
-asobi search "auth" --limit 25 # override the default top 100 matches
+asobi search "auth" --limit 25 # override the default of 10 matched nodes
 asobi search --where status=READY # find all entities with status truth set to READY
 asobi search "bug" --where status=READY --where priority=high # filter by multiple truths AND the query
 ```
 
 Use `graph` for full export. `search` is intentionally top-K by default so a broad term does not accidentally return the whole graph.
 
-**End a session — persist state:**
+**Persist state — truths for the current value, observations for the trail:**
 
 ```bash
 asobi truth "my-project:session" "status" "DONE"
-asobi truth "my-project:session" "last-updated" "2026-05-21"
-asobi obs "my-project:session" "next: implement FTS5 index"
-asobi compact  # render durable graph topics to Markdown
+asobi truth "my-project:session" "next" "implement FTS5 index"
+asobi obs "my-project:session" "completed 2026-05-21: added the FTS5 index"
 ```
+
+A truth is the right home for anything read back as *current* state, because writing the same key updates it in place. Observations accumulate and are evicted at the cap, so a next-action stored as an observation can silently age out.
 
 **Preview and purge stale operational state:**
 
@@ -243,72 +248,164 @@ Use `asobi tasks --help` or `asobi tasks <command> --help` for the complete argu
 
 ---
 
-## For agents
+## Command reference
 
-### Overview
+Every command is a single CLI invocation. No server to start, no authentication; graph operations complete in under 10ms.
 
-Asobi is a persistent, project-local knowledge graph. Agents use it to:
+`asobi <command> --help` is generated from the same definitions as the binary and is authoritative if this section ever falls behind it.
 
-- **Persist** decisions, task state, and user preferences across sessions
-- **Share** context with other agents working on the same project
-- **Resume** work without re-deriving context from git history or code
+### Create
 
-All operations are CLI commands. No server to start. No authentication. Latency is <10ms for graph operations.
+```
+asobi new <NAME> <TYPE> [<NAME> <TYPE> ...] [--obs <OBSERVATION> ...]
+```
 
-### Session protocol
+Creates one or more entities from repeated `NAME TYPE` pairs — `new A task B concept` creates two — so the positional count must be a multiple of 2. Names that already exist are silently skipped (`INSERT OR IGNORE`), which makes the command safe to re-run. Repeatable `--obs` seeds observations at creation; with several entities in one call, each seeded observation is added to all of them. Prefer one batched call to many invocations.
 
-**At session start:**
+```
+asobi obs <NAME> <CONTENT> [<CONTENT> ...]
+```
 
-```bash
-# Option A: load a specific entity
-asobi show "<project>:session"
+Appends observations to an entity that must already exist. Observations are capped per entity — 200 by default, oldest evicted — configurable through `ASOBI_OBSERVATION_LIMIT` or `observation_limit` in `asobi.toml`.
 
-# Option B: query by status truth
-asobi search --where status=IN_PROGRESS
+```
+asobi link <FROM> <TO> <TYPE> [<FROM> <TO> <TYPE> ...]
+```
 
-# Option C: full graph (small projects)
+Creates directed relations from repeated `FROM TO TYPE` triples, so the positional count must be a multiple of 3. Upserts on the composite key `(from, to, relation_type)`.
+
+### Read
+
+```
 asobi graph
 ```
 
-**During session — record facts as you learn them:**
+Returns the whole graph as `{ "entities": [...], "relations": [...] }`. Entities carry their truths and observation counts; observation bodies stay lazy.
 
-```bash
-asobi obs "<project>" "Decided to use WAL mode for concurrent agent access"
-asobi truth "<project>:session" "status" "IN_PROGRESS"
+```
+asobi search [QUERY] [--limit <N>] [--where KEY=VALUE ...]
 ```
 
-**At session end:**
+Returns a subgraph of matching entities, in the same payload shape as `graph`, plus the relations between them. Two search paths are merged in order:
 
-```bash
-# Update volatile state
-asobi truth "<project>:session" "status" "DONE"
-asobi truth "<project>:session" "last-updated" "2026-05-21"
-asobi obs "<project>:session" "completed: implemented FTS5 search"
-asobi obs "<project>:session" "next: add WAL mode and entity_name index"
+1. **FTS5 over observations** — porter stemming with BM25 ranking. `"tokio async"` ranks entities containing both words higher, and the FTS5 operators `AND`, `OR`, `NOT` and the `*` prefix wildcard all apply.
+2. **LIKE over entity name and type** — a substring fallback that always runs, catching exact-name lookups such as `UserPreferences` and entities that have no observations at all.
 
-# Archive to markdown (durable, re-indexed)
+`--where KEY=VALUE` filters the results by entity truths and is repeatable; multiple filters intersect (AND). A query term and `--where` filters likewise intersect. `--limit` defaults to **10** matched nodes — raise it explicitly for a larger ranked read. Use `graph` when the whole graph is genuinely wanted; a deliberately broad `search` query is not an export.
+
+```
+asobi show <NAME> [<NAME> ...] [--expand <RELATION_TYPE> ...] [--with-ids]
+```
+
+Returns a subgraph for the named entities and the relations among them, eagerly including observations and skill bodies.
+
+- `--expand <RELATION_TYPE>` — repeatable; pulls in entities linked by that relation, e.g. `--expand part_of` to load an epic's tasks.
+- `--with-ids` — adds `observationsDetailed`, pairing each observation with its stable integer `id` for use with `update-obs --id` and `rm-obs --id`.
+
+Fetch heavy content with `show` for the specific entities needed rather than through `graph` or a broad `search`.
+
+### Truths
+
+```
+asobi truth <NAME> <KEY> <VALUE>
+asobi rm-truth <NAME> <KEY>
+asobi history <NAME> [KEY]
+```
+
+`truth` adds or overwrites a key-value fact. Overwriting archives the superseded value with its valid-time window, so current state stays a single value while the change trail survives. `history` replays those superseded values newest-first, optionally narrowed to one key; the currently-valid value lives on the entity and is read with `show`. History never appears in `graph`, `search`, or `show`, and is local physical state that JSON `export`/`import` does not carry.
+
+### Delete
+
+```
+asobi rm <NAME> [<NAME> ...]
+asobi update-obs <NAME> <OLD_CONTENT> <NEW_CONTENT> [--id]
+asobi rm-obs <NAME> <CONTENT> [--id]
+asobi unlink <FROM> <TO> <RELATION_TYPE>
+```
+
+`rm` deletes entities and cascades to their observations and relations. `update-obs` atomically replaces one observation; `rm-obs` removes one. Both match on exact content by default, or on the observation ID from `show --with-ids` when given `--id`. `unlink` removes a single relation by its three-part key.
+
+### Workspace
+
+```
+asobi init            # XDG (default) — user-level directories under $HOME
+asobi init --local    # project-local — ./.asobi/ plus ./asobi.toml
+asobi stats           # entity, relation, and observation counts
+asobi capabilities    # the API contract and the selected backend's capabilities
+asobi schema [--command NAME]
+asobi completions bash|elvish|fish|powershell|zsh
+```
+
+Both `init` modes are idempotent. `completions` is generated from the running binary, so the script always matches the installed version.
+
+### Maintenance
+
+```
 asobi compact
+asobi purge [--type <TYPE>] [--status <STATUS>] [--older-than <DAYS>] [--apply | --dry-run]
+asobi reset [--force]
 ```
 
-**Full session reset (next agent starts clean):**
+`compact` projects **durable knowledge** entities — `project`, `concept`, `reference`, `preference`, `standard` — and their truths into Markdown under `.asobi/topics/`. Volatile `session` and `task` entities and self-indexing `skill` entities are skipped by design; read those with `search`/`show` and archive them with `export` or `backup`.
 
-```bash
-asobi rm "<project>:session"
-# Next agent creates it fresh and sets initial status
-asobi new "<project>:session" "session"
-asobi truth "<project>:session" "status" "IN_PROGRESS"
+`purge` is a dry run unless given `--apply`, and accepts only `session` entities plus terminal task statuses (`DONE`, `CLOSED`, `ABANDONED`) — durable knowledge and skills are refused. It defaults to entities inactive for 30 days. It never runs implicitly during `graph`, `search`, `compact`, or startup. An applied purge also runs `PRAGMA incremental_vacuum`, so the database file shrinks with the graph rather than retaining a free list.
+
+`reset` deletes every entity, relation, and observation; it prompts unless given `--force`.
+
+### Skills
+
+```
+asobi skills                                                    # list, grouped by source
+asobi skills install <SOURCE> [--all | --select <NAME>...] [--subdir <PATH>]
+asobi skills sync
+asobi skills update [SOURCE]
+asobi skills remove <NAME | SOURCE>
+asobi skills show <NAME>
 ```
 
-### Entity naming conventions
+`install` takes a git URL or a local path; git sources are shallow-cloned into a reused cache under `.asobi/caches/<slug>`. Frontmatter supplies the metadata, with the name falling back to the file or directory name, and the body is stored as graph-backed skill data. `--all` is a full sync that prunes skills deleted or renamed upstream; `--select` and the interactive picker are purely additive. Passing neither flag opens a numbered picker, which needs a TTY and otherwise errors asking for a flag. `--subdir` scopes the walk to one directory of the checkout, for sources that mirror the same skills across several tool-specific directories and would otherwise collide on name.
 
-| Pattern | Type | Purpose |
-| --- | --- | --- |
-| `<project>:session` | `session` | Volatile task state — reset each session |
-| `<project>:tasks` | `task` | In-progress task tracking |
-| `<project>` | `project` | Stable project facts, architecture decisions |
-| `UserPreferences` | `preference` | Cross-project user habits |
-| `CodingStyle` | `standard` | Commit format, indentation, etc. |
-| `ToolPreferences` | `preference` | Nix, make, etc. |
+`sync` reconciles against the `[skills]` block in the discovered `asobi.toml`, as described under [Common workflows](#common-workflows). `update` refreshes from cache via `git fetch` and `reset --hard`, re-cloning if that fails, and prunes like `--all`; it needs `git` on `PATH`. `show` prints a skill body as raw Markdown, accepting either the fully-qualified `skill:<slug>:<name>` or the short name. Never hand-edit installed skill entities — they are replaced on the next sync.
+
+### Tasks
+
+```
+asobi tasks plan <EPIC> --objective <TEXT> --task <TITLE>...
+asobi tasks list [EPIC]
+asobi tasks dispatch [TASK] [--agent <NAME>]
+asobi tasks sync <TASK> [--status <STATUS>] [--note <TEXT>]
+asobi tasks close <EPIC> [--lesson <TEXT>]
+```
+
+These are ordinary graph entities under a workflow contract: status is a truth, notes are observations, and child tasks link to their epic with `part_of`. Task status moves through `READY_TO_DISPATCH → DISPATCHED → REVIEW → AWAITING_VERIFY → DONE`. `dispatch` claims a task and records the claim atomically — it marks ownership and does **not** launch an agent; omitting `TASK` claims the first ready one. Use `asobi tasks <command> --help` for the full argument list.
+
+## Entity types and naming
+
+The type given to `asobi new` determines what `--where` filters, `compact`, and `purge` later see:
+
+| Type | Use for |
+| --- | --- |
+| `project` | Stable per-project facts and architecture decisions |
+| `session` | Volatile session state |
+| `task` | Epics and their dispatchable child tasks |
+| `concept` | Decisions, pitfalls, technical definitions |
+| `preference` | Cross-project user or tool preferences |
+| `standard` | Conventions that apply everywhere |
+| `reference` | Pointers to external resources and URLs |
+
+Only the durable types reach Markdown through `compact`, and only `session` and terminal `task` entities are eligible for `purge`, so a decision typed as `session` is both invisible to topics and reachable by retention.
+
+Names are hierarchical and colon-separated — `project-x`, `project-x:session`, `project-x:epic`, `project-x:epic:task-1` — and preserve case and dots, so `CLAUDE.md` and `UserPreferences` are valid names. Installed skills are named `skill:<source-slug>:<name>`. Relations read as verb phrases: `part_of`, `depends_on`, `supersedes`, `extends`, `uses`, `blocks`.
+
+## Response contract
+
+### Streams and exit codes
+
+**Mutating** commands print a one-line confirmation (`Entity 'X' created.`, `Observation added.`) to **stderr** and leave **stdout empty** on success. A scripted caller must branch on the exit code, not on stdout being non-empty.
+
+**Read** commands (`graph`, `search`, `show`, `stats`, `export`, `capabilities`, `schema`) write their JSON payload to **stdout**. `asobi skills show` writes raw Markdown instead, since its purpose is to be read.
+
+The global `--json` flag makes a mutation also print the affected entities, and the relations among them, to stdout — `asobi new A task --json` removes the follow-up `show` round-trip, and `rm --json` returns `{ "deleted": [...] }`. It has no effect on read commands, which already emit JSON.
 
 ### Machine-readable response contract
 
@@ -362,7 +459,13 @@ The payload for `graph` and `search` is a lazy JSON structure (excluding `observ
         "key": "value"
       },
       "observationCount": 12,
-      "body": "string"
+      "body": "string",
+      "observationsDetailed": [
+        {
+          "id": 123,
+          "content": "string"
+        }
+      ]
     }
   ],
   "relations": [
@@ -375,26 +478,9 @@ The payload for `graph` and `search` is a lazy JSON structure (excluding `observ
 }
 ```
 
-Mutation commands print a one-line confirmation: `Entity 'X' created.`, `Observation added.`, etc.
+`observationsDetailed` is present only when `--with-ids` was passed, and `body` only for skill entities.
 
-### Multi-agent context handoff
-
-When Agent A finishes and Agent B picks up:
-
-```bash
-# Agent A (end of session)
-asobi obs "project-x:session" "status: BLOCKED"
-asobi obs "project-x:session" "next: Agent B should implement WAL mode in src/db.rs init_db()"
-asobi compact
-
-# Agent B (start of session)
-asobi show "project-x:session"
-# → reads: status BLOCKED, next action, last-updated
-```
-
-No files to pass, no state to reconstruct. The graph is the handoff.
-
-### Search tips
+### Search behavior
 
 `search` uses SQLite FTS5 with porter stemming and BM25 ranking, followed by a name/type substring fallback. Practical implications:
 
@@ -403,7 +489,7 @@ No files to pass, no state to reconstruct. The graph is the handoff.
 - `search "tokio async"` → finds entities with both words (ranked higher) or either word
 - `search "UserPreferences"` → exact name match via LIKE fallback (entity has no observations)
 - `search "AND AND"` → invalid full-text syntax, silently falls back to LIKE, returns empty
-- `search "auth" --limit 500` → return more than the default top 100 matches
+- `search "auth" --limit 500` → return more than the default 10 matched nodes
 - `search --where KEY=VALUE` → filters matching entities by truth values (e.g. `--where status=READY`). Can be repeated; multiple filters perform an intersection (AND condition). If a query term is also provided, it matches the intersection of the filters and the FTS/LIKE results.
 
 For exact entity retrieval, prefer `show` over `search`:
@@ -411,8 +497,6 @@ For exact entity retrieval, prefer `show` over `search`:
 ```bash
 asobi show "project-x:session" "UserPreferences"
 ```
-
-`search` accepts an optional `--limit` argument. Omit it for the default top 100 matches; set it explicitly for larger ranked exports.
 
 ## Running in Sandboxed Environments (Codex, etc.)
 
