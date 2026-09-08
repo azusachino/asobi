@@ -157,7 +157,7 @@ fn graph_and_search_keep_observations_lazy() {
 }
 
 #[test]
-fn purge_is_preview_first_and_rejects_durable_types() {
+fn purge_is_preview_first_and_leaves_durable_knowledge() {
     let (dir, store) = store();
     store
         .create_entities(vec![
@@ -196,9 +196,6 @@ fn purge_is_preview_first_and_rejects_durable_types() {
     drop(conn);
 
     let request = PurgeRequest {
-        include_truth_history: false,
-        entity_types: vec!["session".into(), "task".into()],
-        statuses: vec!["DONE".into()],
         older_than_days: 30,
         apply: false,
     };
@@ -221,7 +218,6 @@ fn purge_is_preview_first_and_rejects_durable_types() {
 
     let applied = store
         .purge(PurgeRequest {
-            include_truth_history: false,
             apply: true,
             ..request
         })
@@ -250,33 +246,12 @@ fn purge_is_preview_first_and_rejects_durable_types() {
             .entities
             .is_empty()
     );
-    assert_eq!(store.read_graph().unwrap().entities.len(), 1);
-
-    let error = store
-        .purge(PurgeRequest {
-            include_truth_history: false,
-            entity_types: vec!["concept".into()],
-            statuses: vec!["DONE".into()],
-            older_than_days: 30,
-            apply: true,
-        })
-        .unwrap_err();
-    assert!(
-        error
-            .to_string()
-            .contains("restricted to operational entity types")
-    );
-
-    let error = store
-        .purge(PurgeRequest {
-            include_truth_history: false,
-            entity_types: vec!["task".into()],
-            statuses: vec!["IN_PROGRESS".into()],
-            older_than_days: 30,
-            apply: false,
-        })
-        .unwrap_err();
-    assert!(error.to_string().contains("only accepts terminal statuses"));
+    // The durable concept survives, and there is no request that could have
+    // reached it: the policy is a constant now rather than validated flags, so
+    // "purge refuses durable knowledge" is structural instead of enforced.
+    let survivors = store.read_graph().unwrap();
+    assert_eq!(survivors.entities.len(), 1);
+    assert_eq!(survivors.entities[0].name, "project:concept");
 }
 
 #[test]
@@ -431,7 +406,7 @@ fn opening_a_pre_v5_database_drops_superseded_tables_and_enables_incremental_vac
     let user_version: i64 = conn
         .query_row("PRAGMA user_version", [], |r| r.get(0))
         .unwrap();
-    assert_eq!(user_version, 6);
+    assert_eq!(user_version, 7);
     let auto_vacuum: i64 = conn
         .query_row("PRAGMA auto_vacuum", [], |r| r.get(0))
         .unwrap();
@@ -472,9 +447,6 @@ fn applied_purge_reclaims_space_via_incremental_vacuum() {
 
     let report = store
         .purge(PurgeRequest {
-            include_truth_history: false,
-            entity_types: vec!["task".into()],
-            statuses: vec!["DONE".into()],
             older_than_days: 30,
             apply: true,
         })
@@ -488,44 +460,6 @@ fn applied_purge_reclaims_space_via_incremental_vacuum() {
         .query_row("PRAGMA auto_vacuum", [], |r| r.get(0))
         .unwrap();
     assert_eq!(auto_vacuum, 2);
-}
-
-/// A scoped export is the documented way to hand an epic to another agent, and
-/// until 0.7 it carried only current state -- so the receiving agent could not
-/// tell a fact that was always true from one corrected an hour earlier. The
-/// change trail has to survive the round trip.
-#[test]
-fn scoped_export_carries_the_truth_change_trail() {
-    let (_dir, store) = store();
-    store
-        .create_entities(vec![EntityInput {
-            name: "proj:epic".into(),
-            entity_type: "task".into(),
-            observations: vec![],
-        }])
-        .unwrap();
-    store.truth_upsert("proj:epic", "status", "REVIEW").unwrap();
-    store.truth_upsert("proj:epic", "status", "DONE").unwrap();
-
-    let exported = store
-        .export_snapshot(&["proj:epic".to_string()], false)
-        .unwrap();
-    let history = &exported.truth_history;
-    assert_eq!(history.len(), 1, "expected history for the exported entity");
-    assert_eq!(history[0].entity_name, "proj:epic");
-    assert_eq!(history[0].versions.len(), 1);
-    assert_eq!(history[0].versions[0].value, "REVIEW");
-
-    // Round-trip into a clean graph: the superseded value comes back.
-    store.reset().unwrap();
-    store.import_snapshot(exported.clone()).unwrap();
-    let restored = store.truth_history("proj:epic", None).unwrap();
-    assert_eq!(restored.len(), 1);
-    assert_eq!(restored[0].value, "REVIEW");
-
-    // Re-importing the same snapshot must not duplicate the trail.
-    store.import_snapshot(exported).unwrap();
-    assert_eq!(store.truth_history("proj:epic", None).unwrap().len(), 1);
 }
 
 /// `show` is the only eager read, and it was unbounded: loading a session at
@@ -586,61 +520,54 @@ fn show_returns_recent_observations_and_the_true_total() {
     );
 }
 
-/// Truth history is the one store with no bound of its own, so purge has to be
-/// able to find it. Superseded versions are safe to drop by construction: the
-/// current value lives in a different table and is never touched.
+/// Retention has to happen without being asked. The previous design was a
+/// manual purge that was correct in every respect except that it never ran:
+/// six weeks of daily use left a graph that was 96% finished work.
+///
+/// It fires on the first *write* rather than at open, so a pure read never
+/// mutates the graph — `asobi show` must not delete anything.
 #[test]
-fn purge_finds_expired_truth_versions_without_deleting_them_by_default() {
-    let (_dir, store) = store();
+fn finished_work_is_swept_on_the_first_write_not_on_reads() {
+    let (dir, store) = store();
     store
-        .create_entities(vec![EntityInput {
-            name: "proj:session".into(),
-            entity_type: "session".into(),
-            observations: vec![],
-        }])
+        .create_entities(vec![
+            EntityInput {
+                name: "project:task".into(),
+                entity_type: "task".into(),
+                observations: vec![],
+            },
+            EntityInput {
+                name: "project:concept".into(),
+                entity_type: "concept".into(),
+                observations: vec![],
+            },
+        ])
         .unwrap();
-    for value in ["first", "second", "third"] {
-        store.truth_upsert("proj:session", "next", value).unwrap();
-    }
+    store
+        .truth_upsert("project:task", "status", "DONE")
+        .unwrap();
 
-    let request = |apply: bool, history: bool| PurgeRequest {
-        entity_types: vec!["session".into()],
-        statuses: vec!["DONE".into()],
-        older_than_days: 0,
-        apply,
-        include_truth_history: history,
-    };
+    let db = dir.path().join("contract.db");
+    let conn = Connection::open(&db).unwrap();
+    conn.execute_batch(
+        "UPDATE asobi_entities SET created_at = datetime('now', '-30 days');
+         UPDATE asobi_truths SET updated_at = datetime('now', '-30 days');",
+    )
+    .unwrap();
+    drop(conn);
 
-    let preview = store.purge(request(false, false)).unwrap();
-    let found: usize = preview
-        .expired_truth_versions
-        .iter()
-        .map(|g| g.versions)
-        .sum();
-    assert_eq!(found, 2, "two superseded values behind the current one");
+    // A fresh handle, as a new process would have.
+    let reopened = SqliteStore::open_at(&db).unwrap();
     assert_eq!(
-        preview.deleted_truth_versions, 0,
-        "a preview deletes nothing"
+        reopened.read_graph().unwrap().entities.len(),
+        2,
+        "a read must not sweep"
     );
 
-    // Applying without --history leaves the trail alone.
-    store.purge(request(true, false)).unwrap();
-    assert_eq!(store.truth_history("proj:session", None).unwrap().len(), 2);
-
-    let applied = store.purge(request(true, true)).unwrap();
-    assert_eq!(applied.deleted_truth_versions, 2);
-    assert!(
-        store
-            .truth_history("proj:session", None)
-            .unwrap()
-            .is_empty()
-    );
-    // The current value survives: only superseded versions are in scope.
-    let current = store
-        .open_nodes(OpenNodes {
-            names: vec!["proj:session".into()],
-            ..Default::default()
-        })
+    reopened
+        .truth_upsert("project:concept", "note", "anything")
         .unwrap();
-    assert_eq!(current.entities[0].truths.get("next").unwrap(), "third");
+    let after = reopened.read_graph().unwrap();
+    assert_eq!(after.entities.len(), 1, "the finished task is gone");
+    assert_eq!(after.entities[0].name, "project:concept");
 }

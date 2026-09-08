@@ -131,6 +131,26 @@ asobi obs "my-project:session" "completed 2026-05-21: added the FTS5 index"
 
 A truth is the right home for anything read back as _current_ state, because writing the same key updates it in place. Observations accumulate and are evicted at the cap, so a next-action stored as an observation can silently age out.
 
+### Lifecycle
+
+Two rules, and no others:
+
+1. **Durable entities live forever** — `project`, `concept`, `reference`, `preference`, `standard`. Each keeps its most recent 200 observations; older ones are evicted as new ones arrive.
+2. **Finished operational entities are deleted after 7 days** — a `session` or `task` whose status is `DONE`, `CLOSED` or `ABANDONED`. This happens automatically, once per process, before the first write.
+
+That is the whole of it. Nothing else accumulates: a truth is a current value with no archive behind it, and relations disappear with the entities they connect.
+
+The sweep runs on a _write_ rather than at startup, so a read never mutates the graph. Both numbers are configurable, resolved the same way — environment variable first, then `asobi.toml`, then the default:
+
+| What | Config key | Environment | Default |
+| --- | --- | --- | --- |
+| Observations kept per entity | `observation_limit` | `ASOBI_OBSERVATION_LIMIT` | 200 |
+| Days a finished task survives | `retention_days` | `ASOBI_RETENTION_DAYS` | 7 |
+
+Set `retention_days = 0` to disable the sweep and keep finished work indefinitely.
+
+The reason for the second rule is that operational state is relevant for hours, occasionally days. A task that has been `DONE` for a week is not context, it is archaeology — and context is the scarce resource. An earlier design left this to a manual command that was correct in every respect except that it never ran: six weeks of daily use produced a graph that was 96% finished work.
+
 **Preview and purge stale operational state:**
 
 ```bash
@@ -138,13 +158,13 @@ A truth is the right home for anything read back as _current_ state, because wri
 asobi purge
 
 # Narrow the policy to completed tasks older than 90 days
-asobi purge --type task --status DONE --older-than 90
+asobi purge --older-than 30
 
 # Apply exactly the previewed policy
-asobi purge --type task --status DONE --older-than 90 --apply
+asobi purge --older-than 30 --apply
 ```
 
-Purge is restricted to `session` and `task` entities. Durable knowledge is never accepted by this command. Use `--json` for a machine-readable candidate report, and review the dry-run output before adding `--apply` to a scheduled job. An applied purge also runs `PRAGMA incremental_vacuum` to return the freed pages to the OS, so the database file shrinks along with the graph rather than only growing a free list.
+This normally runs by itself — see [Lifecycle](#lifecycle). Reach for it to preview what would go, or to sweep a narrower window than the configured one. It only ever considers finished `session` and `task` entities; durable knowledge is not something a request can name. Use `--json` for a machine-readable candidate report. An applied purge also runs `PRAGMA incremental_vacuum`, so the database file shrinks with the graph rather than retaining a free list.
 
 `compact` syncs only durable _knowledge_ entities (project, decisions, references, preferences) to Markdown. Volatile state (`session`, `task`) stays graph-only — query it with `search` / `show`, and use `export` / `backup` for full archival. Skills are not in the graph at all; they live on disk under the skills directory.
 
@@ -159,7 +179,7 @@ asobi graph | jq '.entities[] | select(.entityType == "session")'
 
 | Goal | Command | Includes |
 | --- | --- | --- |
-| Portable handoff | `asobi export -o graph.json` | Entities, observations, truths, relations, and the truth change trail |
+| Portable handoff | `asobi export -o graph.json` | Entities, observations, truths, relations |
 | Scoped handoff | `asobi export --scope "proj:epic" -o epic.json` | One epic subtree |
 | Full SQLite archive | `asobi backup` | Complete database, including task state. Skills live on disk and are backed up with the repository, not here. |
 
@@ -193,11 +213,9 @@ asobi export --scope "proj:epic" --rationale -o bundle.json
 ```bash
 asobi truth "project-x" "language" "rust"
 asobi rm-truth "project-x" "language"
-asobi history "project-x"            # all superseded truth values, newest first
-asobi history "project-x" "language" # history for one truth key
 ```
 
-Overwriting a truth records the previous value with its valid-time window; the current value stays a single row. History is opt-in via `history` and never shown in `search`/`graph`/`show`. Since 0.7 `export` does carry it, so a handoff can distinguish a fact that was always true from one corrected an hour ago; re-importing the same snapshot does not duplicate the trail.
+Writing the same key again replaces the value. Asobi keeps no archive of what it held before: that store was unbounded, had no reader, and where a trail genuinely matters the observations carry it in better form — a task's `status` history said `DISPATCHED` where the observation beside it said "dispatched to codex".
 
 **Manage skills (reusable workflows and knowledge):**
 
@@ -319,10 +337,9 @@ Fetch heavy content with `show` for the specific entities needed rather than thr
 ```
 asobi truth <NAME> <KEY> <VALUE>
 asobi rm-truth <NAME> <KEY>
-asobi history <NAME> [KEY]
 ```
 
-`truth` adds or overwrites a key-value fact. Overwriting archives the superseded value with its valid-time window, so current state stays a single value while the change trail survives. `history` replays those superseded values newest-first, optionally narrowed to one key; the currently-valid value lives on the entity and is read with `show`. History never appears in `graph`, `search`, or `show`. `export` carries it, scoped to the entities exported, so a handoff keeps the change trail; re-importing a snapshot does not duplicate it.
+`truth` adds or overwrites a key-value fact; `rm-truth` removes one. A truth is the current value and nothing more — writing the same key replaces what was there, with no archive kept.
 
 ### Delete
 
@@ -352,15 +369,13 @@ Both `init` modes are idempotent. `completions` is generated from the running bi
 
 ```
 asobi compact
-asobi purge [--type <TYPE>] [--status <STATUS>] [--older-than <DAYS>] [--apply | --dry-run] [--history]
+asobi purge [--older-than <DAYS>] [--apply]
 asobi reset [--force]
 ```
 
 `compact` projects **durable knowledge** entities — `project`, `concept`, `reference`, `preference`, `standard` — and their truths into Markdown under `.asobi/topics/`. Volatile `session` and `task` entities and self-indexing `skill` entities are skipped by design; read those with `search`/`show` and archive them with `export` or `backup`.
 
 `purge` is a dry run unless given `--apply`, and accepts only `session` entities plus terminal task statuses (`DONE`, `CLOSED`, `ABANDONED`) — durable knowledge is refused, and skills are not in the graph to begin with. It defaults to entities inactive for 30 days. It never runs implicitly during `graph`, `search`, `compact`, or startup. An applied purge also runs `PRAGMA incremental_vacuum`, so the database file shrinks with the graph rather than retaining a free list.
-
-`purge` also surveys **superseded truth versions** older than the cutoff, grouped by entity and key. They are listed in every preview because finding them is read-only; `--history` opts into deleting them. This is the one store with no bound of its own — observations are capped per entity and current truths are one row per key, but every overwrite appends a version that lives until its entity is deleted, so it grows fastest on whatever is written most often. Dropping them is safe by construction: the current value lives in `asobi_truths` and is never touched.
 
 `reset` deletes every entity, relation, and observation; it prompts unless given `--force`.
 

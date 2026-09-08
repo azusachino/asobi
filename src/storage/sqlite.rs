@@ -1,8 +1,8 @@
 use crate::api::v2::{
     ApiError, ApiResult, BackendCapabilities, BackendHealth, BackupReceipt, BackupRequest,
-    BackupStore, ExpiredTruthVersions, GraphStore, ImportReport, MaintenanceStore, OpenNodes,
-    PurgeCandidate, PurgeReport, PurgeRequest, SearchQuery, SearchStore, Snapshot, SnapshotStore,
-    Stats, StorageLocation, TaskStore, TruthVersion,
+    BackupStore, GraphStore, ImportReport, MaintenanceStore, OpenNodes, PurgeCandidate,
+    PurgeReport, PurgeRequest, SearchQuery, SearchStore, Snapshot, SnapshotStore, Stats,
+    StorageLocation, TaskStore,
 };
 use crate::model::{
     EntityInput, EntityOutput, Graph, ObservationDeletion, ObservationInput, RelationInput,
@@ -16,7 +16,7 @@ use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-const SCHEMA_VERSION: i64 = 6;
+const SCHEMA_VERSION: i64 = 7;
 const DEFAULT_DATABASE_FILENAME: &str = "asobi.db";
 const DEFAULT_BUSY_TIMEOUT_MS: u64 = 15_000;
 const DEFAULT_OBSERVATION_LIMIT: usize = 200;
@@ -31,46 +31,14 @@ fn normalize(value: &str) -> String {
     crate::normalize::normalize_key(value)
 }
 
-fn validate_purge_request(request: &PurgeRequest) -> ApiResult<()> {
-    if request.entity_types.is_empty() {
-        return Err(ApiError::Invalid(
-            "purge requires at least one entity type".into(),
-        ));
-    }
-    if let Some(entity_type) = request
-        .entity_types
-        .iter()
-        .find(|entity_type| !PURGEABLE_ENTITY_TYPES.contains(&entity_type.as_str()))
-    {
-        return Err(ApiError::Invalid(format!(
-            "purge is restricted to operational entity types: session, task (got {entity_type})"
-        )));
-    }
-    if request.statuses.is_empty() {
-        return Err(ApiError::Invalid(
-            "purge requires at least one terminal status".into(),
-        ));
-    }
-    if let Some(status) = request
-        .statuses
-        .iter()
-        .find(|status| !PURGEABLE_STATUSES.contains(&status.as_str()))
-    {
-        return Err(ApiError::Invalid(format!(
-            "purge only accepts terminal statuses: DONE, CLOSED, ABANDONED (got {status})"
-        )));
-    }
-    Ok(())
-}
-
 fn collect_purge_candidates(
     conn: &Connection,
     request: &PurgeRequest,
 ) -> rusqlite::Result<Vec<PurgeCandidate>> {
-    let type_placeholders = std::iter::repeat_n("?", request.entity_types.len())
+    let type_placeholders = std::iter::repeat_n("?", PURGEABLE_ENTITY_TYPES.len())
         .collect::<Vec<_>>()
         .join(",");
-    let status_placeholders = std::iter::repeat_n("?", request.statuses.len())
+    let status_placeholders = std::iter::repeat_n("?", PURGEABLE_STATUSES.len())
         .collect::<Vec<_>>()
         .join(",");
     let sql = format!(
@@ -110,8 +78,8 @@ fn collect_purge_candidates(
     );
     let cutoff = format!("-{} days", request.older_than_days);
     let mut values: Vec<&dyn ToSql> = Vec::new();
-    values.extend(request.entity_types.iter().map(|value| value as &dyn ToSql));
-    values.extend(request.statuses.iter().map(|value| value as &dyn ToSql));
+    values.extend(PURGEABLE_ENTITY_TYPES.iter().map(|v| v as &dyn ToSql));
+    values.extend(PURGEABLE_STATUSES.iter().map(|v| v as &dyn ToSql));
     values.push(&cutoff);
 
     let mut stmt = conn.prepare(&sql)?;
@@ -128,45 +96,23 @@ fn collect_purge_candidates(
     .collect()
 }
 
-/// Superseded truth versions older than the request's cutoff, grouped by
-/// entity and key.
-///
-/// Every row here is a value that has already been replaced -- that is what
-/// makes the table safe to trim where observations are not. The current value
-/// lives in `asobi_truths` and is never touched.
-///
-/// The cutoff is inclusive, unlike the entity one. An entity is a candidate
-/// only once it has been *inactive* for the window, so its boundary excludes
-/// the present; a superseded version is already dead the instant it is
-/// replaced, so `--older-than 0` meaning "everything superseded" is the useful
-/// reading rather than an off-by-one.
-fn collect_expired_truth_versions(
-    conn: &Connection,
-    request: &PurgeRequest,
-) -> rusqlite::Result<Vec<ExpiredTruthVersions>> {
-    let cutoff = format!("-{} days", request.older_than_days);
-    let mut stmt = conn.prepare(
-        "SELECT entity_name, key, COUNT(*), MAX(valid_until)
-         FROM asobi_truth_history
-         WHERE valid_until <= datetime('now', ?)
-         GROUP BY entity_name, key
-         ORDER BY COUNT(*) DESC, entity_name, key",
-    )?;
-    stmt.query_map([&cutoff], |row| {
-        Ok(ExpiredTruthVersions {
-            entity_name: row.get(0)?,
-            key: row.get(1)?,
-            versions: row.get::<_, i64>(2)? as usize,
-            newest: row.get(3)?,
-        })
-    })?
-    .collect()
-}
-
 pub struct SqliteStore {
     conn: Mutex<Connection>,
     db_path: PathBuf,
+    /// Whether this process has already run the retention sweep.
+    retention_swept: std::sync::atomic::AtomicBool,
 }
+
+/// How long a finished session or task survives before the automatic sweep
+/// removes it.
+///
+/// Operational state is relevant for hours, occasionally days: a task that has
+/// been `DONE` for a week is not context, it is archaeology. The previous
+/// design left this to a manual `purge` that was correct in every respect
+/// except that it never ran -- six weeks of daily use left a graph that was 96%
+/// finished work. A default that has to be invoked is a default that does not
+/// happen.
+pub const DEFAULT_RETENTION_DAYS: u32 = 7;
 
 impl SqliteStore {
     pub fn open_default() -> crate::Result<Self> {
@@ -206,6 +152,7 @@ impl SqliteStore {
         Ok(Self {
             conn: Mutex::new(conn),
             db_path: path.to_path_buf(),
+            retention_swept: std::sync::atomic::AtomicBool::new(false),
         })
     }
 
@@ -215,6 +162,9 @@ impl SqliteStore {
         }
         if previous_version > 0 && previous_version < 6 {
             Self::upgrade_to_v6(conn)?;
+        }
+        if previous_version > 0 && previous_version < 7 {
+            Self::upgrade_to_v7(conn)?;
         }
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS asobi_entities (
@@ -246,14 +196,6 @@ impl SqliteStore {
                 PRIMARY KEY (entity_name, key)
             );
             CREATE INDEX IF NOT EXISTS idx_truths_lookup ON asobi_truths(key, value, entity_name);
-            CREATE TABLE IF NOT EXISTS asobi_truth_history (
-                entity_name TEXT NOT NULL REFERENCES asobi_entities(name) ON DELETE CASCADE,
-                key TEXT NOT NULL,
-                value TEXT NOT NULL,
-                valid_from TEXT NOT NULL,
-                valid_until TEXT NOT NULL
-            );
-            CREATE INDEX IF NOT EXISTS idx_truth_history ON asobi_truth_history(entity_name, key, valid_until);
             CREATE VIRTUAL TABLE IF NOT EXISTS asobi_obs_fts USING fts5(
                 content, content='asobi_observations', content_rowid='rowid',
                 tokenize='porter unicode61'
@@ -268,7 +210,7 @@ impl SqliteStore {
                 INSERT INTO asobi_obs_fts(asobi_obs_fts, rowid, content) VALUES ('delete', old.rowid, old.content);
                 INSERT INTO asobi_obs_fts(rowid, content) VALUES (new.rowid, new.content);
             END;
-            PRAGMA user_version = 6;",
+            PRAGMA user_version = 7;",
         )?;
         let count: i64 =
             conn.query_row("SELECT count(*) FROM asobi_observations", [], |r| r.get(0))?;
@@ -348,10 +290,60 @@ impl SqliteStore {
         Ok(())
     }
 
+    /// 0.7 dropped superseded truth versions. The table recorded every value a
+    /// truth had ever held, unbounded and cascading only on entity delete --
+    /// the one store in Asobi with no limit of its own, growing fastest on
+    /// whatever was written most often. On a real six-week-old graph that was
+    /// 616 rows, 496 of them sessions whose `next` had been rewritten 139 times.
+    ///
+    /// It had no reader. `asobi history` appeared in no workflow, and where a
+    /// trail genuinely mattered the observations already carried it in better
+    /// form: a task's history held one row saying `status=DISPATCHED`, next to
+    /// an observation saying "dispatched to codex". A bi-temporal store answers
+    /// questions about how state changed over time; nothing here asked one.
+    fn upgrade_to_v7(conn: &Connection) -> rusqlite::Result<()> {
+        conn.execute_batch("DROP TABLE IF EXISTS asobi_truth_history;")?;
+        conn.execute_batch("PRAGMA incremental_vacuum;")?;
+        Ok(())
+    }
+
+    /// Drop finished operational entities once per process, before the first
+    /// write.
+    ///
+    /// On a write rather than at open, so a pure read never mutates the graph --
+    /// `asobi show` must not delete anything. Once per process rather than per
+    /// call, since a single command should not pay for the sweep repeatedly.
+    /// Failures are ignored: retention is hygiene, and a command must not fail
+    /// because housekeeping did.
+    fn sweep_expired_once(&self) {
+        use std::sync::atomic::Ordering;
+        if self.retention_swept.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        // Resolved the same way as `observation_limit`, the other bound in
+        // this tool: environment first, then `asobi.toml`, then the default.
+        let days = std::env::var("ASOBI_RETENTION_DAYS")
+            .ok()
+            .and_then(|v| v.parse::<u32>().ok())
+            .unwrap_or_else(|| {
+                crate::paths::AsobiPaths::resolve()
+                    .retention_days
+                    .unwrap_or(DEFAULT_RETENTION_DAYS)
+            });
+        if days == 0 {
+            return;
+        }
+        let _ = self.purge(PurgeRequest {
+            older_than_days: days,
+            apply: true,
+        });
+    }
+
     fn write<T>(
         &self,
         operation: impl FnOnce(&Transaction<'_>) -> rusqlite::Result<T>,
     ) -> ApiResult<T> {
+        self.sweep_expired_once();
         let mut conn = self
             .conn
             .lock()
@@ -701,7 +693,7 @@ impl GraphStore for SqliteStore {
         self.write(|tx| { for rel in relations { tx.execute("DELETE FROM asobi_relations WHERE from_entity = ? AND to_entity = ? AND relation_type = ?", params![normalize(&rel.from), normalize(&rel.to), rel.relation_type])?; } Ok(()) })
     }
     fn truth_upsert(&self, entity: &str, key: &str, value: &str) -> ApiResult<()> {
-        self.write(|tx| { let entity = normalize(entity); tx.execute("INSERT INTO asobi_truth_history(entity_name,key,value,valid_from,valid_until) SELECT entity_name,key,value,updated_at,CURRENT_TIMESTAMP FROM asobi_truths WHERE entity_name=? AND key=? AND value<>?", params![entity, key, value])?; tx.execute("INSERT INTO asobi_truths(entity_name,key,value) VALUES (?,?,?) ON CONFLICT(entity_name,key) DO UPDATE SET value=excluded.value, updated_at=CURRENT_TIMESTAMP", params![entity, key, value])?; Ok(()) })
+        self.write(|tx| { let entity = normalize(entity); tx.execute("INSERT INTO asobi_truths(entity_name,key,value) VALUES (?,?,?) ON CONFLICT(entity_name,key) DO UPDATE SET value=excluded.value, updated_at=CURRENT_TIMESTAMP", params![entity, key, value])?; Ok(()) })
     }
     fn truth_delete(&self, entity: &str, key: &str) -> ApiResult<()> {
         self.write(|tx| {
@@ -711,9 +703,6 @@ impl GraphStore for SqliteStore {
             )?;
             Ok(())
         })
-    }
-    fn truth_history(&self, entity: &str, key: Option<&str>) -> ApiResult<Vec<TruthVersion>> {
-        self.read(|conn| { let mut out = Vec::new(); if let Some(key) = key { let mut stmt = conn.prepare("SELECT key,value,valid_from,valid_until FROM asobi_truth_history WHERE entity_name=? AND key=? ORDER BY valid_until DESC")?; for row in stmt.query_map(params![normalize(entity), key], |r| Ok(TruthVersion { key:r.get(0)?, value:r.get(1)?, valid_from:r.get(2)?, valid_until:r.get(3)? }))? { out.push(row?); } } else { let mut stmt = conn.prepare("SELECT key,value,valid_from,valid_until FROM asobi_truth_history WHERE entity_name=? ORDER BY valid_until DESC,key")?; for row in stmt.query_map([normalize(entity)], |r| Ok(TruthVersion { key:r.get(0)?, value:r.get(1)?, valid_from:r.get(2)?, valid_until:r.get(3)? }))? { out.push(row?); } } Ok(out) })
     }
     fn read_graph(&self) -> ApiResult<Graph> {
         self.graph(None, &[], false, 0)
@@ -791,38 +780,21 @@ impl SnapshotStore for SqliteStore {
         } else {
             self.read_graph_scoped(scope, rationale)?
         };
-        // Carry the change trail for exactly the entities being exported, so a
-        // scoped handoff says not just what is true but what was corrected.
-        let mut truth_history = Vec::new();
-        for entity in &graph.entities {
-            let versions = self.truth_history(&entity.name, None)?;
-            if !versions.is_empty() {
-                truth_history.push(crate::api::EntityTruthHistory {
-                    entity_name: entity.name.clone(),
-                    versions,
-                });
-            }
-        }
         Ok(Snapshot {
             api_version: crate::api::v2::API_VERSION,
             format_version: crate::api::v2::SNAPSHOT_FORMAT_VERSION,
             source_backend: "sqlite".into(),
             source_schema_version: SCHEMA_VERSION as u32,
             graph,
-            truth_history,
         })
     }
-    /// Restoring `truth_history` is guarded against a re-import duplicating
-    /// rows: a version is identified by `(entity, key, valid_until)`, and the
-    /// history table is append-only, so a row that already exists is the same
-    /// row rather than a new one.
     fn import_snapshot(&self, snapshot: Snapshot) -> ApiResult<ImportReport> {
         if snapshot.api_version != crate::api::v2::API_VERSION
             || snapshot.format_version != crate::api::v2::SNAPSHOT_FORMAT_VERSION
         {
             return Err(ApiError::Invalid("unsupported snapshot version".into()));
         }
-        self.write(|tx| { let mut report = ImportReport::default(); for entity in snapshot.graph.entities { let name=normalize(&entity.name); let inserted=tx.execute("INSERT OR IGNORE INTO asobi_entities(name,entity_type) VALUES (?,?)", params![name,entity.entity_type])?; if inserted==1 {report.entities_created+=1;} for obs in entity.observations { tx.execute("INSERT INTO asobi_observations(entity_name,content) VALUES (?,?)", params![normalize(&entity.name),obs])?; report.observations_added+=1; } for (key,value) in entity.truths { tx.execute("INSERT INTO asobi_truths(entity_name,key,value) VALUES (?,?,?) ON CONFLICT(entity_name,key) DO UPDATE SET value=excluded.value,updated_at=CURRENT_TIMESTAMP", params![normalize(&entity.name),key,value])?; report.truths_updated+=1; } } for rel in snapshot.graph.relations { tx.execute("INSERT OR REPLACE INTO asobi_relations(from_entity,to_entity,relation_type) VALUES (?,?,?)", params![normalize(&rel.from),normalize(&rel.to),rel.relation_type])?; report.relations_added+=1; } for entry in snapshot.truth_history { let name = normalize(&entry.entity_name); for version in entry.versions { tx.execute("INSERT INTO asobi_truth_history(entity_name,key,value,valid_from,valid_until) SELECT ?,?,?,?,? WHERE NOT EXISTS (SELECT 1 FROM asobi_truth_history WHERE entity_name=? AND key=? AND valid_until=?)", params![name,version.key,version.value,version.valid_from,version.valid_until,name,version.key,version.valid_until])?; } } Ok(report) })
+        self.write(|tx| { let mut report = ImportReport::default(); for entity in snapshot.graph.entities { let name=normalize(&entity.name); let inserted=tx.execute("INSERT OR IGNORE INTO asobi_entities(name,entity_type) VALUES (?,?)", params![name,entity.entity_type])?; if inserted==1 {report.entities_created+=1;} for obs in entity.observations { tx.execute("INSERT INTO asobi_observations(entity_name,content) VALUES (?,?)", params![normalize(&entity.name),obs])?; report.observations_added+=1; } for (key,value) in entity.truths { tx.execute("INSERT INTO asobi_truths(entity_name,key,value) VALUES (?,?,?) ON CONFLICT(entity_name,key) DO UPDATE SET value=excluded.value,updated_at=CURRENT_TIMESTAMP", params![normalize(&entity.name),key,value])?; report.truths_updated+=1; } } for rel in snapshot.graph.relations { tx.execute("INSERT OR REPLACE INTO asobi_relations(from_entity,to_entity,relation_type) VALUES (?,?,?)", params![normalize(&rel.from),normalize(&rel.to),rel.relation_type])?; report.relations_added+=1; } Ok(report) })
     }
 }
 
@@ -993,14 +965,8 @@ impl MaintenanceStore for SqliteStore {
         self.read(|conn| { let mut stmt=conn.prepare("SELECT e.name,count(o.id) FROM asobi_entities e LEFT JOIN asobi_observations o ON o.entity_name=e.name GROUP BY e.name ORDER BY e.name")?; let mut out=Vec::new(); for row in stmt.query_map([],|r|Ok((r.get(0)?,r.get::<_,i64>(1)? as usize)))?{out.push(row?);} Ok(out) })
     }
     fn purge(&self, request: PurgeRequest) -> ApiResult<PurgeReport> {
-        validate_purge_request(&request)?;
         let report = self.write(|tx| {
             let candidates = collect_purge_candidates(tx, &request)?;
-            // Always surveyed, never deleted without `include_truth_history`:
-            // finding what has expired is read-only and costs nothing, while
-            // dropping a change trail should be something the caller asked for.
-            let expired_truth_versions = collect_expired_truth_versions(tx, &request)?;
-
             let deleted = if request.apply {
                 for candidate in &candidates {
                     tx.execute(
@@ -1012,25 +978,14 @@ impl MaintenanceStore for SqliteStore {
             } else {
                 0
             };
-            let deleted_truth_versions = if request.apply && request.include_truth_history {
-                let cutoff = format!("-{} days", request.older_than_days);
-                tx.execute(
-                    "DELETE FROM asobi_truth_history WHERE valid_until <= datetime('now', ?)",
-                    [&cutoff],
-                )?
-            } else {
-                0
-            };
             Ok(PurgeReport {
                 dry_run: !request.apply,
                 older_than_days: request.older_than_days,
                 candidates,
                 deleted,
-                expired_truth_versions,
-                deleted_truth_versions,
             })
         })?;
-        if report.deleted > 0 || report.deleted_truth_versions > 0 {
+        if report.deleted > 0 {
             // A no-op unless this database is in incremental auto-vacuum
             // mode, which every database is as of schema v5 -- see
             // `upgrade_to_v5`. Bounded to a few thousand pages so a large
@@ -1043,7 +998,7 @@ impl MaintenanceStore for SqliteStore {
         Ok(report)
     }
     fn reset(&self) -> ApiResult<()> {
-        self.write(|tx| { tx.execute_batch("DELETE FROM asobi_relations; DELETE FROM asobi_truth_history; DELETE FROM asobi_truths; DELETE FROM asobi_observations; DELETE FROM asobi_entities;")?; Ok(()) })?;
+        self.write(|tx| { tx.execute_batch("DELETE FROM asobi_relations; DELETE FROM asobi_truths; DELETE FROM asobi_observations; DELETE FROM asobi_entities;")?; Ok(()) })?;
         self.read(|conn| conn.execute_batch("PRAGMA incremental_vacuum;"))?;
         Ok(())
     }

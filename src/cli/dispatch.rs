@@ -49,20 +49,10 @@ pub(crate) fn run_cli(cli: Cli) -> Result<()> {
             let synced = crate::compact::sync_graph_to_markdown(backend)?;
             info!("Done. Synced {} entities to Markdown.", synced);
         }
-        Commands::Purge {
-            entity_types,
-            statuses,
-            older_than,
-            apply,
-            dry_run,
-            history,
-        } => {
+        Commands::Purge { older_than, apply } => {
             let report = backend.purge(PurgeRequest {
-                include_truth_history: history,
-                entity_types,
-                statuses,
                 older_than_days: older_than,
-                apply: apply && !dry_run,
+                apply,
             })?;
             if json {
                 print_json(report)?;
@@ -94,43 +84,8 @@ pub(crate) fn run_cli(cli: Cli) -> Result<()> {
                         candidate.relations
                     );
                 }
-                if !report.expired_truth_versions.is_empty() {
-                    let total: usize = report
-                        .expired_truth_versions
-                        .iter()
-                        .map(|g| g.versions)
-                        .sum();
-                    println!(
-                        "  {} superseded truth version(s) across {} entity/key group(s):",
-                        total,
-                        report.expired_truth_versions.len()
-                    );
-                    for group in report.expired_truth_versions.iter().take(10) {
-                        println!(
-                            "    {} · {} · {} version(s), newest {}",
-                            group.entity_name, group.key, group.versions, group.newest
-                        );
-                    }
-                    if report.expired_truth_versions.len() > 10 {
-                        println!(
-                            "    ... and {} more group(s); use --json for all",
-                            report.expired_truth_versions.len() - 10
-                        );
-                    }
-                }
-                if report.deleted_truth_versions > 0 {
-                    println!(
-                        "  {} superseded truth version(s) deleted.",
-                        report.deleted_truth_versions
-                    );
-                }
-                if report.dry_run {
-                    if !report.candidates.is_empty() {
-                        println!("Re-run with --apply to delete these entities.");
-                    }
-                    if !report.expired_truth_versions.is_empty() {
-                        println!("Add --history to also drop the superseded truth versions.");
-                    }
+                if report.dry_run && !report.candidates.is_empty() {
+                    println!("Re-run with --apply to delete these entities.");
                 }
             }
         }

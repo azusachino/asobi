@@ -79,7 +79,6 @@ fn schema_registry() -> Vec<SchemaRow> {
         ("capabilities", schema_for_data::<CapabilitiesReceipt>),
         ("export", schema_for_data::<Graph>),
         ("graph", schema_for_data::<Graph>),
-        ("history", schema_for_data::<Vec<crate::api::TruthVersion>>),
         ("link", schema_for_data::<Graph>),
         ("new", schema_for_data::<Graph>),
         ("obs", schema_for_data::<Graph>),

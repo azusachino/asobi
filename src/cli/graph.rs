@@ -96,10 +96,6 @@ pub(crate) fn run(backend: &crate::storage::Storage, command: Commands, json: bo
                 emit_nodes(backend, vec![name])?;
             }
         }
-        Commands::History { name, key } => {
-            let history = backend.truth_history(&name, key.as_deref())?;
-            print_json(history)?;
-        }
         Commands::Rm { names } => {
             let deleted = names.clone();
             backend.delete_entities(names)?;

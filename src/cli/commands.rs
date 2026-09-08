@@ -51,12 +51,6 @@ pub(crate) enum Commands {
     },
     /// Delete a specific truth for an entity
     RmTruth { name: String, key: String },
-    /// Show an entity's truth change history (superseded values with validity windows)
-    History {
-        name: String,
-        /// Limit to a single truth key
-        key: Option<String>,
-    },
     /// Delete entities and their relations
     Rm { names: Vec<String> },
     /// Delete specific observations
@@ -111,27 +105,18 @@ pub(crate) enum Commands {
     },
     /// Sync durable knowledge entities to Markdown topics
     Compact {},
-    /// Preview or delete stale terminal sessions and tasks
+    /// Preview or delete finished sessions and tasks.
+    ///
+    /// This runs automatically once per process before the first write, so it
+    /// is normally only reached to preview what would go, or to sweep a
+    /// narrower window than the configured one.
     Purge {
-        /// Operational entity type to inspect (repeatable)
-        #[arg(long = "type", value_name = "ENTITY_TYPE", default_values = ["session", "task"])]
-        entity_types: Vec<String>,
-        /// Terminal status to inspect (repeatable)
-        #[arg(long = "status", value_name = "STATUS", default_values = ["DONE", "CLOSED", "ABANDONED"])]
-        statuses: Vec<String>,
-        /// Only consider entities inactive for at least this many days
-        #[arg(long, default_value_t = 30)]
+        /// Only consider entities finished for at least this many days
+        #[arg(long, default_value_t = crate::storage::DEFAULT_RETENTION_DAYS)]
         older_than: u32,
-        /// Apply the deletion; without this flag purge is a dry run
+        /// Apply the deletion; without this flag purge is a preview
         #[arg(long)]
         apply: bool,
-        /// Make the preview mode explicit (the default)
-        #[arg(long, conflicts_with = "apply")]
-        dry_run: bool,
-        /// Also delete superseded truth versions older than the cutoff.
-        /// They are always listed in the preview; this opts into removing them.
-        #[arg(long)]
-        history: bool,
     },
     /// Initialise a Asobi workspace (XDG by default, `--local` for cwd)
     Init {

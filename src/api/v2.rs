@@ -48,15 +48,6 @@ pub struct SearchQuery {
     pub filters: Vec<(String, String)>,
 }
 
-#[derive(Debug, Clone, schemars::JsonSchema, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct TruthVersion {
-    pub key: String,
-    pub value: String,
-    pub valid_from: String,
-    pub valid_until: String,
-}
-
 #[derive(Debug, Clone, Default, schemars::JsonSchema, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Stats {
@@ -68,13 +59,10 @@ pub struct Stats {
 #[derive(Debug, Clone, schemars::JsonSchema, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PurgeRequest {
-    pub entity_types: Vec<String>,
-    pub statuses: Vec<String>,
+    /// How many days a finished session or task survives.
     pub older_than_days: u32,
+    /// Delete rather than preview.
     pub apply: bool,
-    /// Also consider superseded truth versions. Off by default so a scoped
-    /// entity purge stays scoped; `purge` with no scope turns it on.
-    pub include_truth_history: bool,
 }
 
 #[derive(Debug, Clone, schemars::JsonSchema, serde::Serialize, serde::Deserialize)]
@@ -95,28 +83,6 @@ pub struct PurgeReport {
     pub older_than_days: u32,
     pub candidates: Vec<PurgeCandidate>,
     pub deleted: usize,
-    /// Superseded truth versions old enough to drop, grouped by entity and key.
-    ///
-    /// Truth history is the one store with no bound of its own: observations
-    /// are capped per entity and current truths are one row per key, but every
-    /// overwrite appends a version that lives until its entity is deleted. It
-    /// grows fastest on the entity written most often — a session, whose
-    /// `next` and `remaining` are rewritten at every closeout.
-    #[serde(default)]
-    pub expired_truth_versions: Vec<ExpiredTruthVersions>,
-    #[serde(default)]
-    pub deleted_truth_versions: usize,
-}
-
-#[derive(Debug, Clone, schemars::JsonSchema, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ExpiredTruthVersions {
-    pub entity_name: String,
-    pub key: String,
-    pub versions: usize,
-    /// The newest `valid_until` in this group, so a preview shows how stale the
-    /// most recent thing being dropped actually is.
-    pub newest: String,
 }
 
 /// Backend capabilities describe behavior that callers may adapt to. They do
@@ -178,25 +144,6 @@ pub struct Snapshot {
     pub source_backend: String,
     pub source_schema_version: u32,
     pub graph: Graph,
-    /// Superseded truth values for the exported entities, newest first.
-    ///
-    /// A snapshot carrying only current state cannot distinguish a fact that
-    /// was always true from one corrected an hour ago, which is precisely the
-    /// distinction valid-time exists to preserve -- and `export --scope` is the
-    /// documented way to hand an epic to another agent.
-    ///
-    /// Defaulted rather than versioned: an older snapshot without the field
-    /// imports as an empty history, and an older reader ignores it, so no
-    /// format version bump is needed in either direction.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub truth_history: Vec<EntityTruthHistory>,
-}
-
-#[derive(Debug, Clone, schemars::JsonSchema, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct EntityTruthHistory {
-    pub entity_name: String,
-    pub versions: Vec<TruthVersion>,
 }
 
 #[derive(Debug, Clone, schemars::JsonSchema, serde::Serialize, serde::Deserialize)]
@@ -235,7 +182,6 @@ pub trait GraphStore {
     fn delete_relations(&self, relations: Vec<RelationInput>) -> ApiResult<()>;
     fn truth_upsert(&self, entity: &str, key: &str, value: &str) -> ApiResult<()>;
     fn truth_delete(&self, entity: &str, key: &str) -> ApiResult<()>;
-    fn truth_history(&self, entity: &str, key: Option<&str>) -> ApiResult<Vec<TruthVersion>>;
     fn read_graph(&self) -> ApiResult<Graph>;
     fn read_graph_full(&self) -> ApiResult<Graph>;
     fn read_graph_scoped(&self, scope: &[String], rationale: bool) -> ApiResult<Graph>;

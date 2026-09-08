@@ -99,7 +99,6 @@ def json_data(args: list[str], env: dict[str, str]) -> dict:
         "capabilities",
         "export",
         "graph",
-        "history",
         "link",
         "new",
         "obs",
