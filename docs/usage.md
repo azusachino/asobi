@@ -357,7 +357,7 @@ asobi reset [--force]
 
 `compact` projects **durable knowledge** entities — `project`, `concept`, `reference`, `preference`, `standard` — and their truths into Markdown under `.asobi/topics/`. Volatile `session` and `task` entities and self-indexing `skill` entities are skipped by design; read those with `search`/`show` and archive them with `export` or `backup`.
 
-`purge` is a dry run unless given `--apply`, and accepts only `session` entities plus terminal task statuses (`DONE`, `CLOSED`, `ABANDONED`) — durable knowledge and skills are refused. It defaults to entities inactive for 30 days. It never runs implicitly during `graph`, `search`, `compact`, or startup. An applied purge also runs `PRAGMA incremental_vacuum`, so the database file shrinks with the graph rather than retaining a free list.
+`purge` is a dry run unless given `--apply`, and accepts only `session` entities plus terminal task statuses (`DONE`, `CLOSED`, `ABANDONED`) — durable knowledge is refused, and skills are not in the graph to begin with. It defaults to entities inactive for 30 days. It never runs implicitly during `graph`, `search`, `compact`, or startup. An applied purge also runs `PRAGMA incremental_vacuum`, so the database file shrinks with the graph rather than retaining a free list.
 
 `reset` deletes every entity, relation, and observation; it prompts unless given `--force`.
 
@@ -437,7 +437,7 @@ The schema document carries its own `schemaVersion`, independent from the storag
 
 Asobi operates under a **lazy-read contract** to minimize token overhead.
 
-The payload for `graph` and `search` is a lazy JSON structure (excluding `observations` and skill `body`, only providing `truths` and `observationCount`):
+The payload for `graph` and `search` is a lazy JSON structure (excluding `observations`, providing only `truths` and `observationCount`):
 
 ```json
 {
@@ -461,7 +461,7 @@ The payload for `graph` and `search` is a lazy JSON structure (excluding `observ
 }
 ```
 
-`show` eagerly returns all `observations` and the skill `body` (if it's a skill entity):
+`show` eagerly returns all `observations`:
 
 ```json
 {
