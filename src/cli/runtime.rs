@@ -63,6 +63,7 @@ pub(crate) fn validate_git_url(git_url: &str) -> Result<()> {
 pub(crate) fn get_or_update_cached_repo(
     git_url: &str,
     caches_dir: &std::path::Path,
+    rev: Option<&str>,
 ) -> Result<(std::path::PathBuf, String)> {
     ensure_git_available()?;
     validate_git_url(git_url)?;
@@ -130,6 +131,10 @@ pub(crate) fn get_or_update_cached_repo(
         }
     }
 
+    if let Some(rev) = rev {
+        checkout_pinned_rev(&repo_cache_dir, git_url, rev)?;
+    }
+
     let output = std::process::Command::new("git")
         .arg("rev-parse")
         .arg("HEAD")
@@ -142,4 +147,48 @@ pub(crate) fn get_or_update_cached_repo(
     };
 
     Ok((repo_cache_dir, version))
+}
+
+/// Check the cache out at a pinned commit, tag, or branch.
+///
+/// The cache is a `--depth 1` clone, so a pinned object usually is not in it
+/// yet. A targeted `fetch origin <rev>` brings it down but creates no local ref
+/// for it -- the result is reachable only as `FETCH_HEAD`, which is why that is
+/// what gets checked out rather than the rev's own name. Deepening the history
+/// is the fallback for servers that refuse to serve an arbitrary rev directly.
+fn checkout_pinned_rev(repo: &std::path::Path, git_url: &str, rev: &str) -> Result<()> {
+    let git = |args: &[&str]| -> bool {
+        std::process::Command::new("git")
+            .args(args)
+            .current_dir(repo)
+            .stderr(std::process::Stdio::null())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+    };
+    let detach = |target: &str| git(&["checkout", "--detach", "--force", target]);
+
+    // Already present -- a re-sync of an unchanged pin, or a short SHA of a
+    // commit the shallow clone happens to include.
+    if git(&["cat-file", "-e", &format!("{rev}^{{commit}}")]) && detach(rev) {
+        return Ok(());
+    }
+
+    // Shallow-fetch just this rev; it lands as FETCH_HEAD and nothing else.
+    if git(&["fetch", "--depth", "1", "origin", rev]) && detach("FETCH_HEAD") {
+        return Ok(());
+    }
+
+    // Servers that refuse an arbitrary rev in a want: take the full history
+    // with tags, which makes the rev resolvable by its own name.
+    let deepened = git(&["fetch", "--tags", "--unshallow", "origin"])
+        || git(&["fetch", "--tags", "--force", "origin"]);
+    if deepened && detach(rev) {
+        return Ok(());
+    }
+
+    anyhow::bail!(
+        "could not check out rev '{rev}' from {git_url} -- \
+         no such commit, tag, or branch, or the server refused to serve it"
+    )
 }

@@ -246,6 +246,9 @@ pub(crate) enum SkillsCommands {
         /// mirrors skills across several tool-specific directories)
         #[arg(long)]
         subdir: Option<std::path::PathBuf>,
+        /// Pin to a commit, tag, or branch instead of the default branch
+        #[arg(long)]
+        rev: Option<String>,
     },
     /// Reconcile installed skills with the `[skills]` block in `asobi.toml`
     Sync,

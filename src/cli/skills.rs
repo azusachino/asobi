@@ -17,10 +17,17 @@ struct Checkout {
 
 /// Resolve a source to a directory holding its skills. Git sources go through
 /// the shared clone cache; local paths are used in place.
-fn checkout_source(source: &str, caches_dir: &std::path::Path) -> Result<Checkout> {
+fn checkout_source(
+    source: &str,
+    caches_dir: &std::path::Path,
+    rev: Option<&str>,
+) -> Result<Checkout> {
     let (url, is_git) = classify_skill_source(source);
+    if rev.is_some() && !is_git {
+        anyhow::bail!("`rev` pins a git source; {source} is a local path");
+    }
     let (path, version) = if is_git {
-        get_or_update_cached_repo(&url, caches_dir)?
+        get_or_update_cached_repo(&url, caches_dir, rev)?
     } else {
         let local_path = std::path::Path::new(source);
         if !local_path.exists() {
@@ -129,8 +136,9 @@ pub(crate) fn run(paths: &AsobiPaths, subcommand: Option<SkillsCommands>) -> Res
             all,
             select,
             subdir,
+            rev,
         }) => {
-            let checkout = checkout_source(&source, &paths.caches_dir())?;
+            let checkout = checkout_source(&source, &paths.caches_dir(), rev.as_deref())?;
             let walk_dir = scoped_dir(&checkout.path, subdir.as_deref())?;
             let mode = if all {
                 crate::skills::SelectionMode::All
@@ -193,7 +201,8 @@ pub(crate) fn run(paths: &AsobiPaths, subcommand: Option<SkillsCommands>) -> Res
 
             let mut desired = Vec::new();
             for (declared, mode) in config.sources.iter().zip(selections) {
-                let checkout = checkout_source(&declared.url, &paths.caches_dir())?;
+                let checkout =
+                    checkout_source(&declared.url, &paths.caches_dir(), declared.rev.as_deref())?;
                 let walk_dir = scoped_dir(&checkout.path, declared.subdir.as_deref())?;
                 let collected = crate::skills::collect_skills_from_dir(
                     &walk_dir,
@@ -260,7 +269,7 @@ pub(crate) fn run(paths: &AsobiPaths, subcommand: Option<SkillsCommands>) -> Res
                 info!("Updating skills from {}...", src);
                 let (git_url, is_git) = classify_skill_source(&src);
                 let (target_path, version) = if is_git {
-                    get_or_update_cached_repo(&git_url, &paths.caches_dir())?
+                    get_or_update_cached_repo(&git_url, &paths.caches_dir(), None)?
                 } else {
                     let local_path = std::path::Path::new(&src);
                     if !local_path.exists() {
@@ -349,5 +358,9 @@ fn reload(
         source: installed.source.clone(),
         version: installed.version.clone(),
         body,
+        // Already materialized: its bundled files are in place under the
+        // skills directory, and materialize never clears a directory it is
+        // rewriting, so there is nothing to copy.
+        bundle_dir: None,
     })
 }

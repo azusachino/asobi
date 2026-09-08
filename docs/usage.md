@@ -223,6 +223,7 @@ select = ["writing-plans", "code-review"]
 url = "https://github.com/some-org/multi-tool-skills"
 select = ["some-skill"]
 subdir = "skills"                # only walk this directory of the checkout
+rev = "v1.4.0"                   # pin to a commit, tag, or branch
 ```
 
 ```bash
@@ -234,6 +235,10 @@ asobi skills sync
 The skills directory is the store of record: since 0.7 a skill exists on disk and nowhere else, so it does not appear in `graph`, `search`, or `show`, and `rg` over the skills directory is how you search one. `path` defaults to `.agents/skills`, resolved against the `asobi.toml` that declares it, or against the discovered workspace root when no config declares a `[skills]` block — so `skills` and `skills show` work under a plain `asobi init` too.
 
 Alongside the skill directories, `sync` writes `.asobi-skills.json` recording each skill's source and the exact commit it came from. `asobi skills` reports that commit. Committing the whole tree, manifest included, is what turns an upstream skill change into a reviewable diff.
+
+`rev` completes that loop. Without it a re-sync silently adopts whatever the source has moved to since; with it, adopting a new revision is an edit someone makes on purpose. An annotated tag resolves to the commit it points at, not the tag object, so the recorded version is always a commit.
+
+One deliberate divergence from the [Agent Skills specification](https://agentskills.io/specification): it requires a skill's directory name to equal its frontmatter `name`, which assumes a skill is authored in place. Asobi installs many sources into one tree, so it names directories `<source-slug>@<skill-name>` — two sources may ship the same skill name, and agent hosts surface the directory name as the skill's identity. Everything else the spec says about a skill is enforced by `make check`, which runs the reference validator over each installed skill.
 
 Some sources mirror every skill across several tool-specific directories (`.opencode/`, `.kiro/`, a canonical `skills/`, ...) with the same `name:` in each copy — that collides on install, since a skill name must be unique within a source. `subdir` scopes the walk to one directory of the checkout so the mirrors are never seen; `asobi skills install <url> --subdir <path> ...` does the same for the imperative form.
 
@@ -360,14 +365,16 @@ asobi reset [--force]
 
 ```
 asobi skills                                                    # list, grouped by source
-asobi skills install <SOURCE> [--all | --select <NAME>...] [--subdir <PATH>]
+asobi skills install <SOURCE> [--all | --select <NAME>...] [--subdir <PATH>] [--rev <REV>]
 asobi skills sync
 asobi skills update [SOURCE]
 asobi skills remove <NAME | SOURCE>
 asobi skills show <NAME>
 ```
 
-`install` takes a git URL or a local path; git sources are shallow-cloned into a reused cache under `.asobi/caches/<slug>`. Frontmatter supplies the metadata, with the name falling back to the file or directory name. `--all` is a full sync of that source, pruning skills deleted or renamed upstream; `--select` and the interactive picker are additive. Passing neither flag opens a numbered picker, which needs a TTY and otherwise errors asking for a flag. `--subdir` scopes the walk to one directory of the checkout, for sources that mirror the same skills across several tool-specific directories and would otherwise collide on name. Installing one source never disturbs another's skills.
+`install` takes a git URL or a local path; git sources are shallow-cloned into a reused cache under `.asobi/caches/<slug>`. Frontmatter supplies the metadata, with the name falling back to the file or directory name. `--all` is a full sync of that source, pruning skills deleted or renamed upstream; `--select` and the interactive picker are additive. Passing neither flag opens a numbered picker, which needs a TTY and otherwise errors asking for a flag. `--subdir` scopes the walk to one directory of the checkout, for sources that mirror the same skills across several tool-specific directories and would otherwise collide on name. `--rev` pins to a commit, tag, or branch instead of the default branch. Installing one source never disturbs another's skills.
+
+A skill that owns a directory — entry point `SKILL.md` or `index.md` — is installed with everything in it: `references/`, `scripts/`, `assets/`, and anything else it ships. The spec loads those on demand when the body points at them, so they have to still be there. A bare `<name>.md` skill has no directory of its own and brings nothing with it; its parent belongs to the checkout, not to the skill.
 
 `sync` reconciles against the `[skills]` block in the discovered `asobi.toml`, as described under [Common workflows](#common-workflows). `update` refreshes from cache via `git fetch` and `reset --hard`, re-cloning if that fails; it needs `git` on `PATH`, and a scoped `update <source>` leaves other sources alone. `show` prints a skill's `SKILL.md` as raw Markdown, matched on its frontmatter name or its directory name. Never hand-edit an installed skill — the next sync overwrites it; edit the source repository instead.
 

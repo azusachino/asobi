@@ -32,6 +32,14 @@ pub struct CollectedSkill {
     pub version: String,
     /// The full `SKILL.md` text, frontmatter included.
     pub body: String,
+    /// The skill's own directory in the source checkout, when it has one —
+    /// i.e. when the entry point is a conventional `SKILL.md`/`index.md` rather
+    /// than a bare `<name>.md`. Its contents (`references/`, `scripts/`,
+    /// `assets/`, anything else) are copied alongside the body.
+    ///
+    /// `None` for a bare `.md` skill, whose parent directory belongs to the
+    /// checkout rather than to the skill — copying it would drag in siblings.
+    pub bundle_dir: Option<std::path::PathBuf>,
 }
 
 /// What one sync changed on disk.
@@ -106,185 +114,6 @@ fn resolve_skill_name_fallback(path: &Path) -> String {
     }
 }
 
-/// How many link hops [`inline_local_references`] follows before giving up.
-/// Real skills reference at most one or two levels deep (`SKILL.md` ->
-/// `reference.md`); this just bounds a pathological reference chain.
-const MAX_REFERENCE_DEPTH: usize = 4;
-
-/// Targets of every `[text](target)` inline link in `content`, in source
-/// order and with duplicates kept (the caller dedupes via `visited`).
-///
-/// A hand-rolled scan rather than a markdown parser or a `regex` dependency:
-/// skills only ever link with the plain inline form, and this only needs
-/// candidate paths, not a rendered document. Reference-style links
-/// (`[text][id]`) are deliberately not matched — rare in skills, and not
-/// worth a second lookup table for.
-fn markdown_link_targets(content: &str) -> Vec<&str> {
-    let mut targets = Vec::new();
-    for (i, c) in content.char_indices() {
-        if c != '[' {
-            continue;
-        }
-        let Some(close_bracket) = content[i..].find(']') else {
-            continue;
-        };
-        let after_bracket = i + close_bracket + 1;
-        if !content[after_bracket..].starts_with('(') {
-            continue;
-        }
-        let paren_start = after_bracket + 1;
-        let Some(close_paren) = content[paren_start..].find(')') else {
-            continue;
-        };
-        // A link target may carry a trailing `"title"`; only the path matters.
-        let raw = content[paren_start..paren_start + close_paren].trim();
-        let target = raw.split_whitespace().next().unwrap_or(raw);
-        if !target.is_empty() {
-            targets.push(target);
-        }
-    }
-    targets
-}
-
-/// Inline-code-span targets in `content` that look like a path to a markdown
-/// file: single backticks, no whitespace inside, ending in `.md`/`.markdown`.
-/// Skips spans inside fenced (```` ``` ````) code blocks, since those are
-/// examples to show the reader, not live references.
-///
-/// Some skills — Anthropic's own `skill-creator` among them — mention sibling
-/// docs as prose ("see `references/schemas.md` for the schema") rather than
-/// as a markdown link. The ending-in-`.md` + no-whitespace filter is loose by
-/// itself (it would also match a *generated output* mentioned in backticks,
-/// like "produces `benchmark.md`"), so the real filter is downstream: the
-/// caller only inlines a target that resolves to a file that actually exists
-/// in the source checkout, which a generated-output mention never does.
-fn backtick_path_targets(content: &str) -> Vec<&str> {
-    let mut targets = Vec::new();
-    let mut in_fence = false;
-    for line in content.lines() {
-        if line.trim_start().starts_with("```") {
-            in_fence = !in_fence;
-            continue;
-        }
-        if in_fence {
-            continue;
-        }
-        // Splitting on the delimiter puts every span *between* a pair of
-        // backticks at an odd index; unmatched trailing backticks just leave
-        // a final segment that is never treated as "inside".
-        for (idx, span) in line.split('`').enumerate() {
-            if idx % 2 == 0 {
-                continue;
-            }
-            let looks_like_markdown_path = span.ends_with(".md") || span.ends_with(".markdown");
-            if !span.is_empty() && !span.contains(char::is_whitespace) && looks_like_markdown_path {
-                targets.push(span);
-            }
-        }
-    }
-    targets
-}
-
-/// True for a link target worth following on disk: not an external URL, mail
-/// link, or a same-page anchor.
-fn is_local_reference(target: &str) -> bool {
-    !target.starts_with('#')
-        && !target.contains("://")
-        && !target.starts_with("mailto:")
-        && !target.starts_with("tel:")
-}
-
-/// Inline the local `.md`/`.markdown` files a skill references — via a
-/// markdown link or a backtick-quoted path — so a `SKILL.md` that is itself
-/// just a table of contents over sibling docs ships as one self-contained
-/// body. Asobi stores and materializes a single string per skill (see
-/// [`materialize_skills`]), so anything the skill needs at runtime has to
-/// live in that string — a reference file left beside `SKILL.md` in the
-/// source repo never reaches `.agents/skills/<slug>@<name>/`.
-///
-/// Only references that resolve inside `root_dir` are followed (no escaping
-/// the source checkout via `../..`), and a reference to another skill's own
-/// entry point (`SKILL.md`/`index.md`) is never inlined — that is a
-/// cross-skill reference to something installed as its own entity, not local
-/// content. `depth` bounds how many reference hops are followed; `visited`
-/// prevents cycles and re-inlining the same file reached two different ways.
-fn inline_local_references(
-    content: &str,
-    file_dir: &Path,
-    root_dir: &Path,
-    visited: &mut std::collections::HashSet<std::path::PathBuf>,
-    depth: usize,
-) -> String {
-    if depth == 0 {
-        return content.to_string();
-    }
-    let mut out = content.to_string();
-    let mut candidates = markdown_link_targets(content);
-    candidates.extend(backtick_path_targets(content));
-    for target in candidates {
-        if !is_local_reference(target) {
-            continue;
-        }
-        // Strip a `#fragment` before resolving; the file is what gets inlined.
-        let relative = target.split('#').next().unwrap_or(target);
-        let Ok(resolved) = file_dir.join(relative).canonicalize() else {
-            continue;
-        };
-        if !resolved.starts_with(root_dir) {
-            continue;
-        }
-        let is_markdown = resolved
-            .extension()
-            .and_then(|e| e.to_str())
-            .is_some_and(|ext| {
-                ext.eq_ignore_ascii_case("md") || ext.eq_ignore_ascii_case("markdown")
-            });
-        let is_entry_point = resolved
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .is_some_and(|stem| {
-                stem.eq_ignore_ascii_case("SKILL") || stem.eq_ignore_ascii_case("index")
-            });
-        if !is_markdown || is_entry_point || !visited.insert(resolved.clone()) {
-            continue;
-        }
-        let Ok(ref_content) = std::fs::read_to_string(&resolved) else {
-            continue;
-        };
-        let label = resolved
-            .strip_prefix(root_dir)
-            .unwrap_or(&resolved)
-            .display();
-        out.push_str(&format!("\n\n---\n\n<!-- inlined: {label} -->\n\n"));
-        let ref_dir = resolved.parent().unwrap_or(file_dir).to_path_buf();
-        out.push_str(&inline_local_references(
-            &ref_content,
-            &ref_dir,
-            root_dir,
-            visited,
-            depth - 1,
-        ));
-    }
-    out
-}
-
-/// Entry point for [`inline_local_references`]: canonicalizes `root_dir` once
-/// and seeds `visited` with the skill file's own path so a link back to
-/// itself is a no-op rather than a duplicate of the whole body.
-fn inline_references(content: &str, file_path: &Path, root_dir: &Path) -> String {
-    let Some(file_dir) = file_path.parent() else {
-        return content.to_string();
-    };
-    let Ok(root) = root_dir.canonicalize() else {
-        return content.to_string();
-    };
-    let mut visited = std::collections::HashSet::new();
-    if let Ok(canonical_self) = file_path.canonicalize() {
-        visited.insert(canonical_self);
-    }
-    inline_local_references(content, file_dir, &root, &mut visited, MAX_REFERENCE_DEPTH)
-}
-
 pub fn resolve_selection(
     skills: &[(String, String)],
     mode: SelectionMode,
@@ -351,7 +180,7 @@ pub fn collect_skills_from_dir(
     is_tty: bool,
 ) -> Result<Vec<CollectedSkill>> {
     let mut parsed_skills = Vec::new();
-    let mut skill_contents = HashMap::new();
+    let mut skill_contents: HashMap<String, (String, Option<std::path::PathBuf>)> = HashMap::new();
     // Every file path that claimed each name. Real-world skill repos sometimes
     // mirror the same skill under two tool-specific directories (e.g.
     // `.opencode/skills/x/` and `skills/x/`) and those mirrors can genuinely
@@ -375,9 +204,21 @@ pub fn collect_skills_from_dir(
                 .entry(name.clone())
                 .or_default()
                 .push(entry.path().to_path_buf());
-            let body = inline_references(&content, entry.path(), dir_path);
+            // A skill that owns a directory brings that directory with it.
+            // The spec's progressive disclosure depends on `references/` and
+            // `scripts/` still being there to read on demand, so they are
+            // copied rather than folded into the body.
+            let stem = entry
+                .path()
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("");
+            let bundle_dir = (stem.eq_ignore_ascii_case("SKILL")
+                || stem.eq_ignore_ascii_case("index"))
+            .then(|| entry.path().parent().map(Path::to_path_buf))
+            .flatten();
             parsed_skills.push((name.clone(), parsed_desc.unwrap_or_default()));
-            skill_contents.insert(name, body);
+            skill_contents.insert(name, (content, bundle_dir));
         }
     }
     if parsed_skills.is_empty() {
@@ -404,7 +245,7 @@ pub fn collect_skills_from_dir(
     let slug = derive_source_slug(source);
     let mut collected = Vec::new();
     for name in selected_names {
-        let body = skill_contents
+        let (body, bundle_dir) = skill_contents
             .remove(&name)
             .ok_or_else(|| anyhow!("Content missing for skill {}", name))?;
         let description = parsed_skills
@@ -423,6 +264,7 @@ pub fn collect_skills_from_dir(
             source: source.to_string(),
             version: version.to_string(),
             body,
+            bundle_dir,
         });
     }
     Ok(collected)
@@ -513,8 +355,53 @@ pub fn read_installed_skills(dir: &Path) -> Result<Vec<InstalledSkill>> {
     Ok(found)
 }
 
-/// Write `desired` out as `<dir>/<slug>@<name>/SKILL.md`, then remove every
-/// other `<slug>@<name>` directory under `dir`.
+/// Copy a skill's bundled resources — `references/`, `scripts/`, `assets/`, and
+/// anything else it ships — from the source checkout into its installed
+/// directory. `SKILL.md` itself is skipped; the caller writes that from the
+/// collected body.
+///
+/// The Agent Skills spec loads these on demand, only when the body points at
+/// them, which is the whole of its progressive disclosure. Installing the body
+/// without them leaves a skill whose instructions reference files that are not
+/// there — the failure is silent, since nothing reads the body until an agent
+/// does.
+fn copy_bundle(from: Option<&Path>, to: &Path) -> Result<()> {
+    let Some(from) = from else { return Ok(()) };
+    for entry in WalkDir::new(from).into_iter().filter_map(|e| e.ok()) {
+        let relative = entry.path().strip_prefix(from).unwrap_or(entry.path());
+        if relative.as_os_str().is_empty() {
+            continue;
+        }
+        // The entry point is written from the collected body, not copied, so a
+        // sibling `index.md` alongside a `SKILL.md` still comes across.
+        if relative.as_os_str().eq_ignore_ascii_case("SKILL.md") {
+            continue;
+        }
+        let target = to.join(relative);
+        if entry.file_type().is_dir() {
+            std::fs::create_dir_all(&target)?;
+        } else if entry.file_type().is_file() {
+            if let Some(parent) = target.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            // Same mtime reasoning as the body: skip a byte-identical file.
+            let unchanged = std::fs::read(entry.path())
+                .ok()
+                .zip(std::fs::read(&target).ok())
+                .is_some_and(|(src, dst)| src == dst);
+            if !unchanged {
+                std::fs::copy(entry.path(), &target)?;
+            }
+        }
+        // Symlinks are deliberately not followed: a skill source is untrusted
+        // input, and a link pointing outside the checkout would copy whatever
+        // it names into the skills tree.
+    }
+    Ok(())
+}
+
+/// Write `desired` out as `<dir>/<slug>@<name>/SKILL.md` plus its bundled
+/// resources, then remove every other `<slug>@<name>` directory under `dir`.
 ///
 /// Pruning is deliberately scoped to the `@` naming convention: directories
 /// Asobi did not write — a hand-authored skill, a vendored upstream checkout —
@@ -532,12 +419,16 @@ pub fn materialize_skills(dir: &Path, desired: &[CollectedSkill]) -> Result<Mate
         let dir_name = &skill.dir_name;
         let skill_dir = dir.join(dir_name);
         let file = skill_dir.join("SKILL.md");
-        // Leave an already-current file alone so a no-op sync does not churn
+        std::fs::create_dir_all(&skill_dir)?;
+        // Bundled resources are refreshed every run: an upstream change to a
+        // `references/` file does not necessarily change `SKILL.md`, so gating
+        // the copy on the body would let them drift.
+        copy_bundle(skill.bundle_dir.as_deref(), &skill_dir)?;
+        // Leave an already-current body alone so a no-op sync does not churn
         // mtimes that file watchers key off.
         if std::fs::read_to_string(&file).is_ok_and(|existing| existing == skill.body) {
             continue;
         }
-        std::fs::create_dir_all(&skill_dir)?;
         std::fs::write(&file, &skill.body)?;
         outcome.written.push(dir_name.clone());
     }
@@ -1001,182 +892,82 @@ mod tests {
         assert_eq!(sdr.description, "");
     }
 
+    /// A skill that owns a directory ships its bundled resources with it.
+    /// Until 0.7 those were folded into the body instead, which defeated the
+    /// spec's progressive disclosure -- and covered only markdown, so a
+    /// bundled script silently vanished.
     #[test]
-    fn test_markdown_link_targets() {
-        let content = "See [AGENT-BRIEF.md](AGENT-BRIEF.md) and \
-             [a titled link](path/to.md \"a title\") and [anchor](#section) and \
-             [site](https://example.com) plain text with no link.";
-        assert_eq!(
-            markdown_link_targets(content),
-            vec![
-                "AGENT-BRIEF.md",
-                "path/to.md",
-                "#section",
-                "https://example.com"
-            ]
-        );
-    }
-
-    #[test]
-    fn test_backtick_path_targets() {
-        let content = "See `references/schemas.md` for the schema. Also `grading.json` \
-             and `evidence` are just field names, and `path with space.md` doesn't count.\n\
-             ```\n\
-             this fenced `inside.md` mention must not match\n\
-             ```\n\
-             But `after-fence.md` on a normal line does.";
-        assert_eq!(
-            backtick_path_targets(content),
-            vec!["references/schemas.md", "after-fence.md"]
-        );
-    }
-
-    #[test]
-    fn test_is_local_reference() {
-        assert!(is_local_reference("reference.md"));
-        assert!(is_local_reference("../sibling/reference.md"));
-        assert!(!is_local_reference("#section"));
-        assert!(!is_local_reference("https://example.com/doc.md"));
-        assert!(!is_local_reference("mailto:you@example.com"));
-    }
-
-    #[test]
-    fn test_inline_references_pulls_in_sibling_docs() {
-        use tempfile::tempdir;
-        let root = tempdir().unwrap();
-        let skill_dir = root.path().join("triage");
-        std::fs::create_dir(&skill_dir).unwrap();
-
-        std::fs::write(
-            skill_dir.join("SKILL.md"),
-            "---\nname: triage\ndescription: toc-style skill\n---\n\
-             # Triage\n\n## Reference docs\n\n\
-             - [AGENT-BRIEF.md](AGENT-BRIEF.md) -- how to write agent briefs\n\
-             - [OUT-OF-SCOPE.md](OUT-OF-SCOPE.md) -- rejected work log\n\n\
-             Later: post an agent brief ([AGENT-BRIEF.md](AGENT-BRIEF.md)).\n",
-        )
-        .unwrap();
-        std::fs::write(
-            skill_dir.join("AGENT-BRIEF.md"),
-            "# Agent Brief\n\nWrite briefs like this.\n",
-        )
-        .unwrap();
-        std::fs::write(
-            skill_dir.join("OUT-OF-SCOPE.md"),
-            "# Out of Scope\n\nRejected requests live here.\n",
-        )
-        .unwrap();
-
-        let content = std::fs::read_to_string(skill_dir.join("SKILL.md")).unwrap();
-        let inlined = inline_references(&content, &skill_dir.join("SKILL.md"), root.path());
-
-        assert!(inlined.contains("Write briefs like this."));
-        assert!(inlined.contains("Rejected requests live here."));
-        // Referenced twice in the source; inlined once (`visited` dedupes).
-        assert_eq!(inlined.matches("Write briefs like this.").count(), 1);
-    }
-
-    #[test]
-    fn test_inline_references_pulls_in_backtick_referenced_docs() {
-        // Mirrors Anthropic's own skill-creator, which mentions references as
-        // prose ("see `references/schemas.md`") rather than markdown links.
-        use tempfile::tempdir;
-        let root = tempdir().unwrap();
-        let skill_dir = root.path().join("skill-creator");
-        std::fs::create_dir(&skill_dir).unwrap();
-        std::fs::create_dir(skill_dir.join("references")).unwrap();
-
-        std::fs::write(
-            skill_dir.join("SKILL.md"),
-            "---\nname: skill-creator\ndescription: toc-style skill\n---\n\
-             See `references/schemas.md` for the full schema. This step \
-             produces `benchmark.md`, which is not a file in this repo.\n",
-        )
-        .unwrap();
-        std::fs::write(
-            skill_dir.join("references/schemas.md"),
-            "# Schemas\n\nThe JSON structures live here.\n",
-        )
-        .unwrap();
-
-        let content = std::fs::read_to_string(skill_dir.join("SKILL.md")).unwrap();
-        let inlined = inline_references(&content, &skill_dir.join("SKILL.md"), root.path());
-
-        assert!(inlined.contains("The JSON structures live here."));
-        // `benchmark.md` is path-shaped but never exists on disk -- silent no-op.
-        assert!(!inlined.contains("inlined: skill-creator/benchmark.md"));
-    }
-
-    #[test]
-    fn test_inline_references_skips_path_traversal() {
-        use tempfile::tempdir;
-        let outer = tempdir().unwrap();
-        let root = outer.path().join("root");
-        std::fs::create_dir(&root).unwrap();
-        std::fs::write(outer.path().join("secret.md"), "outside content").unwrap();
-
-        let skill_file = root.join("SKILL.md");
-        std::fs::write(
-            &skill_file,
-            "---\nname: x\n---\nSee [secret](../secret.md).\n",
-        )
-        .unwrap();
-
-        let content = std::fs::read_to_string(&skill_file).unwrap();
-        let inlined = inline_references(&content, &skill_file, &root);
-        assert!(!inlined.contains("outside content"));
-    }
-
-    #[test]
-    fn test_inline_references_skips_other_skill_entry_points() {
-        use tempfile::tempdir;
-        let root = tempdir().unwrap();
-        let a_dir = root.path().join("skill-a");
-        let b_dir = root.path().join("skill-b");
-        std::fs::create_dir(&a_dir).unwrap();
-        std::fs::create_dir(&b_dir).unwrap();
-
-        std::fs::write(
-            b_dir.join("SKILL.md"),
-            "---\nname: skill-b\n---\nskill b's own body\n",
-        )
-        .unwrap();
-        let a_file = a_dir.join("SKILL.md");
-        std::fs::write(
-            &a_file,
-            "---\nname: skill-a\n---\nSee also [skill-b](../skill-b/SKILL.md).\n",
-        )
-        .unwrap();
-
-        let content = std::fs::read_to_string(&a_file).unwrap();
-        let inlined = inline_references(&content, &a_file, root.path());
-        assert!(!inlined.contains("skill b's own body"));
-    }
-
-    #[test]
-    fn test_install_from_dir_inlines_sibling_references() {
+    fn test_bundled_resources_are_copied_not_inlined() {
         use tempfile::tempdir;
         let src_dir = tempdir().unwrap();
-        let src = src_dir.path();
+        let src = src_dir.path().join("triage");
+        std::fs::create_dir_all(src.join("references")).unwrap();
+        std::fs::create_dir_all(src.join("scripts")).unwrap();
 
         std::fs::write(
             src.join("SKILL.md"),
             "---\nname: triage\ndescription: toc-style skill\n---\n\
-             See [AGENT-BRIEF.md](AGENT-BRIEF.md) for the brief format.\n",
+             See [the brief format](references/AGENT-BRIEF.md).\n",
         )
         .unwrap();
         std::fs::write(
-            src.join("AGENT-BRIEF.md"),
+            src.join("references/AGENT-BRIEF.md"),
             "# Agent Brief\n\nWrite briefs like this.\n",
         )
         .unwrap();
+        std::fs::write(src.join("scripts/extract.py"), "print('hi')\n").unwrap();
 
         let source = src.to_str().unwrap();
+        let collected =
+            collect_skills_from_dir(&src, source, "v1", SelectionMode::All, false).unwrap();
+        assert_eq!(collected.len(), 1);
+
+        // The body stays as authored -- the reference is a pointer, not content.
+        assert!(collected[0].body.contains("references/AGENT-BRIEF.md"));
+        assert!(!collected[0].body.contains("Write briefs like this."));
+
+        let out_dir = tempdir().unwrap();
+        let out = out_dir.path();
+        materialize_skills(out, &collected).unwrap();
+        let installed = out.join(&collected[0].dir_name);
+
+        // ...and the files it points at are actually there to be read.
+        assert_eq!(
+            std::fs::read_to_string(installed.join("references/AGENT-BRIEF.md")).unwrap(),
+            "# Agent Brief\n\nWrite briefs like this.\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(installed.join("scripts/extract.py")).unwrap(),
+            "print('hi')\n"
+        );
+    }
+
+    /// A bare `<name>.md` skill has no directory of its own -- its parent
+    /// belongs to the checkout -- so nothing beside it may be dragged along.
+    #[test]
+    fn test_bare_markdown_skill_copies_no_siblings() {
+        use tempfile::tempdir;
+        let src_dir = tempdir().unwrap();
+        let src = src_dir.path();
+        std::fs::write(
+            src.join("alpha.md"),
+            "---\nname: alpha\ndescription: a\n---\nalpha body\n",
+        )
+        .unwrap();
+        std::fs::write(src.join("unrelated.txt"), "not mine").unwrap();
 
         let collected =
-            collect_skills_from_dir(src, source, "v1", SelectionMode::All, false).unwrap();
+            collect_skills_from_dir(src, src.to_str().unwrap(), "v1", SelectionMode::All, false)
+                .unwrap();
         assert_eq!(collected.len(), 1);
-        assert!(collected[0].body.contains("Write briefs like this."));
+        assert!(collected[0].bundle_dir.is_none());
+
+        let out_dir = tempdir().unwrap();
+        let out = out_dir.path();
+        materialize_skills(out, &collected).unwrap();
+        let installed = out.join(&collected[0].dir_name);
+        assert!(installed.join("SKILL.md").is_file());
+        assert!(!installed.join("unrelated.txt").exists());
     }
 
     #[test]
