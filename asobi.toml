@@ -1,26 +1,3 @@
 data_dir = ".asobi/data"
 config_dir = ".asobi/config"
 topics_dir = ".asobi/topics"
-
-# The skills an agent working in this repository should have, declared.
-# `asobi skills sync` reconciles the graph and .agents/skills/ to exactly this
-# list, writing each one to .agents/skills/<source-slug>@<skill-name>/SKILL.md.
-#
-# Asobi dogfoods its own declarative sync here. The materialized files are
-# committed: the declaration records which skills were selected, the snapshot
-# records the exact instructions that were reviewed, and skills are natural
-# language loaded straight into an agent's context -- an unreviewed change to
-# one is an unreviewed change to behaviour.
-#
-# `select` names come from a skill's frontmatter `name:`, not its directory
-# name, and are re-read from the source on every sync.
-[skills]
-path = ".agents/skills"
-
-[[skills.source]]
-url = "https://github.com/azusachino/harus-skills.git"
-# The workflow half of this CLI's documentation. This repository deliberately
-# ships no SKILL.md of its own -- see AGENTS.md for the split -- so this is
-# where session, task-dispatcher and recall guidance for asobi lives.
-select = ["asobi"]
-subdir = "skills"
