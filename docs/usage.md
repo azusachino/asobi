@@ -129,7 +129,7 @@ asobi truth "my-project:session" "next" "implement FTS5 index"
 asobi obs "my-project:session" "completed 2026-05-21: added the FTS5 index"
 ```
 
-A truth is the right home for anything read back as *current* state, because writing the same key updates it in place. Observations accumulate and are evicted at the cap, so a next-action stored as an observation can silently age out.
+A truth is the right home for anything read back as _current_ state, because writing the same key updates it in place. Observations accumulate and are evicted at the cap, so a next-action stored as an observation can silently age out.
 
 **Preview and purge stale operational state:**
 
@@ -383,15 +383,15 @@ These are ordinary graph entities under a workflow contract: status is a truth, 
 
 The type given to `asobi new` determines what `--where` filters, `compact`, and `purge` later see:
 
-| Type | Use for |
-| --- | --- |
-| `project` | Stable per-project facts and architecture decisions |
-| `session` | Volatile session state |
-| `task` | Epics and their dispatchable child tasks |
-| `concept` | Decisions, pitfalls, technical definitions |
-| `preference` | Cross-project user or tool preferences |
-| `standard` | Conventions that apply everywhere |
-| `reference` | Pointers to external resources and URLs |
+| Type         | Use for                                             |
+| ------------ | --------------------------------------------------- |
+| `project`    | Stable per-project facts and architecture decisions |
+| `session`    | Volatile session state                              |
+| `task`       | Epics and their dispatchable child tasks            |
+| `concept`    | Decisions, pitfalls, technical definitions          |
+| `preference` | Cross-project user or tool preferences              |
+| `standard`   | Conventions that apply everywhere                   |
+| `reference`  | Pointers to external resources and URLs             |
 
 Only the durable types reach Markdown through `compact`, and only `session` and terminal `task` entities are eligible for `purge`, so a decision typed as `session` is both invisible to topics and reachable by retention.
 

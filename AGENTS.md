@@ -20,7 +20,7 @@ Rust 2024, Clap, tracing, rusqlite with bundled SQLite/FTS5, and Python scripts 
 
 Graph: `new`, `obs`, `link`, `rm`, `rm-obs`, `update-obs`, `unlink`, `graph`, `search`, and `show`. Truths: `truth`, `rm-truth`, and `history`. Maintenance: `compact`, `init`, `stats`, `schema`, `export`, `import`, `reset`, `backup`, and `restore`. Agent workflows: `skills` and `tasks` with their nested subcommands.
 
-`asobi schema` is the machine-readable response contract, and `docs/usage.md` is the user-facing command reference — the single one. This repository documents what the CLI *is* and ships no `SKILL.md`; agent workflow guidance for Asobi lives in the [`asobi` skill](https://github.com/azusachino/harus-skills/blob/main/skills/asobi/SKILL.md). Keep that split when adding documentation: a change to a command's behaviour belongs in `docs/usage.md`, and advice about when to reach for it does not belong in this repository at all.
+`asobi schema` is the machine-readable response contract, and `docs/usage.md` is the user-facing command reference — the single one. This repository documents what the CLI _is_ and ships no `SKILL.md`; agent workflow guidance for Asobi lives in the [`asobi` skill](https://github.com/azusachino/harus-skills/blob/main/skills/asobi/SKILL.md). Keep that split when adding documentation: a change to a command's behaviour belongs in `docs/usage.md`, and advice about when to reach for it does not belong in this repository at all.
 
 ## Quality gate
 
