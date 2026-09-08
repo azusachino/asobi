@@ -1,5 +1,38 @@
 # Changelog
 
+## v0.7.0 — Skills leave the graph
+
+Over a third of Asobi was a skill installer: `skills.rs`, `cli/skills.rs` and `skills_config.rs` came to 1,798 of 4,985 lines. It stored every skill twice — once as a graph entity carrying a body, once on disk — and the disk copy was the one agents actually read, because `.agents/skills/` is what the Agent Skills ecosystem understands and what `rg` reaches. Measured against a real six-week-old graph, the graph copy had accumulated nothing: all 33 installed skills had zero observations and a lone `description` truth.
+
+So the filesystem becomes the only copy.
+
+### Breaking
+
+- **Skills are no longer graph entities.** They do not appear in `graph`, `search`, or `show`. Search one with `rg` over the skills directory.
+- **`show` no longer returns `body`.** The field existed only to carry skill bodies and is gone from the response contract; `asobi schema` reflects this.
+- **Schema is now 6.** Upgrading drops the `asobi_skills` table and deletes `skill`-typed entities rather than leaving them as husks with no body — cascades take their truths, observations and relations. Nothing there was the only copy: the bodies are on disk, and `skills sync` rewrites that tree from `asobi.toml` regardless. The upgrade runs `PRAGMA incremental_vacuum` so the file shrinks with the graph.
+- **`SkillStore` and `SkillRecord` are removed** from `api::v2`. Library consumers implementing the trait no longer need to; there is no storage-side skill surface at all.
+
+### Added
+
+- **Skill provenance on disk.** `skills sync` writes `.asobi-skills.json` beside the installed skills, recording each one's source and the exact commit it came from, and `asobi skills` reports that commit. This replaces source/version truths that the graph nominally held and in practice never populated — no installed skill had a version recorded. Committing the manifest with the skill files is what makes an upstream skill change a reviewable diff, which matters because a skill is natural-language instruction loaded straight into an agent's context.
+- **`asobi init --local` scaffolds a commented `[skills]` block.** It names no source: scaffolding aids discovery of `skills sync`, but defaulting to any particular skill repository would install instructions the user never asked for.
+
+### Fixed
+
+- **`skills` and `skills show` work under a plain `asobi init`.** The skills directory now falls back to `.agents/skills` under the discovered root when no `asobi.toml` declares a `[skills]` block. Previously every skills path assumed a project-local config, but `asobi init` without `--local` writes none — so the default XDG install had no reachable skills directory.
+- **`skills install` and `skills update` no longer disturb other sources.** Both rewrite the tree, so they now carry unaffected sources through untouched; `--all` remains a full sync of its own source, and a scoped `update <source>` leaves siblings alone.
+
+### Documentation
+
+- `SKILL.md` removed from this repository. It had drifted into contradicting the maintained [`asobi` skill](https://github.com/azusachino/harus-skills/blob/main/skills/asobi/SKILL.md) — making `compact` a session-end step the skill warns against, storing the handoff as an observation where the skill stores a truth, and never mentioning the task dispatcher. This repository documents what the CLI _is_; workflow guidance lives in the skill. `docs/usage.md` is now the single command reference, and `docs/workflow.md`'s narrative walkthrough moved to harus-kb.
+- Correcting `docs/usage.md` against `asobi <command> --help` turned up four documented behaviours that do not exist: `search --limit` defaults to **10**, not the 100 claimed in four places (the 100 is a storage-layer fallback for a limit of 0, which the clap default never produces); `rm-obs` takes `--id`, not the documented `--prefix`, and accepts one observation rather than a list; `update-obs --id` was undocumented; and `capabilities` and `reset` were absent from the reference entirely.
+- `AGENTS.md` now holds the project conventions, with `CLAUDE.md` as an `@AGENTS.md` pointer, so every agent runtime reads the same contract.
+
+### Verification
+
+`make check` passes: storage boundary, rustfmt, Prettier, Ruff, Clippy `-D warnings`, all Rust tests, CLI verifier, use cases, and benchmark compilation. The schema 6 upgrade was exercised against this workstation's own project-local graph — 1 skill entity to 0, schema 5 to 6, manifest written with the resolved commit — after a backup, not only against the synthetic fixture. New coverage: `test_materialize_prunes_skills_dropped_upstream`, `test_manifest_records_provenance`, and `test_read_installed_falls_back_to_scanning`.
+
 ## v0.6.4 — Physical storage reclamation
 
 ### Fixed
