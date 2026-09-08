@@ -38,7 +38,7 @@ test-scripts: build
 verify-storage-boundary:
 	uv run --no-project python scripts/verify_storage_boundary.py
 
-verify-skills-spec:
+verify-skills-spec: build
 	uv run --no-project python scripts/verify_skills_spec.py
 
 bench:
