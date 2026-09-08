@@ -616,7 +616,7 @@ def skills_checks() -> None:
         run(["skills", "install", str(src), "--all"], env)
 
         listed = run(["skills"], env).stdout
-        assert "Installed Skills:" in listed
+        assert "Installed Skills (" in listed
         assert "alpha" in listed
         assert "nested" in listed
         assert "Alpha skill" in listed
@@ -627,7 +627,7 @@ def skills_checks() -> None:
 
         # Remove by source string clears every skill from that source.
         run(["skills", "remove", str(src)], env)
-        assert "No skills installed." in run(["skills"], env).stdout
+        assert "No skills installed" in run(["skills"], env).stdout
 
         # --select installs only the named skill, not the rest.
         run(["skills", "install", str(src), "--select", "alpha"], env)

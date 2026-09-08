@@ -1,8 +1,8 @@
 use crate::api::v2::{
     ApiError, ApiResult, BackendCapabilities, BackendHealth, BackupReceipt, BackupRequest,
     BackupStore, GraphStore, ImportReport, MaintenanceStore, OpenNodes, PurgeCandidate,
-    PurgeReport, PurgeRequest, SearchQuery, SearchStore, SkillRecord, SkillStore, Snapshot,
-    SnapshotStore, Stats, StorageLocation, TaskStore, TruthVersion,
+    PurgeReport, PurgeRequest, SearchQuery, SearchStore, Snapshot, SnapshotStore, Stats,
+    StorageLocation, TaskStore, TruthVersion,
 };
 use crate::model::{
     EntityInput, EntityOutput, Graph, ObservationDeletion, ObservationInput, RelationInput,
@@ -16,7 +16,7 @@ use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-const SCHEMA_VERSION: i64 = 5;
+const SCHEMA_VERSION: i64 = 6;
 const DEFAULT_DATABASE_FILENAME: &str = "asobi.db";
 const DEFAULT_BUSY_TIMEOUT_MS: u64 = 15_000;
 const DEFAULT_OBSERVATION_LIMIT: usize = 200;
@@ -175,8 +175,11 @@ impl SqliteStore {
     }
 
     fn init_schema(conn: &Connection, previous_version: i64) -> rusqlite::Result<()> {
-        if previous_version > 0 && previous_version < SCHEMA_VERSION {
+        if previous_version > 0 && previous_version < 5 {
             Self::upgrade_to_v5(conn)?;
+        }
+        if previous_version > 0 && previous_version < 6 {
+            Self::upgrade_to_v6(conn)?;
         }
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS asobi_entities (
@@ -216,13 +219,6 @@ impl SqliteStore {
                 valid_until TEXT NOT NULL
             );
             CREATE INDEX IF NOT EXISTS idx_truth_history ON asobi_truth_history(entity_name, key, valid_until);
-            CREATE TABLE IF NOT EXISTS asobi_skills (
-                entity_name TEXT PRIMARY KEY REFERENCES asobi_entities(name) ON DELETE CASCADE,
-                body TEXT NOT NULL,
-                source TEXT NOT NULL,
-                version TEXT NOT NULL,
-                installed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-            );
             CREATE VIRTUAL TABLE IF NOT EXISTS asobi_obs_fts USING fts5(
                 content, content='asobi_observations', content_rowid='rowid',
                 tokenize='porter unicode61'
@@ -237,7 +233,7 @@ impl SqliteStore {
                 INSERT INTO asobi_obs_fts(asobi_obs_fts, rowid, content) VALUES ('delete', old.rowid, old.content);
                 INSERT INTO asobi_obs_fts(rowid, content) VALUES (new.rowid, new.content);
             END;
-            PRAGMA user_version = 5;",
+            PRAGMA user_version = 6;",
         )?;
         let count: i64 =
             conn.query_row("SELECT count(*) FROM asobi_observations", [], |r| r.get(0))?;
@@ -284,6 +280,36 @@ impl SqliteStore {
         )?;
         conn.execute_batch("PRAGMA auto_vacuum = INCREMENTAL;")?;
         conn.execute_batch("VACUUM;")?;
+        Ok(())
+    }
+
+    /// 0.7 moved skills out of the graph and onto the filesystem, where the
+    /// Agent Skills ecosystem already expects them and where `rg` can reach
+    /// them. The graph copy was never the one agents read: it held a body, a
+    /// source and a version, and in practice accumulated nothing else — no
+    /// observations, and only a `description` truth.
+    ///
+    /// So drop the table and the entities it hung off. The skill entities go
+    /// too rather than being left as empty husks, since a `skill`-typed entity
+    /// with no body is not a thing any reader wants back; cascades take their
+    /// truths, observations and relations with them. Whatever was installed is
+    /// already on disk under the skills directory, and `skills sync` rewrites
+    /// that from `asobi.toml` regardless, so nothing here is the only copy.
+    /// Runs before `init_schema`'s `CREATE TABLE IF NOT EXISTS` batch, so on a
+    /// database old enough to predate the current generation entirely there is
+    /// nothing here to clean up yet — hence the existence check rather than an
+    /// unconditional `DELETE`.
+    fn upgrade_to_v6(conn: &Connection) -> rusqlite::Result<()> {
+        let has_entities: bool = conn.query_row(
+            "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='asobi_entities'",
+            [],
+            |r| r.get::<_, i64>(0).map(|n| n > 0),
+        )?;
+        if has_entities {
+            conn.execute("DELETE FROM asobi_entities WHERE entity_type = 'skill'", [])?;
+        }
+        conn.execute_batch("DROP TABLE IF EXISTS asobi_skills;")?;
+        conn.execute_batch("PRAGMA incremental_vacuum;")?;
         Ok(())
     }
 
@@ -433,23 +459,12 @@ fn graph_from_connection(
             let (key, value) = truth?;
             truths.insert(key, value);
         }
-        let body = if include_content {
-            conn.query_row(
-                "SELECT body FROM asobi_skills WHERE entity_name = ?",
-                [&name],
-                |r| r.get(0),
-            )
-            .optional()?
-        } else {
-            None
-        };
         entities.push(EntityOutput {
             name,
             entity_type,
             observations,
             truths,
             observation_count,
-            body,
             observations_detailed,
         });
     }
@@ -722,28 +737,6 @@ impl SearchStore for SqliteStore {
     }
 }
 
-impl SkillStore for SqliteStore {
-    fn list_skills(&self) -> ApiResult<Vec<SkillRecord>> {
-        self.read(|conn| { let mut stmt = conn.prepare("SELECT s.entity_name,s.body,s.source,s.version,COALESCE(t.value,'') FROM asobi_skills s LEFT JOIN asobi_truths t ON t.entity_name=s.entity_name AND t.key='description' ORDER BY s.source,s.entity_name")?; let mut out = Vec::new(); for row in stmt.query_map([], |r| Ok(SkillRecord { entity_name:r.get(0)?, body:r.get(1)?, source:r.get(2)?, version:r.get(3)?, description:r.get(4)? }))? { out.push(row?); } Ok(out) })
-    }
-    fn skill_body(&self, entity_name: &str) -> ApiResult<Option<String>> {
-        self.read(|conn| {
-            conn.query_row(
-                "SELECT body FROM asobi_skills WHERE entity_name=?",
-                [normalize(entity_name)],
-                |r| r.get(0),
-            )
-            .optional()
-        })
-    }
-    fn upsert_skill(&self, skill: SkillRecord) -> ApiResult<()> {
-        self.write(|tx| { let name = normalize(&skill.entity_name); tx.execute("INSERT OR IGNORE INTO asobi_entities(name,entity_type) VALUES (?, 'skill')", [&name])?; tx.execute("INSERT INTO asobi_skills(entity_name,body,source,version) VALUES (?,?,?,?) ON CONFLICT(entity_name) DO UPDATE SET body=excluded.body,source=excluded.source,version=excluded.version,installed_at=CURRENT_TIMESTAMP", params![name,skill.body,skill.source,skill.version])?; tx.execute("INSERT INTO asobi_truths(entity_name,key,value) VALUES (?,'description',?) ON CONFLICT(entity_name,key) DO UPDATE SET value=excluded.value,updated_at=CURRENT_TIMESTAMP", params![normalize(&skill.entity_name),skill.description])?; Ok(()) })
-    }
-    fn remove_skills(&self, entity_names: Vec<String>) -> ApiResult<()> {
-        self.delete_entities(entity_names)
-    }
-}
-
 impl SnapshotStore for SqliteStore {
     fn export_snapshot(&self, scope: &[String], rationale: bool) -> ApiResult<Snapshot> {
         let graph = if scope.is_empty() {
@@ -970,7 +963,7 @@ impl MaintenanceStore for SqliteStore {
         Ok(report)
     }
     fn reset(&self) -> ApiResult<()> {
-        self.write(|tx| { tx.execute_batch("DELETE FROM asobi_relations; DELETE FROM asobi_truth_history; DELETE FROM asobi_truths; DELETE FROM asobi_observations; DELETE FROM asobi_skills; DELETE FROM asobi_entities;")?; Ok(()) })?;
+        self.write(|tx| { tx.execute_batch("DELETE FROM asobi_relations; DELETE FROM asobi_truth_history; DELETE FROM asobi_truths; DELETE FROM asobi_observations; DELETE FROM asobi_entities;")?; Ok(()) })?;
         self.read(|conn| conn.execute_batch("PRAGMA incremental_vacuum;"))?;
         Ok(())
     }

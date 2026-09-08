@@ -49,16 +49,6 @@ pub struct TruthVersion {
     pub valid_until: String,
 }
 
-#[derive(Debug, Clone, schemars::JsonSchema, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SkillRecord {
-    pub entity_name: String,
-    pub body: String,
-    pub source: String,
-    pub version: String,
-    pub description: String,
-}
-
 #[derive(Debug, Clone, Default, schemars::JsonSchema, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Stats {
@@ -202,13 +192,6 @@ pub trait GraphStore {
 
 pub trait SearchStore {
     fn search_nodes(&self, query: SearchQuery) -> ApiResult<Graph>;
-}
-
-pub trait SkillStore {
-    fn list_skills(&self) -> ApiResult<Vec<SkillRecord>>;
-    fn skill_body(&self, entity_name: &str) -> ApiResult<Option<String>>;
-    fn upsert_skill(&self, skill: SkillRecord) -> ApiResult<()>;
-    fn remove_skills(&self, entity_names: Vec<String>) -> ApiResult<()>;
 }
 
 pub trait SnapshotStore {

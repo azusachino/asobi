@@ -228,7 +228,6 @@ mod tests {
             observations: Vec::new(),
             truths: std::collections::BTreeMap::new(),
             observation_count: 0,
-            body: None,
             observations_detailed: None,
         }
     }

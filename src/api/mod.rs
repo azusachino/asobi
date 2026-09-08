@@ -10,6 +10,5 @@ pub use v2::{
     API_VERSION, ApiError, ApiResult, BackendCapabilities, BackendHealth, BackendInfo,
     BackupReceipt, BackupRequest, BackupStore, GraphStore, ImportReport, MaintenanceStore,
     OpenNodes, PurgeCandidate, PurgeReport, PurgeRequest, SNAPSHOT_FORMAT_VERSION, SearchQuery,
-    SearchStore, SkillRecord, SkillStore, Snapshot, SnapshotStore, Stats, StorageLocation,
-    TaskStore, TruthVersion,
+    SearchStore, Snapshot, SnapshotStore, Stats, StorageLocation, TaskStore, TruthVersion,
 };

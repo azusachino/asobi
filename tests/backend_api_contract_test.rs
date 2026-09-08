@@ -1,6 +1,6 @@
 use asobi::api::{
     BackupRequest, BackupStore, GraphStore, MaintenanceStore, OpenNodes, PurgeRequest, SearchQuery,
-    SearchStore, SkillRecord, SkillStore, SnapshotStore, TaskStore,
+    SearchStore, SnapshotStore, TaskStore,
 };
 use asobi::model::{EntityInput, RelationInput};
 use asobi::storage::SqliteStore;
@@ -84,21 +84,19 @@ fn graph_truth_search_and_task_claim_are_atomic_surfaces() {
 }
 
 #[test]
-fn graph_and_search_keep_observations_and_skill_bodies_lazy() {
+fn graph_and_search_keep_observations_lazy() {
     let (_dir, store) = store();
     store
-        .upsert_skill(SkillRecord {
-            entity_name: "skill:lean-read".into(),
-            body: "heavy skill instructions".into(),
-            source: "local".into(),
-            version: "test".into(),
-            description: "lean read regression".into(),
-        })
+        .create_entities(vec![asobi::model::EntityInput {
+            name: "lean-read".into(),
+            entity_type: "concept".into(),
+            observations: vec![],
+        }])
         .unwrap();
     store
         .add_observations(
             vec![asobi::model::ObservationInput {
-                entity_name: "skill:lean-read".into(),
+                entity_name: "lean-read".into(),
                 contents: vec!["heavy observation".into()],
             }],
             200,
@@ -109,7 +107,6 @@ fn graph_and_search_keep_observations_and_skill_bodies_lazy() {
     let entity = &lean.entities[0];
     assert_eq!(entity.observation_count, 1);
     assert!(entity.observations.is_empty());
-    assert!(entity.body.is_none());
     assert!(entity.observations_detailed.is_none());
     let lean_json = serde_json::to_value(&lean).unwrap();
     assert!(
@@ -141,27 +138,21 @@ fn graph_and_search_keep_observations_and_skill_bodies_lazy() {
     let entity = &search.entities[0];
     assert_eq!(entity.observation_count, 1);
     assert!(entity.observations.is_empty());
-    assert!(entity.body.is_none());
     assert!(entity.observations_detailed.is_none());
 
     let full = store
         .open_nodes(OpenNodes {
-            names: vec!["skill:lean-read".into()],
+            names: vec!["lean-read".into()],
             with_ids: true,
             expand: vec![],
         })
         .unwrap();
     let entity = &full.entities[0];
     assert_eq!(entity.observations, vec!["heavy observation"]);
-    assert_eq!(entity.body.as_deref(), Some("heavy skill instructions"));
     assert_eq!(entity.observations_detailed.as_ref().unwrap().len(), 1);
 
     let exported = store.read_graph_full().unwrap();
     assert_eq!(exported.entities[0].observations, vec!["heavy observation"]);
-    assert_eq!(
-        exported.entities[0].body.as_deref(),
-        Some("heavy skill instructions")
-    );
 }
 
 #[test]
@@ -433,7 +424,7 @@ fn opening_a_pre_v5_database_drops_superseded_tables_and_enables_incremental_vac
     let user_version: i64 = conn
         .query_row("PRAGMA user_version", [], |r| r.get(0))
         .unwrap();
-    assert_eq!(user_version, 5);
+    assert_eq!(user_version, 6);
     let auto_vacuum: i64 = conn
         .query_row("PRAGMA auto_vacuum", [], |r| r.get(0))
         .unwrap();

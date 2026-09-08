@@ -98,7 +98,7 @@ pub(crate) fn run_cli(cli: Cli) -> Result<()> {
             }
         }
         Commands::Tasks { subcommand } => crate::tasks::run(backend, subcommand, json)?,
-        Commands::Skills { subcommand } => super::skills::run(backend, &paths, subcommand)?,
+        Commands::Skills { subcommand } => super::skills::run(&paths, subcommand)?,
         command => super::graph::run(backend, command, json)?,
     }
 

@@ -10,13 +10,28 @@ pub enum SelectionMode {
     Interactive,
 }
 
-/// What one source install changed in the graph.
-#[derive(Debug, Default)]
-pub struct InstallOutcome {
-    /// Entity names installed or refreshed.
-    pub installed: Vec<String>,
-    /// Entity names dropped because the selection no longer covers them.
-    pub pruned: Vec<String>,
+/// One skill read out of a source checkout, ready to be written to disk.
+///
+/// Skills live on the filesystem and nowhere else. They were mirrored into the
+/// graph as well until 0.7, which meant every skill existed twice with the disk
+/// copy as the one agents actually read — and the graph copy accumulating
+/// nothing, since a skill has no observations and only ever carried its
+/// `description`. The files are the store of record; `.agents/skills/` is a
+/// directory the wider Agent Skills ecosystem already understands, and `rg`
+/// searches it better than a graph read did.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CollectedSkill {
+    /// On-disk directory name: `<source-slug>@<skill-name>`.
+    pub dir_name: String,
+    /// The frontmatter `name`, as declared.
+    pub name: String,
+    pub description: String,
+    /// Canonical source URL or path this came from.
+    pub source: String,
+    /// Resolved git commit, or `local` for a path source.
+    pub version: String,
+    /// The full `SKILL.md` text, frontmatter included.
+    pub body: String,
 }
 
 /// What one sync changed on disk.
@@ -325,15 +340,16 @@ pub fn resolve_selection(
     }
 }
 
-pub fn install_skills_from_dir<S: crate::api::SkillStore>(
-    store: &S,
+/// Read every skill under `dir_path`, apply `mode`, and return what should be
+/// written to disk. Touches no storage: the caller hands the result to
+/// [`materialize_skills`], which owns both writing and pruning.
+pub fn collect_skills_from_dir(
     dir_path: &Path,
     source: &str,
     version: &str,
     mode: SelectionMode,
     is_tty: bool,
-    prune: bool,
-) -> Result<InstallOutcome> {
+) -> Result<Vec<CollectedSkill>> {
     let mut parsed_skills = Vec::new();
     let mut skill_contents = HashMap::new();
     // Every file path that claimed each name. Real-world skill repos sometimes
@@ -386,23 +402,7 @@ pub fn install_skills_from_dir<S: crate::api::SkillStore>(
         );
     }
     let slug = derive_source_slug(source);
-    let mut outcome = InstallOutcome::default();
-    if prune {
-        let fresh: std::collections::HashSet<String> = selected_names
-            .iter()
-            .map(|n| crate::normalize::normalize_key(&format!("skill:{}:{}", slug, n)))
-            .collect();
-        let orphans = store
-            .list_skills()?
-            .into_iter()
-            .filter(|s| derive_source_slug(&s.source) == slug && !fresh.contains(&s.entity_name))
-            .map(|s| s.entity_name)
-            .collect::<Vec<_>>();
-        if !orphans.is_empty() {
-            store.remove_skills(orphans.clone())?;
-            outcome.pruned = orphans;
-        }
-    }
+    let mut collected = Vec::new();
     for name in selected_names {
         let body = skill_contents
             .remove(&name)
@@ -412,36 +412,105 @@ pub fn install_skills_from_dir<S: crate::api::SkillStore>(
             .find(|(n, _)| n == &name)
             .map(|(_, d)| d.clone())
             .unwrap_or_default();
-        let entity_name = crate::normalize::normalize_key(&format!("skill:{}:{}", slug, name));
-        store.upsert_skill(crate::api::SkillRecord {
-            entity_name: entity_name.clone(),
-            body,
+        collected.push(CollectedSkill {
+            dir_name: format!(
+                "{}@{}",
+                crate::normalize::slugify(&slug),
+                crate::normalize::slugify(&name)
+            ),
+            name,
+            description,
             source: source.to_string(),
             version: version.to_string(),
-            description,
-        })?;
-        outcome.installed.push(entity_name);
+            body,
+        });
     }
-    Ok(outcome)
+    Ok(collected)
 }
 
-/// The on-disk directory for a skill entity: `skill:<slug>:<name>` becomes
-/// `<slug>@<name>`. Returns `None` for anything that is not a skill entity.
+/// A skill as recorded on disk, for `skills` and `skills show`.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InstalledSkill {
+    /// On-disk directory name: `<source-slug>@<skill-name>`.
+    pub dir: String,
+    pub name: String,
+    #[serde(default)]
+    pub description: String,
+    /// Canonical source URL or path.
+    #[serde(default)]
+    pub source: String,
+    /// The git commit this was taken from, or `local`. Empty when the manifest
+    /// was missing and this entry was recovered by scanning.
+    #[serde(default)]
+    pub version: String,
+}
+
+/// Provenance sidecar written beside the installed skills.
 ///
-/// Both halves are slugified to lowercase kebab-case, so a frontmatter name
-/// like `Verification Before Completion` lands in a canonical directory rather
-/// than carrying its display capitalisation onto the filesystem.
-pub fn skill_dir_name(entity_name: &str) -> Option<String> {
-    let rest = entity_name.strip_prefix("skill:")?;
-    let (slug, name) = rest.split_once(':')?;
-    if slug.is_empty() || name.is_empty() {
-        return None;
+/// Until 0.7 a skill's source and version lived on its graph entity, so with
+/// the graph copy gone they need a home on disk — and the previous arrangement
+/// recorded them so poorly that every installed skill in practice carried only
+/// a `description` and no version at all. Keeping them here makes `skills`
+/// report what commit each skill came from, lets `update` find its sources
+/// again, and gives pruning an explicit record instead of inferring intent
+/// from directory names.
+pub const MANIFEST_FILE: &str = ".asobi-skills.json";
+
+#[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
+struct Manifest {
+    skills: Vec<InstalledSkill>,
+}
+
+/// Read the installed-skill manifest from `dir`.
+///
+/// Falls back to scanning `<slug>@<name>` directories when the manifest is
+/// absent — an older tree, or one a human edited — so listing still works, at
+/// the cost of empty `source`/`version`. Directories without `@` are ignored
+/// either way, the same convention [`materialize_skills`] prunes by.
+pub fn read_installed_skills(dir: &Path) -> Result<Vec<InstalledSkill>> {
+    if let Ok(raw) = std::fs::read_to_string(dir.join(MANIFEST_FILE))
+        && let Ok(manifest) = serde_json::from_str::<Manifest>(&raw)
+    {
+        let mut skills = manifest.skills;
+        skills.retain(|s| dir.join(&s.dir).join("SKILL.md").is_file());
+        skills.sort_by(|a, b| a.dir.cmp(&b.dir));
+        return Ok(skills);
     }
-    Some(format!(
-        "{}@{}",
-        crate::normalize::slugify(slug),
-        crate::normalize::slugify(name)
-    ))
+
+    let mut found = Vec::new();
+    let entries = match std::fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(found),
+        Err(e) => return Err(anyhow!("read {}: {e}", dir.display())),
+    };
+    for entry in entries {
+        let entry = entry?;
+        let Some(dir_name) = entry.file_name().to_str().map(str::to_string) else {
+            continue;
+        };
+        if !entry.file_type()?.is_dir() || !dir_name.contains('@') {
+            continue;
+        }
+        let Ok(content) = std::fs::read_to_string(entry.path().join("SKILL.md")) else {
+            continue;
+        };
+        let (name, description) = parse_frontmatter(&content).unwrap_or((None, None));
+        found.push(InstalledSkill {
+            name: name.unwrap_or_else(|| {
+                dir_name
+                    .split_once('@')
+                    .map(|(_, n)| n.to_string())
+                    .unwrap_or_else(|| dir_name.clone())
+            }),
+            description: description.unwrap_or_default(),
+            dir: dir_name,
+            source: String::new(),
+            version: String::new(),
+        });
+    }
+    found.sort_by(|a, b| a.dir.cmp(&b.dir));
+    Ok(found)
 }
 
 /// Write `desired` out as `<dir>/<slug>@<name>/SKILL.md`, then remove every
@@ -449,35 +518,28 @@ pub fn skill_dir_name(entity_name: &str) -> Option<String> {
 ///
 /// Pruning is deliberately scoped to the `@` naming convention: directories
 /// Asobi did not write — a hand-authored skill, a vendored upstream checkout —
-/// have no `@` in their name and are never touched.
-pub fn materialize_skills<S: crate::api::SkillStore>(
-    store: &S,
-    dir: &Path,
-    desired: &[String],
-) -> Result<MaterializeOutcome> {
+/// have no `@` in their name and are never touched. Since 0.7 this is the only
+/// place a skill is stored, so this pruning pass is also what retires a skill
+/// the config stopped declaring or a source dropped upstream.
+pub fn materialize_skills(dir: &Path, desired: &[CollectedSkill]) -> Result<MaterializeOutcome> {
     let mut outcome = MaterializeOutcome::default();
-    let wanted: std::collections::HashSet<String> =
-        desired.iter().filter_map(|e| skill_dir_name(e)).collect();
+    let wanted: std::collections::HashSet<&str> =
+        desired.iter().map(|s| s.dir_name.as_str()).collect();
 
     std::fs::create_dir_all(dir)?;
 
-    for entity in desired {
-        let Some(dir_name) = skill_dir_name(entity) else {
-            continue;
-        };
-        let body = store
-            .skill_body(entity)?
-            .ok_or_else(|| anyhow!("Skill '{}' has no body to write", entity))?;
-        let skill_dir = dir.join(&dir_name);
+    for skill in desired {
+        let dir_name = &skill.dir_name;
+        let skill_dir = dir.join(dir_name);
         let file = skill_dir.join("SKILL.md");
         // Leave an already-current file alone so a no-op sync does not churn
         // mtimes that file watchers key off.
-        if std::fs::read_to_string(&file).is_ok_and(|existing| existing == body) {
+        if std::fs::read_to_string(&file).is_ok_and(|existing| existing == skill.body) {
             continue;
         }
         std::fs::create_dir_all(&skill_dir)?;
-        std::fs::write(&file, body)?;
-        outcome.written.push(dir_name);
+        std::fs::write(&file, &skill.body)?;
+        outcome.written.push(dir_name.clone());
     }
 
     for entry in std::fs::read_dir(dir)? {
@@ -488,11 +550,28 @@ pub fn materialize_skills<S: crate::api::SkillStore>(
         let Some(name) = entry.file_name().to_str().map(str::to_string) else {
             continue;
         };
-        if name.contains('@') && !wanted.contains(&name) {
+        if name.contains('@') && !wanted.contains(name.as_str()) {
             std::fs::remove_dir_all(entry.path())?;
             outcome.removed.push(name);
         }
     }
+
+    let manifest = Manifest {
+        skills: desired
+            .iter()
+            .map(|s| InstalledSkill {
+                dir: s.dir_name.clone(),
+                name: s.name.clone(),
+                description: s.description.clone(),
+                source: s.source.clone(),
+                version: s.version.clone(),
+            })
+            .collect(),
+    };
+    std::fs::write(
+        dir.join(MANIFEST_FILE),
+        serde_json::to_string_pretty(&manifest)? + "\n",
+    )?;
 
     outcome.written.sort();
     outcome.removed.sort();
@@ -502,8 +581,6 @@ pub fn materialize_skills<S: crate::api::SkillStore>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::api::SkillStore;
-    use crate::storage::Storage;
 
     #[test]
     fn test_parse_frontmatter_valid() {
@@ -634,16 +711,6 @@ mod tests {
             .unwrap();
         let head_commit = String::from_utf8(output.stdout).unwrap().trim().to_string();
 
-        // 4. Setup temp database
-        let db_dir = tempdir().unwrap();
-        unsafe {
-            std::env::set_var(
-                crate::paths::ENV_DATABASE_URL,
-                db_dir.path().join("test.db").to_str().unwrap(),
-            );
-        }
-        let storage = Storage::open_default().unwrap();
-
         // 5. Clone and install
         let clone_temp_dir = tempdir().unwrap();
         let clone_path = clone_temp_dir.path();
@@ -654,134 +721,116 @@ mod tests {
             .status()
             .unwrap();
 
-        install_skills_from_dir(
-            &storage,
+        let collected = collect_skills_from_dir(
             clone_path,
             repo_path.to_str().unwrap(),
             &head_commit,
             SelectionMode::All,
             false,
-            true,
         )
         .unwrap();
 
-        // 6. Verify skill installed
-        let skills = storage.list_skills().unwrap();
-        assert_eq!(skills.len(), 1);
+        // 6. Verify what was collected
+        assert_eq!(collected.len(), 1);
+        assert_eq!(collected[0].name, "repo-skill");
+        assert_eq!(collected[0].version, head_commit);
         assert_eq!(
-            skills[0].entity_name,
-            crate::normalize::normalize_key(&format!(
-                "skill:{}:repo-skill",
-                derive_source_slug(repo_path.to_str().unwrap())
-            ))
-        );
-        assert_eq!(skills[0].version, head_commit);
-    }
-
-    #[test]
-    fn test_sync_prunes_orphaned_skills() {
-        use tempfile::tempdir;
-        let src_dir = tempdir().unwrap();
-        let src = src_dir.path();
-
-        // Initial source with two skills.
-        std::fs::write(
-            src.join("alpha.md"),
-            "---\nname: alpha\ndescription: a\n---\nalpha body\n",
-        )
-        .unwrap();
-        std::fs::write(
-            src.join("beta.md"),
-            "---\nname: beta\ndescription: b\n---\nbeta body\n",
-        )
-        .unwrap();
-
-        let db_dir = tempdir().unwrap();
-        unsafe {
-            std::env::set_var(
-                crate::paths::ENV_DATABASE_URL,
-                db_dir.path().join("test.db").to_str().unwrap(),
-            );
-        }
-        let storage = Storage::open_default().unwrap();
-
-        let source = src.to_str().unwrap();
-        let slug = derive_source_slug(source);
-
-        install_skills_from_dir(&storage, src, source, "v1", SelectionMode::All, false, true)
-            .unwrap();
-        assert_eq!(storage.list_skills().unwrap().len(), 2);
-
-        // Upstream removes `beta`; a sync (install --all) must prune it.
-        std::fs::remove_file(src.join("beta.md")).unwrap();
-
-        install_skills_from_dir(&storage, src, source, "v2", SelectionMode::All, false, true)
-            .unwrap();
-
-        let skills = storage.list_skills().unwrap();
-        assert_eq!(skills.len(), 1);
-        let alpha = crate::normalize::normalize_key(&format!("skill:{}:alpha", slug));
-        assert_eq!(skills[0].entity_name, alpha);
-        assert_eq!(skills[0].version, "v2");
-    }
-
-    #[test]
-    fn test_select_does_not_prune() {
-        use tempfile::tempdir;
-        let src_dir = tempdir().unwrap();
-        let src = src_dir.path();
-
-        std::fs::write(
-            src.join("alpha.md"),
-            "---\nname: alpha\ndescription: a\n---\nalpha body\n",
-        )
-        .unwrap();
-        std::fs::write(
-            src.join("beta.md"),
-            "---\nname: beta\ndescription: b\n---\nbeta body\n",
-        )
-        .unwrap();
-
-        let db_dir = tempdir().unwrap();
-        unsafe {
-            std::env::set_var(
-                crate::paths::ENV_DATABASE_URL,
-                db_dir.path().join("test.db").to_str().unwrap(),
-            );
-        }
-        let storage = Storage::open_default().unwrap();
-        let source = src.to_str().unwrap();
-
-        // Install only alpha, then only beta — both must survive (additive).
-        for name in ["alpha", "beta"] {
-            install_skills_from_dir(
-                &storage,
-                src,
-                source,
-                "v1",
-                SelectionMode::Select(vec![name.to_string()]),
-                false,
-                false,
+            collected[0].dir_name,
+            format!(
+                "{}@repo-skill",
+                crate::normalize::slugify(&derive_source_slug(repo_path.to_str().unwrap()))
             )
-            .unwrap();
-        }
-
-        assert_eq!(storage.list_skills().unwrap().len(), 2);
+        );
     }
 
+    /// Pruning lives entirely in `materialize_skills` now that disk is the only
+    /// store: whatever the caller does not pass in this run is what goes.
     #[test]
-    fn test_skill_dir_name() {
-        assert_eq!(
-            skill_dir_name("skill:obra-superpowers:writing-plans").as_deref(),
-            Some("obra-superpowers@writing-plans")
-        );
-        // A display-cased frontmatter name is canonicalised, not carried through.
-        assert_eq!(
-            skill_dir_name("skill:obra-superpowers:Verification-Before-Completion").as_deref(),
-            Some("obra-superpowers@verification-before-completion")
-        );
-        assert_eq!(skill_dir_name("obra-superpowers:writing-plans"), None);
-        assert_eq!(skill_dir_name("skill:no-name-part"), None);
+    fn test_materialize_prunes_skills_dropped_upstream() {
+        use tempfile::tempdir;
+        let src_dir = tempdir().unwrap();
+        let src = src_dir.path();
+        std::fs::write(
+            src.join("alpha.md"),
+            "---\nname: alpha\ndescription: a\n---\nalpha body\n",
+        )
+        .unwrap();
+        std::fs::write(
+            src.join("beta.md"),
+            "---\nname: beta\ndescription: b\n---\nbeta body\n",
+        )
+        .unwrap();
+        let source = src.to_str().unwrap();
+        let out_dir = tempdir().unwrap();
+        let out = out_dir.path();
+
+        let first = collect_skills_from_dir(src, source, "v1", SelectionMode::All, false).unwrap();
+        assert_eq!(first.len(), 2);
+        materialize_skills(out, &first).unwrap();
+        assert_eq!(read_installed_skills(out).unwrap().len(), 2);
+
+        // Upstream removes `beta`; the next sync must drop it from disk.
+        std::fs::remove_file(src.join("beta.md")).unwrap();
+        let second = collect_skills_from_dir(src, source, "v2", SelectionMode::All, false).unwrap();
+        let outcome = materialize_skills(out, &second).unwrap();
+
+        assert_eq!(outcome.removed.len(), 1);
+        let installed = read_installed_skills(out).unwrap();
+        assert_eq!(installed.len(), 1);
+        assert_eq!(installed[0].name, "alpha");
+        assert_eq!(installed[0].version, "v2");
+    }
+
+    /// The manifest is what carries source and version, which the graph used to
+    /// hold — and held so poorly that no installed skill had a version at all.
+    #[test]
+    fn test_manifest_records_provenance() {
+        use tempfile::tempdir;
+        let src_dir = tempdir().unwrap();
+        let src = src_dir.path();
+        std::fs::write(
+            src.join("alpha.md"),
+            "---\nname: alpha\ndescription: a\n---\nalpha body\n",
+        )
+        .unwrap();
+        let out_dir = tempdir().unwrap();
+        let out = out_dir.path();
+        let collected = collect_skills_from_dir(
+            src,
+            "https://example.com/o/r.git",
+            "abc123",
+            SelectionMode::All,
+            false,
+        )
+        .unwrap();
+        materialize_skills(out, &collected).unwrap();
+
+        assert!(out.join(MANIFEST_FILE).is_file());
+        let installed = read_installed_skills(out).unwrap();
+        assert_eq!(installed[0].source, "https://example.com/o/r.git");
+        assert_eq!(installed[0].version, "abc123");
+        assert_eq!(installed[0].description, "a");
+    }
+
+    /// Without a manifest — an older tree, or one a human pruned by hand —
+    /// listing still works off the directory names, minus the provenance.
+    #[test]
+    fn test_read_installed_falls_back_to_scanning() {
+        use tempfile::tempdir;
+        let out_dir = tempdir().unwrap();
+        let out = out_dir.path();
+        let dir = out.join("some-source@alpha");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("SKILL.md"),
+            "---\nname: alpha\ndescription: a\n---\nbody\n",
+        )
+        .unwrap();
+
+        let installed = read_installed_skills(out).unwrap();
+        assert_eq!(installed.len(), 1);
+        assert_eq!(installed[0].name, "alpha");
+        assert!(installed[0].version.is_empty());
     }
 
     #[test]
@@ -799,32 +848,21 @@ mod tests {
             "---\nname: beta\ndescription: b\n---\nbeta body\n",
         )
         .unwrap();
-
-        let db_dir = tempdir().unwrap();
-        unsafe {
-            std::env::set_var(
-                crate::paths::ENV_DATABASE_URL,
-                db_dir.path().join("test.db").to_str().unwrap(),
-            );
-        }
-        let storage = Storage::open_default().unwrap();
         let source = src.to_str().unwrap();
 
-        let outcome =
-            install_skills_from_dir(&storage, src, source, "v1", SelectionMode::All, false, true)
-                .unwrap();
-        assert_eq!(outcome.installed.len(), 2);
-
-        let entity = |suffix: &str| -> String {
-            outcome
-                .installed
+        let collected =
+            collect_skills_from_dir(src, source, "v1", SelectionMode::All, false).unwrap();
+        assert_eq!(collected.len(), 2);
+        let dir_of = |name: &str| -> String {
+            collected
                 .iter()
-                .find(|e| e.ends_with(suffix))
+                .find(|s| s.name == name)
                 .unwrap()
+                .dir_name
                 .clone()
         };
-        let alpha_dir = skill_dir_name(&entity(":alpha")).unwrap();
-        let beta_dir = skill_dir_name(&entity(":beta")).unwrap();
+        let alpha_dir = dir_of("alpha");
+        let beta_dir = dir_of("beta");
 
         let out_dir = tempdir().unwrap();
         let out = out_dir.path();
@@ -833,7 +871,7 @@ mod tests {
         std::fs::create_dir(out.join("vendored-upstream")).unwrap();
         std::fs::write(out.join("README.md"), "mine").unwrap();
 
-        let written = materialize_skills(&storage, out, &outcome.installed).unwrap();
+        let written = materialize_skills(out, &collected).unwrap();
         assert_eq!(written.written.len(), 2);
         assert!(written.removed.is_empty());
         assert_eq!(
@@ -842,12 +880,17 @@ mod tests {
         );
 
         // Re-running with the same desired set is a no-op on disk.
-        let again = materialize_skills(&storage, out, &outcome.installed).unwrap();
+        let again = materialize_skills(out, &collected).unwrap();
         assert!(again.written.is_empty());
         assert!(again.removed.is_empty());
 
         // Narrowing the desired set removes only the dropped skill.
-        let narrowed = materialize_skills(&storage, out, &[entity(":alpha")]).unwrap();
+        let only_alpha: Vec<_> = collected
+            .iter()
+            .filter(|s| s.name == "alpha")
+            .cloned()
+            .collect();
+        let narrowed = materialize_skills(out, &only_alpha).unwrap();
         assert_eq!(narrowed.removed, vec![beta_dir.clone()]);
         assert!(out.join(&alpha_dir).is_dir());
         assert!(!out.join(&beta_dir).exists());
@@ -926,16 +969,6 @@ mod tests {
             .unwrap();
         let head_commit = String::from_utf8(output.stdout).unwrap().trim().to_string();
 
-        // 4. Setup temp database
-        let db_dir = tempdir().unwrap();
-        unsafe {
-            std::env::set_var(
-                crate::paths::ENV_DATABASE_URL,
-                db_dir.path().join("test.db").to_str().unwrap(),
-            );
-        }
-        let storage = Storage::open_default().unwrap();
-
         // 5. Clone and install
         let clone_temp_dir = tempdir().unwrap();
         let clone_path = clone_temp_dir.path();
@@ -946,35 +979,26 @@ mod tests {
             .status()
             .unwrap();
 
-        install_skills_from_dir(
-            &storage,
+        let collected = collect_skills_from_dir(
             clone_path,
             repo_path.to_str().unwrap(),
             &head_commit,
             SelectionMode::All,
             false,
-            true,
         )
         .unwrap();
 
-        // 6. Verify skills installed correctly with fallbacks
-        let skills = storage.list_skills().unwrap();
-        assert_eq!(skills.len(), 2);
+        // 6. Verify skills collected correctly with name fallbacks
+        assert_eq!(collected.len(), 2);
 
-        let slug = derive_source_slug(repo_path.to_str().unwrap());
+        let refactor = collected.iter().find(|s| s.name == "refactor").unwrap();
+        assert_eq!(refactor.description, "Iterative refactoring loop");
 
-        let refactor_entity = crate::normalize::normalize_key(&format!("skill:{}:refactor", slug));
-        let sdr_entity =
-            crate::normalize::normalize_key(&format!("skill:{}:software-design-review", slug));
-
-        let refactor_row = skills
+        let sdr = collected
             .iter()
-            .find(|s| s.entity_name == refactor_entity)
+            .find(|s| s.name == "software-design-review")
             .unwrap();
-        assert_eq!(refactor_row.description, "Iterative refactoring loop");
-
-        let sdr_row = skills.iter().find(|s| s.entity_name == sdr_entity).unwrap();
-        assert_eq!(sdr_row.description, "");
+        assert_eq!(sdr.description, "");
     }
 
     #[test]
@@ -1147,23 +1171,12 @@ mod tests {
         )
         .unwrap();
 
-        let db_dir = tempdir().unwrap();
-        unsafe {
-            std::env::set_var(
-                crate::paths::ENV_DATABASE_URL,
-                db_dir.path().join("test.db").to_str().unwrap(),
-            );
-        }
-        let storage = Storage::open_default().unwrap();
         let source = src.to_str().unwrap();
 
-        let outcome =
-            install_skills_from_dir(&storage, src, source, "v1", SelectionMode::All, false, true)
-                .unwrap();
-        assert_eq!(outcome.installed.len(), 1);
-
-        let body = storage.skill_body(&outcome.installed[0]).unwrap().unwrap();
-        assert!(body.contains("Write briefs like this."));
+        let collected =
+            collect_skills_from_dir(src, source, "v1", SelectionMode::All, false).unwrap();
+        assert_eq!(collected.len(), 1);
+        assert!(collected[0].body.contains("Write briefs like this."));
     }
 
     #[test]
@@ -1188,19 +1201,10 @@ mod tests {
         )
         .unwrap();
 
-        let db_dir = tempdir().unwrap();
-        unsafe {
-            std::env::set_var(
-                crate::paths::ENV_DATABASE_URL,
-                db_dir.path().join("test.db").to_str().unwrap(),
-            );
-        }
-        let storage = Storage::open_default().unwrap();
         let source = src.to_str().unwrap();
 
         let err =
-            install_skills_from_dir(&storage, src, source, "v1", SelectionMode::All, false, true)
-                .unwrap_err();
+            collect_skills_from_dir(src, source, "v1", SelectionMode::All, false).unwrap_err();
         let message = err.to_string();
         assert!(message.contains("dup"), "message was: {message}");
         assert!(message.contains("one.md"), "message was: {message}");
@@ -1234,27 +1238,17 @@ mod tests {
         )
         .unwrap();
 
-        let db_dir = tempdir().unwrap();
-        unsafe {
-            std::env::set_var(
-                crate::paths::ENV_DATABASE_URL,
-                db_dir.path().join("test.db").to_str().unwrap(),
-            );
-        }
-        let storage = Storage::open_default().unwrap();
         let source = src.to_str().unwrap();
 
-        let outcome = install_skills_from_dir(
-            &storage,
+        let outcome = collect_skills_from_dir(
             src,
             source,
             "v1",
             SelectionMode::Select(vec!["fine".to_string()]),
             false,
-            false,
         )
         .unwrap();
-        assert_eq!(outcome.installed.len(), 1);
-        assert!(outcome.installed[0].ends_with(":fine"));
+        assert_eq!(outcome.len(), 1);
+        assert_eq!(outcome[0].name, "fine");
     }
 }

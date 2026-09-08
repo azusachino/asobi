@@ -1,6 +1,5 @@
 use super::commands::SkillsCommands;
 use super::runtime::*;
-use crate::api::SkillStore;
 use crate::paths::AsobiPaths;
 use anyhow::Result;
 use std::io::IsTerminal;
@@ -67,28 +66,61 @@ fn classify_skill_source(source: &str) -> (String, bool) {
     (git_url, is_git)
 }
 
-pub(crate) fn run(
-    backend: &crate::storage::Storage,
-    paths: &AsobiPaths,
-    subcommand: Option<SkillsCommands>,
-) -> Result<()> {
+/// Where installed skills live: the `[skills]` block's `path` when an
+/// `asobi.toml` declares one, otherwise `.agents/skills` under the discovered
+/// root.
+///
+/// The fallback matters. `asobi init` without `--local` writes no `asobi.toml`
+/// at all, so requiring the config here would leave the default XDG install
+/// with no way to reach its own skills.
+fn skills_dir(paths: &AsobiPaths) -> Result<std::path::PathBuf> {
+    if let Some(config_file) = paths.config_file.as_ref()
+        && let Some(config) = crate::skills_config::SkillsConfig::load(config_file)?
+    {
+        return Ok(config.resolved_path(&paths.root));
+    }
+    Ok(paths.root.join(".agents/skills"))
+}
+
+/// Collect from one source and write the result to disk, replacing whatever
+/// that source had installed before.
+fn sync_sources(
+    dir: &std::path::Path,
+    collected: Vec<crate::skills::CollectedSkill>,
+) -> Result<crate::skills::MaterializeOutcome> {
+    crate::skills::materialize_skills(dir, &collected)
+}
+
+pub(crate) fn run(paths: &AsobiPaths, subcommand: Option<SkillsCommands>) -> Result<()> {
+    let dir = skills_dir(paths)?;
     match subcommand {
         None => {
-            let skills = backend.list_skills()?;
+            let skills = crate::skills::read_installed_skills(&dir)?;
             if skills.is_empty() {
-                println!("No skills installed.");
-            } else {
-                let mut grouped: std::collections::BTreeMap<String, Vec<crate::api::SkillRecord>> =
-                    std::collections::BTreeMap::new();
-                for s in skills {
-                    grouped.entry(s.source.clone()).or_default().push(s);
-                }
-                println!("Installed Skills:");
-                for (source, list) in grouped {
-                    println!("Source: {}", source);
-                    for s in list {
-                        println!("  {} · {} · {}", s.entity_name, s.description, s.version);
-                    }
+                println!("No skills installed in {}.", dir.display());
+                return Ok(());
+            }
+            let mut grouped: std::collections::BTreeMap<String, Vec<_>> = Default::default();
+            for s in skills {
+                grouped
+                    .entry(if s.source.is_empty() {
+                        "(unknown source)".to_string()
+                    } else {
+                        s.source.clone()
+                    })
+                    .or_default()
+                    .push(s);
+            }
+            println!("Installed Skills ({}):", dir.display());
+            for (source, list) in grouped {
+                println!("Source: {}", source);
+                for s in list {
+                    let version = if s.version.is_empty() {
+                        "unrecorded".to_string()
+                    } else {
+                        s.version.clone()
+                    };
+                    println!("  {} · {} · {}", s.name, s.description, version);
                 }
             }
         }
@@ -100,7 +132,6 @@ pub(crate) fn run(
         }) => {
             let checkout = checkout_source(&source, &paths.caches_dir())?;
             let walk_dir = scoped_dir(&checkout.path, subdir.as_deref())?;
-
             let mode = if all {
                 crate::skills::SelectionMode::All
             } else if let Some(sel) = select {
@@ -108,24 +139,31 @@ pub(crate) fn run(
             } else {
                 crate::skills::SelectionMode::Interactive
             };
-
-            let is_tty = std::io::stdin().is_terminal();
-
-            // `--all` is a full sync of the source: prune skills that
-            // vanished upstream. `--select` / interactive stay additive.
-            let prune = matches!(mode, crate::skills::SelectionMode::All);
-
-            crate::skills::install_skills_from_dir(
-                backend,
+            let fresh = crate::skills::collect_skills_from_dir(
                 &walk_dir,
                 &checkout.url,
                 &checkout.version,
                 mode,
-                is_tty,
-                prune,
+                std::io::stdin().is_terminal(),
             )?;
 
-            info!("Skills installed successfully.");
+            // Installing is additive across sources: keep what other sources
+            // put here, replace only this source's own skills. `--all` is a
+            // full sync of *this* source, so anything it dropped upstream goes.
+            let slug = crate::skills::derive_source_slug(&checkout.url);
+            let mut desired: Vec<_> = crate::skills::read_installed_skills(&dir)?
+                .into_iter()
+                .filter(|s| crate::skills::derive_source_slug(&s.source) != slug)
+                .filter_map(|s| reload(&dir, &s))
+                .collect();
+            desired.extend(fresh);
+            let written = sync_sources(&dir, desired)?;
+            info!(
+                "Installed into {} ({} written, {} removed)",
+                dir.display(),
+                written.written.len(),
+                written.removed.len()
+            );
         }
         Some(SkillsCommands::Sync) => {
             let config_file = paths.config_file.as_ref().ok_or_else(|| {
@@ -153,87 +191,76 @@ pub(crate) fn run(
                 .map(|s| s.selection())
                 .collect::<Result<Vec<_>>>()?;
 
-            let mut declared_slugs = std::collections::HashSet::new();
             let mut desired = Vec::new();
             for (declared, mode) in config.sources.iter().zip(selections) {
                 let checkout = checkout_source(&declared.url, &paths.caches_dir())?;
-                declared_slugs.insert(crate::skills::derive_source_slug(&checkout.url));
                 let walk_dir = scoped_dir(&checkout.path, declared.subdir.as_deref())?;
-
-                let outcome = crate::skills::install_skills_from_dir(
-                    backend,
+                let collected = crate::skills::collect_skills_from_dir(
                     &walk_dir,
                     &checkout.url,
                     &checkout.version,
                     mode,
                     false,
-                    true,
                 )?;
-                info!(
-                    "{}: {} installed, {} pruned",
-                    declared.url,
-                    outcome.installed.len(),
-                    outcome.pruned.len()
-                );
-                desired.extend(outcome.installed);
+                info!("{}: {} selected", declared.url, collected.len());
+                desired.extend(collected);
             }
 
-            // A source dropped from the config leaves the graph entirely.
-            let stale: Vec<String> = backend
-                .list_skills()?
-                .into_iter()
-                .filter(|s| !declared_slugs.contains(&crate::skills::derive_source_slug(&s.source)))
-                .map(|s| s.entity_name)
-                .collect();
-            if !stale.is_empty() {
-                info!("Removing {} skills from undeclared sources", stale.len());
-                backend.remove_skills(stale)?;
-            }
-
-            let skills_dir = config.resolved_path(&paths.root);
-            let written = crate::skills::materialize_skills(backend, &skills_dir, &desired)?;
+            // The config is the whole truth: materialize prunes every skill
+            // directory it did not just write, so a source dropped from the
+            // config leaves the tree without any separate bookkeeping.
+            let written = sync_sources(&dir, desired)?;
             info!(
-                "Synced {} skills into {} ({} written, {} removed)",
-                desired.len(),
-                skills_dir.display(),
+                "Synced into {} ({} written, {} removed)",
+                dir.display(),
                 written.written.len(),
                 written.removed.len()
             );
         }
         Some(SkillsCommands::Update { source }) => {
-            let skills = backend.list_skills()?;
-            let mut unique_sources = std::collections::HashSet::new();
-            for s in skills {
-                if let Some(ref filter_src) = source {
-                    let slug = crate::skills::derive_source_slug(&s.source);
-                    if &s.source == filter_src || &slug == filter_src {
-                        unique_sources.insert(s.source.clone());
+            let installed = crate::skills::read_installed_skills(&dir)?;
+            let sources: std::collections::BTreeSet<String> = installed
+                .iter()
+                .filter(|s| !s.source.is_empty())
+                .filter(|s| match source.as_ref() {
+                    None => true,
+                    Some(filter) => {
+                        &s.source == filter
+                            || &crate::skills::derive_source_slug(&s.source) == filter
                     }
-                } else {
-                    unique_sources.insert(s.source.clone());
+                })
+                .map(|s| s.source.clone())
+                .collect();
+
+            if sources.is_empty() {
+                match source {
+                    Some(val) => anyhow::bail!(
+                        "No installed skills found matching source/slug {:?} in {}",
+                        val,
+                        dir.display()
+                    ),
+                    None => {
+                        info!("No skills with a recorded source in {}.", dir.display());
+                        return Ok(());
+                    }
                 }
             }
 
-            if unique_sources.is_empty() {
-                if let Some(src_val) = source {
-                    anyhow::bail!(
-                        "No installed skills found matching source/slug {:?}",
-                        src_val
-                    );
-                } else {
-                    info!("No skills currently installed.");
-                    return Ok(());
+            // Refreshed sources are re-collected; everything else is carried
+            // over untouched so a scoped update never prunes a sibling source.
+            let mut desired = Vec::new();
+            for s in &installed {
+                if !sources.contains(&s.source)
+                    && let Some(kept) = reload(&dir, s)
+                {
+                    desired.push(kept);
                 }
             }
-
-            for src in unique_sources {
+            for src in sources {
                 info!("Updating skills from {}...", src);
                 let (git_url, is_git) = classify_skill_source(&src);
-
                 let (target_path, version) = if is_git {
-                    let (cache_path, ver) =
-                        get_or_update_cached_repo(&git_url, &paths.caches_dir())?;
-                    (cache_path, ver)
+                    get_or_update_cached_repo(&git_url, &paths.caches_dir())?
                 } else {
                     let local_path = std::path::Path::new(&src);
                     if !local_path.exists() {
@@ -242,79 +269,85 @@ pub(crate) fn run(
                     }
                     (local_path.to_path_buf(), "local".to_string())
                 };
-
-                crate::skills::install_skills_from_dir(
-                    backend,
+                desired.extend(crate::skills::collect_skills_from_dir(
                     &target_path,
                     &git_url,
                     &version,
                     crate::skills::SelectionMode::All,
                     false,
-                    true,
-                )?;
-                info!("Successfully updated skills from {}.", src);
+                )?);
             }
+            let written = sync_sources(&dir, desired)?;
+            info!(
+                "Updated {} ({} written, {} removed)",
+                dir.display(),
+                written.written.len(),
+                written.removed.len()
+            );
         }
         Some(SkillsCommands::Remove { target }) => {
-            let skills = backend.list_skills()?;
-            let mut entities_to_delete = Vec::new();
-            for s in skills {
-                let slug = crate::skills::derive_source_slug(&s.source);
-                if s.entity_name == target || s.source == target || slug == target {
-                    entities_to_delete.push(s.entity_name.clone());
-                }
+            let installed = crate::skills::read_installed_skills(&dir)?;
+            let (dropped, kept): (Vec<_>, Vec<_>) = installed.into_iter().partition(|s| {
+                s.name == target
+                    || s.dir == target
+                    || s.source == target
+                    || crate::skills::derive_source_slug(&s.source) == target
+            });
+            if dropped.is_empty() {
+                anyhow::bail!(
+                    "No installed skills found matching target {:?} in {}",
+                    target,
+                    dir.display()
+                );
             }
-
-            if !entities_to_delete.is_empty() {
-                info!("Deleting {} skill entities...", entities_to_delete.len());
-                backend.remove_skills(entities_to_delete)?;
-                info!("Skills removed successfully.");
-            } else if target.starts_with("skill:") {
-                info!("Deleting skill entity {}...", target);
-                backend.remove_skills(vec![target.clone()])?;
-                info!("Skills removed successfully.");
-            } else {
-                anyhow::bail!("No installed skills found matching target {:?}", target);
-            }
+            let desired: Vec<_> = kept.iter().filter_map(|s| reload(&dir, s)).collect();
+            let written = sync_sources(&dir, desired)?;
+            info!(
+                "Removed {} skill(s) from {}",
+                written.removed.len(),
+                dir.display()
+            );
         }
         Some(SkillsCommands::Show { name }) => {
-            let mut entity_name = name.clone();
-            if !entity_name.starts_with("skill:") {
-                let skills = backend.list_skills()?;
-                let matches: Vec<_> = skills
-                    .iter()
-                    .filter(|s| {
-                        s.entity_name == name || s.entity_name.ends_with(&format!(":{}", name))
-                    })
-                    .collect();
-                if matches.len() == 1 {
-                    entity_name = matches[0].entity_name.clone();
-                } else if matches.len() > 1 {
-                    anyhow::bail!(
-                        "Ambiguous skill name '{}'. Matches: {}",
-                        name,
-                        matches
-                            .iter()
-                            .map(|s| &s.entity_name)
-                            .cloned()
-                            .collect::<Vec<_>>()
-                            .join(", ")
-                    );
-                } else {
-                    entity_name = format!("skill:{}", name);
-                }
-            }
-
-            match backend.skill_body(&entity_name)? {
-                Some(body) => {
-                    print!("{}", body);
-                }
-                None => {
-                    anyhow::bail!("Skill '{}' not found", name);
-                }
+            let installed = crate::skills::read_installed_skills(&dir)?;
+            let matches: Vec<_> = installed
+                .iter()
+                .filter(|s| s.name == name || s.dir == name)
+                .collect();
+            match matches.as_slice() {
+                [one] => print!(
+                    "{}",
+                    std::fs::read_to_string(dir.join(&one.dir).join("SKILL.md"))?
+                ),
+                [] => anyhow::bail!("Skill '{}' not found in {}", name, dir.display()),
+                many => anyhow::bail!(
+                    "Ambiguous skill name '{}'. Matches: {}",
+                    name,
+                    many.iter()
+                        .map(|s| s.dir.clone())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
             }
         }
     }
 
     Ok(())
+}
+
+/// Re-read an already-installed skill's body so it can be carried through a
+/// rewrite of the tree untouched.
+fn reload(
+    dir: &std::path::Path,
+    installed: &crate::skills::InstalledSkill,
+) -> Option<crate::skills::CollectedSkill> {
+    let body = std::fs::read_to_string(dir.join(&installed.dir).join("SKILL.md")).ok()?;
+    Some(crate::skills::CollectedSkill {
+        dir_name: installed.dir.clone(),
+        name: installed.name.clone(),
+        description: installed.description.clone(),
+        source: installed.source.clone(),
+        version: installed.version.clone(),
+        body,
+    })
 }
