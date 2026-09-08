@@ -1,8 +1,8 @@
 use crate::api::v2::{
     ApiError, ApiResult, BackendCapabilities, BackendHealth, BackupReceipt, BackupRequest,
-    BackupStore, GraphStore, ImportReport, MaintenanceStore, OpenNodes, PurgeCandidate,
-    PurgeReport, PurgeRequest, SearchQuery, SearchStore, Snapshot, SnapshotStore, Stats,
-    StorageLocation, TaskStore, TruthVersion,
+    BackupStore, ExpiredTruthVersions, GraphStore, ImportReport, MaintenanceStore, OpenNodes,
+    PurgeCandidate, PurgeReport, PurgeRequest, SearchQuery, SearchStore, Snapshot, SnapshotStore,
+    Stats, StorageLocation, TaskStore, TruthVersion,
 };
 use crate::model::{
     EntityInput, EntityOutput, Graph, ObservationDeletion, ObservationInput, RelationInput,
@@ -123,6 +123,41 @@ fn collect_purge_candidates(
             last_activity: row.get(3)?,
             observations: row.get::<_, i64>(4)? as usize,
             relations: row.get::<_, i64>(5)? as usize,
+        })
+    })?
+    .collect()
+}
+
+/// Superseded truth versions older than the request's cutoff, grouped by
+/// entity and key.
+///
+/// Every row here is a value that has already been replaced -- that is what
+/// makes the table safe to trim where observations are not. The current value
+/// lives in `asobi_truths` and is never touched.
+///
+/// The cutoff is inclusive, unlike the entity one. An entity is a candidate
+/// only once it has been *inactive* for the window, so its boundary excludes
+/// the present; a superseded version is already dead the instant it is
+/// replaced, so `--older-than 0` meaning "everything superseded" is the useful
+/// reading rather than an off-by-one.
+fn collect_expired_truth_versions(
+    conn: &Connection,
+    request: &PurgeRequest,
+) -> rusqlite::Result<Vec<ExpiredTruthVersions>> {
+    let cutoff = format!("-{} days", request.older_than_days);
+    let mut stmt = conn.prepare(
+        "SELECT entity_name, key, COUNT(*), MAX(valid_until)
+         FROM asobi_truth_history
+         WHERE valid_until <= datetime('now', ?)
+         GROUP BY entity_name, key
+         ORDER BY COUNT(*) DESC, entity_name, key",
+    )?;
+    stmt.query_map([&cutoff], |row| {
+        Ok(ExpiredTruthVersions {
+            entity_name: row.get(0)?,
+            key: row.get(1)?,
+            versions: row.get::<_, i64>(2)? as usize,
+            newest: row.get(3)?,
         })
     })?
     .collect()
@@ -341,13 +376,19 @@ impl SqliteStore {
         operation(&conn).map_err(backend_error)
     }
 
+    /// `observation_limit` of 0 means every observation; anything else returns
+    /// the most recent N. `observationCount` stays the true total either way,
+    /// so a caller can always tell what it is not being shown.
     fn graph(
         &self,
         names: Option<&[String]>,
         expand: &[String],
         include_content: bool,
+        observation_limit: usize,
     ) -> ApiResult<Graph> {
-        self.read(|conn| graph_from_connection(conn, names, expand, include_content))
+        self.read(|conn| {
+            graph_from_connection(conn, names, expand, include_content, observation_limit)
+        })
     }
 }
 
@@ -356,6 +397,7 @@ fn graph_from_connection(
     names: Option<&[String]>,
     expand: &[String],
     include_content: bool,
+    observation_limit: usize,
 ) -> rusqlite::Result<Graph> {
     let mut selected = names.map(|values| values.iter().map(|v| normalize(v)).collect::<Vec<_>>());
     if let Some(values) = selected.as_mut()
@@ -415,27 +457,37 @@ fn graph_from_connection(
     };
     let mut entities = Vec::new();
     let mut obs_stmt = if include_content {
+        // Newest-first inside the limit, then re-ordered oldest-first so a
+        // truncated trail still reads in the direction it was written.
         Some(conn.prepare(
-            "SELECT id, content FROM asobi_observations WHERE entity_name = ? ORDER BY id",
+            "SELECT id, content FROM (
+                 SELECT id, content FROM asobi_observations
+                 WHERE entity_name = ? ORDER BY id DESC LIMIT ?
+             ) ORDER BY id",
         )?)
     } else {
         None
     };
-    let mut obs_count_stmt = if include_content {
-        None
-    } else {
-        Some(conn.prepare("SELECT COUNT(*) FROM asobi_observations WHERE entity_name = ?")?)
-    };
+    // Prepared unconditionally: the true total is what tells a caller how much
+    // a limited read left behind.
+    let mut obs_count_stmt =
+        conn.prepare("SELECT COUNT(*) FROM asobi_observations WHERE entity_name = ?")?;
     let mut truth_stmt =
         conn.prepare("SELECT key, value FROM asobi_truths WHERE entity_name = ? ORDER BY key")?;
     for (name, entity_type) in entity_rows {
-        let (observations, observations_detailed, observation_count) = if include_content {
+        let observation_count = obs_count_stmt.query_row([&name], |r| r.get::<_, i64>(0))? as usize;
+        let (observations, observations_detailed) = if include_content {
+            let cap = if observation_limit == 0 {
+                i64::MAX
+            } else {
+                observation_limit as i64
+            };
             let mut observations = Vec::new();
             let mut detailed = Vec::new();
             for obs in obs_stmt
                 .as_mut()
                 .expect("content query must be prepared")
-                .query_map([&name], |r| {
+                .query_map(params![&name, cap], |r| {
                     Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?))
                 })?
             {
@@ -443,14 +495,9 @@ fn graph_from_connection(
                 observations.push(content.clone());
                 detailed.push(crate::model::DetailedObservation { id, content });
             }
-            let observation_count = detailed.len();
-            (observations, Some(detailed), observation_count)
+            (observations, Some(detailed))
         } else {
-            let count = obs_count_stmt
-                .as_mut()
-                .expect("count query must be prepared")
-                .query_row([&name], |r| r.get::<_, i64>(0))? as usize;
-            (Vec::new(), None, count)
+            (Vec::new(), None)
         };
         let mut truths = BTreeMap::new();
         for truth in truth_stmt.query_map([&name], |r| {
@@ -669,16 +716,16 @@ impl GraphStore for SqliteStore {
         self.read(|conn| { let mut out = Vec::new(); if let Some(key) = key { let mut stmt = conn.prepare("SELECT key,value,valid_from,valid_until FROM asobi_truth_history WHERE entity_name=? AND key=? ORDER BY valid_until DESC")?; for row in stmt.query_map(params![normalize(entity), key], |r| Ok(TruthVersion { key:r.get(0)?, value:r.get(1)?, valid_from:r.get(2)?, valid_until:r.get(3)? }))? { out.push(row?); } } else { let mut stmt = conn.prepare("SELECT key,value,valid_from,valid_until FROM asobi_truth_history WHERE entity_name=? ORDER BY valid_until DESC,key")?; for row in stmt.query_map([normalize(entity)], |r| Ok(TruthVersion { key:r.get(0)?, value:r.get(1)?, valid_from:r.get(2)?, valid_until:r.get(3)? }))? { out.push(row?); } } Ok(out) })
     }
     fn read_graph(&self) -> ApiResult<Graph> {
-        self.graph(None, &[], false)
+        self.graph(None, &[], false, 0)
     }
     fn read_graph_full(&self) -> ApiResult<Graph> {
-        self.graph(None, &[], true)
+        self.graph(None, &[], true, 0)
     }
     fn read_graph_scoped(&self, scope: &[String], rationale: bool) -> ApiResult<Graph> {
         self.read(|conn| {
             let names = scoped_names(conn, scope, rationale)?;
             let included: HashSet<_> = names.iter().cloned().collect();
-            let mut graph = graph_from_connection(conn, Some(&names), &[], true)?;
+            let mut graph = graph_from_connection(conn, Some(&names), &[], true, 0)?;
             graph
                 .relations
                 .retain(|rel| included.contains(&rel.from) && included.contains(&rel.to));
@@ -686,7 +733,7 @@ impl GraphStore for SqliteStore {
         })
     }
     fn open_nodes(&self, req: OpenNodes) -> ApiResult<Graph> {
-        self.graph(Some(&req.names), &req.expand, true)
+        self.graph(Some(&req.names), &req.expand, true, req.observation_limit)
     }
 }
 
@@ -732,7 +779,7 @@ impl SearchStore for SqliteStore {
                 }
             }
             names.truncate(limit);
-            graph_from_connection(conn, Some(&names), &[], false)
+            graph_from_connection(conn, Some(&names), &[], false, 0)
         })
     }
 }
@@ -949,6 +996,11 @@ impl MaintenanceStore for SqliteStore {
         validate_purge_request(&request)?;
         let report = self.write(|tx| {
             let candidates = collect_purge_candidates(tx, &request)?;
+            // Always surveyed, never deleted without `include_truth_history`:
+            // finding what has expired is read-only and costs nothing, while
+            // dropping a change trail should be something the caller asked for.
+            let expired_truth_versions = collect_expired_truth_versions(tx, &request)?;
+
             let deleted = if request.apply {
                 for candidate in &candidates {
                     tx.execute(
@@ -960,14 +1012,25 @@ impl MaintenanceStore for SqliteStore {
             } else {
                 0
             };
+            let deleted_truth_versions = if request.apply && request.include_truth_history {
+                let cutoff = format!("-{} days", request.older_than_days);
+                tx.execute(
+                    "DELETE FROM asobi_truth_history WHERE valid_until <= datetime('now', ?)",
+                    [&cutoff],
+                )?
+            } else {
+                0
+            };
             Ok(PurgeReport {
                 dry_run: !request.apply,
                 older_than_days: request.older_than_days,
                 candidates,
                 deleted,
+                expired_truth_versions,
+                deleted_truth_versions,
             })
         })?;
-        if report.deleted > 0 {
+        if report.deleted > 0 || report.deleted_truth_versions > 0 {
             // A no-op unless this database is in incremental auto-vacuum
             // mode, which every database is as of schema v5 -- see
             // `upgrade_to_v5`. Bounded to a few thousand pages so a large

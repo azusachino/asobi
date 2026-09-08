@@ -310,6 +310,7 @@ Returns a subgraph for the named entities and the relations among them, eagerly 
 
 - `--expand <RELATION_TYPE>` — repeatable; pulls in entities linked by that relation, e.g. `--expand part_of` to load an epic's tasks.
 - `--with-ids` — adds `observationsDetailed`, pairing each observation with its stable integer `id` for use with `update-obs --id` and `rm-obs --id`.
+- `--limit <N>` — how many of the most recent observations to return per entity, defaulting to **20**. `--limit 0` returns the whole trail. `observationCount` is always the true total, so a limited read still says how much it left behind. Truths are never limited: there is one row per key and they are the current state.
 
 Fetch heavy content with `show` for the specific entities needed rather than through `graph` or a broad `search`.
 
@@ -351,13 +352,15 @@ Both `init` modes are idempotent. `completions` is generated from the running bi
 
 ```
 asobi compact
-asobi purge [--type <TYPE>] [--status <STATUS>] [--older-than <DAYS>] [--apply | --dry-run]
+asobi purge [--type <TYPE>] [--status <STATUS>] [--older-than <DAYS>] [--apply | --dry-run] [--history]
 asobi reset [--force]
 ```
 
 `compact` projects **durable knowledge** entities — `project`, `concept`, `reference`, `preference`, `standard` — and their truths into Markdown under `.asobi/topics/`. Volatile `session` and `task` entities and self-indexing `skill` entities are skipped by design; read those with `search`/`show` and archive them with `export` or `backup`.
 
 `purge` is a dry run unless given `--apply`, and accepts only `session` entities plus terminal task statuses (`DONE`, `CLOSED`, `ABANDONED`) — durable knowledge is refused, and skills are not in the graph to begin with. It defaults to entities inactive for 30 days. It never runs implicitly during `graph`, `search`, `compact`, or startup. An applied purge also runs `PRAGMA incremental_vacuum`, so the database file shrinks with the graph rather than retaining a free list.
+
+`purge` also surveys **superseded truth versions** older than the cutoff, grouped by entity and key. They are listed in every preview because finding them is read-only; `--history` opts into deleting them. This is the one store with no bound of its own — observations are capped per entity and current truths are one row per key, but every overwrite appends a version that lives until its entity is deleted, so it grows fastest on whatever is written most often. Dropping them is safe by construction: the current value lives in `asobi_truths` and is never touched.
 
 `reset` deletes every entity, relation, and observation; it prompts unless given `--force`.
 

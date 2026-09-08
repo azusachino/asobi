@@ -104,6 +104,10 @@ pub(crate) enum Commands {
         /// Include observation IDs in detailed list
         #[arg(long)]
         with_ids: bool,
+        /// Most recent observations to return per entity; 0 for the whole trail.
+        /// `observationCount` always reports the true total.
+        #[arg(long, default_value_t = 20)]
+        limit: usize,
     },
     /// Sync durable knowledge entities to Markdown topics
     Compact {},
@@ -124,6 +128,10 @@ pub(crate) enum Commands {
         /// Make the preview mode explicit (the default)
         #[arg(long, conflicts_with = "apply")]
         dry_run: bool,
+        /// Also delete superseded truth versions older than the cutoff.
+        /// They are always listed in the preview; this opts into removing them.
+        #[arg(long)]
+        history: bool,
     },
     /// Initialise a Asobi workspace (XDG by default, `--local` for cwd)
     Init {

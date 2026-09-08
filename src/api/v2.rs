@@ -31,6 +31,14 @@ pub struct OpenNodes {
     pub names: Vec<String>,
     pub with_ids: bool,
     pub expand: Vec<String>,
+    /// How many of the most recent observations to return per entity; 0 for all.
+    ///
+    /// `show` is the only eager read, and it was unbounded — loading a session
+    /// entity at the 200-observation cap cost tens of thousands of tokens to
+    /// answer "where was I". Context is the scarce resource, so the default is
+    /// the current end of the trail, with `observationCount` still reporting
+    /// the true total.
+    pub observation_limit: usize,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -64,6 +72,9 @@ pub struct PurgeRequest {
     pub statuses: Vec<String>,
     pub older_than_days: u32,
     pub apply: bool,
+    /// Also consider superseded truth versions. Off by default so a scoped
+    /// entity purge stays scoped; `purge` with no scope turns it on.
+    pub include_truth_history: bool,
 }
 
 #[derive(Debug, Clone, schemars::JsonSchema, serde::Serialize, serde::Deserialize)]
@@ -84,6 +95,28 @@ pub struct PurgeReport {
     pub older_than_days: u32,
     pub candidates: Vec<PurgeCandidate>,
     pub deleted: usize,
+    /// Superseded truth versions old enough to drop, grouped by entity and key.
+    ///
+    /// Truth history is the one store with no bound of its own: observations
+    /// are capped per entity and current truths are one row per key, but every
+    /// overwrite appends a version that lives until its entity is deleted. It
+    /// grows fastest on the entity written most often — a session, whose
+    /// `next` and `remaining` are rewritten at every closeout.
+    #[serde(default)]
+    pub expired_truth_versions: Vec<ExpiredTruthVersions>,
+    #[serde(default)]
+    pub deleted_truth_versions: usize,
+}
+
+#[derive(Debug, Clone, schemars::JsonSchema, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExpiredTruthVersions {
+    pub entity_name: String,
+    pub key: String,
+    pub versions: usize,
+    /// The newest `valid_until` in this group, so a preview shows how stale the
+    /// most recent thing being dropped actually is.
+    pub newest: String,
 }
 
 /// Backend capabilities describe behavior that callers may adapt to. They do

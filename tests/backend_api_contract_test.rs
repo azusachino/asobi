@@ -142,6 +142,7 @@ fn graph_and_search_keep_observations_lazy() {
 
     let full = store
         .open_nodes(OpenNodes {
+            observation_limit: 0,
             names: vec!["lean-read".into()],
             with_ids: true,
             expand: vec![],
@@ -195,6 +196,7 @@ fn purge_is_preview_first_and_rejects_durable_types() {
     drop(conn);
 
     let request = PurgeRequest {
+        include_truth_history: false,
         entity_types: vec!["session".into(), "task".into()],
         statuses: vec!["DONE".into()],
         older_than_days: 30,
@@ -207,6 +209,7 @@ fn purge_is_preview_first_and_rejects_durable_types() {
     assert!(
         store
             .open_nodes(OpenNodes {
+                observation_limit: 0,
                 names: vec!["project:task".into()],
                 ..Default::default()
             })
@@ -218,6 +221,7 @@ fn purge_is_preview_first_and_rejects_durable_types() {
 
     let applied = store
         .purge(PurgeRequest {
+            include_truth_history: false,
             apply: true,
             ..request
         })
@@ -227,6 +231,7 @@ fn purge_is_preview_first_and_rejects_durable_types() {
     assert!(
         store
             .open_nodes(OpenNodes {
+                observation_limit: 0,
                 names: vec!["project:task".into()],
                 ..Default::default()
             })
@@ -249,6 +254,7 @@ fn purge_is_preview_first_and_rejects_durable_types() {
 
     let error = store
         .purge(PurgeRequest {
+            include_truth_history: false,
             entity_types: vec!["concept".into()],
             statuses: vec!["DONE".into()],
             older_than_days: 30,
@@ -263,6 +269,7 @@ fn purge_is_preview_first_and_rejects_durable_types() {
 
     let error = store
         .purge(PurgeRequest {
+            include_truth_history: false,
             entity_types: vec!["task".into()],
             statuses: vec!["IN_PROGRESS".into()],
             older_than_days: 30,
@@ -465,6 +472,7 @@ fn applied_purge_reclaims_space_via_incremental_vacuum() {
 
     let report = store
         .purge(PurgeRequest {
+            include_truth_history: false,
             entity_types: vec!["task".into()],
             statuses: vec!["DONE".into()],
             older_than_days: 30,
@@ -518,4 +526,121 @@ fn scoped_export_carries_the_truth_change_trail() {
     // Re-importing the same snapshot must not duplicate the trail.
     store.import_snapshot(exported).unwrap();
     assert_eq!(store.truth_history("proj:epic", None).unwrap().len(), 1);
+}
+
+/// `show` is the only eager read, and it was unbounded: loading a session at
+/// the 200-observation cap cost tens of thousands of tokens to answer "where
+/// was I". Context is the scarce resource, so it returns the current end of the
+/// trail by default — while still reporting the true total, since a caller that
+/// cannot tell what it is missing is worse off than one reading everything.
+#[test]
+fn show_returns_recent_observations_and_the_true_total() {
+    let (_dir, store) = store();
+    store
+        .create_entities(vec![EntityInput {
+            name: "proj:session".into(),
+            entity_type: "session".into(),
+            observations: vec![],
+        }])
+        .unwrap();
+    for i in 0..50 {
+        store
+            .add_observations(
+                vec![asobi::model::ObservationInput {
+                    entity_name: "proj:session".into(),
+                    contents: vec![format!("note {i}")],
+                }],
+                200,
+            )
+            .unwrap();
+    }
+
+    let limited = store
+        .open_nodes(OpenNodes {
+            names: vec!["proj:session".into()],
+            observation_limit: 10,
+            ..Default::default()
+        })
+        .unwrap();
+    let entity = &limited.entities[0];
+    assert_eq!(entity.observations.len(), 10, "should return the limit");
+    assert_eq!(entity.observation_count, 50, "count is the true total");
+    // Newest kept, and still in written order so a truncated trail reads forward.
+    assert_eq!(entity.observations.first().unwrap(), "note 40");
+    assert_eq!(entity.observations.last().unwrap(), "note 49");
+
+    // 0 means the whole trail, which is what export relies on.
+    let full = store
+        .open_nodes(OpenNodes {
+            names: vec!["proj:session".into()],
+            observation_limit: 0,
+            ..Default::default()
+        })
+        .unwrap();
+    assert_eq!(full.entities[0].observations.len(), 50);
+    assert_eq!(
+        store.read_graph_full().unwrap().entities[0]
+            .observations
+            .len(),
+        50
+    );
+}
+
+/// Truth history is the one store with no bound of its own, so purge has to be
+/// able to find it. Superseded versions are safe to drop by construction: the
+/// current value lives in a different table and is never touched.
+#[test]
+fn purge_finds_expired_truth_versions_without_deleting_them_by_default() {
+    let (_dir, store) = store();
+    store
+        .create_entities(vec![EntityInput {
+            name: "proj:session".into(),
+            entity_type: "session".into(),
+            observations: vec![],
+        }])
+        .unwrap();
+    for value in ["first", "second", "third"] {
+        store.truth_upsert("proj:session", "next", value).unwrap();
+    }
+
+    let request = |apply: bool, history: bool| PurgeRequest {
+        entity_types: vec!["session".into()],
+        statuses: vec!["DONE".into()],
+        older_than_days: 0,
+        apply,
+        include_truth_history: history,
+    };
+
+    let preview = store.purge(request(false, false)).unwrap();
+    let found: usize = preview
+        .expired_truth_versions
+        .iter()
+        .map(|g| g.versions)
+        .sum();
+    assert_eq!(found, 2, "two superseded values behind the current one");
+    assert_eq!(
+        preview.deleted_truth_versions, 0,
+        "a preview deletes nothing"
+    );
+
+    // Applying without --history leaves the trail alone.
+    store.purge(request(true, false)).unwrap();
+    assert_eq!(store.truth_history("proj:session", None).unwrap().len(), 2);
+
+    let applied = store.purge(request(true, true)).unwrap();
+    assert_eq!(applied.deleted_truth_versions, 2);
+    assert!(
+        store
+            .truth_history("proj:session", None)
+            .unwrap()
+            .is_empty()
+    );
+    // The current value survives: only superseded versions are in scope.
+    let current = store
+        .open_nodes(OpenNodes {
+            names: vec!["proj:session".into()],
+            ..Default::default()
+        })
+        .unwrap();
+    assert_eq!(current.entities[0].truths.get("next").unwrap(), "third");
 }

@@ -194,8 +194,10 @@ pub(crate) fn run(backend: &crate::storage::Storage, command: Commands, json: bo
             names,
             expand,
             with_ids,
+            limit,
         } => {
             let graph = backend.open_nodes(OpenNodes {
+                observation_limit: limit,
                 names,
                 with_ids,
                 expand,
