@@ -8,7 +8,8 @@ pub mod v2;
 
 pub use v2::{
     API_VERSION, ApiError, ApiResult, BackendCapabilities, BackendHealth, BackendInfo,
-    BackupReceipt, BackupRequest, BackupStore, GraphStore, ImportReport, MaintenanceStore,
-    OpenNodes, PurgeCandidate, PurgeReport, PurgeRequest, SNAPSHOT_FORMAT_VERSION, SearchQuery,
-    SearchStore, Snapshot, SnapshotStore, Stats, StorageLocation, TaskStore, TruthVersion,
+    BackupReceipt, BackupRequest, BackupStore, EntityTruthHistory, GraphStore, ImportReport,
+    MaintenanceStore, OpenNodes, PurgeCandidate, PurgeReport, PurgeRequest,
+    SNAPSHOT_FORMAT_VERSION, SearchQuery, SearchStore, Snapshot, SnapshotStore, Stats,
+    StorageLocation, TaskStore, TruthVersion,
 };

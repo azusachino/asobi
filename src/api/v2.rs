@@ -145,6 +145,25 @@ pub struct Snapshot {
     pub source_backend: String,
     pub source_schema_version: u32,
     pub graph: Graph,
+    /// Superseded truth values for the exported entities, newest first.
+    ///
+    /// A snapshot carrying only current state cannot distinguish a fact that
+    /// was always true from one corrected an hour ago, which is precisely the
+    /// distinction valid-time exists to preserve -- and `export --scope` is the
+    /// documented way to hand an epic to another agent.
+    ///
+    /// Defaulted rather than versioned: an older snapshot without the field
+    /// imports as an empty history, and an older reader ignores it, so no
+    /// format version bump is needed in either direction.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub truth_history: Vec<EntityTruthHistory>,
+}
+
+#[derive(Debug, Clone, schemars::JsonSchema, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EntityTruthHistory {
+    pub entity_name: String,
+    pub versions: Vec<TruthVersion>,
 }
 
 #[derive(Debug, Clone, schemars::JsonSchema, serde::Serialize, serde::Deserialize)]

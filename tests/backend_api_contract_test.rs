@@ -481,3 +481,41 @@ fn applied_purge_reclaims_space_via_incremental_vacuum() {
         .unwrap();
     assert_eq!(auto_vacuum, 2);
 }
+
+/// A scoped export is the documented way to hand an epic to another agent, and
+/// until 0.7 it carried only current state -- so the receiving agent could not
+/// tell a fact that was always true from one corrected an hour earlier. The
+/// change trail has to survive the round trip.
+#[test]
+fn scoped_export_carries_the_truth_change_trail() {
+    let (_dir, store) = store();
+    store
+        .create_entities(vec![EntityInput {
+            name: "proj:epic".into(),
+            entity_type: "task".into(),
+            observations: vec![],
+        }])
+        .unwrap();
+    store.truth_upsert("proj:epic", "status", "REVIEW").unwrap();
+    store.truth_upsert("proj:epic", "status", "DONE").unwrap();
+
+    let exported = store
+        .export_snapshot(&["proj:epic".to_string()], false)
+        .unwrap();
+    let history = &exported.truth_history;
+    assert_eq!(history.len(), 1, "expected history for the exported entity");
+    assert_eq!(history[0].entity_name, "proj:epic");
+    assert_eq!(history[0].versions.len(), 1);
+    assert_eq!(history[0].versions[0].value, "REVIEW");
+
+    // Round-trip into a clean graph: the superseded value comes back.
+    store.reset().unwrap();
+    store.import_snapshot(exported.clone()).unwrap();
+    let restored = store.truth_history("proj:epic", None).unwrap();
+    assert_eq!(restored.len(), 1);
+    assert_eq!(restored[0].value, "REVIEW");
+
+    // Re-importing the same snapshot must not duplicate the trail.
+    store.import_snapshot(exported).unwrap();
+    assert_eq!(store.truth_history("proj:epic", None).unwrap().len(), 1);
+}

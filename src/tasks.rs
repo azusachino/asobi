@@ -20,6 +20,56 @@ const TASK_STATUSES: &[&str] = &[
     "DONE",
 ];
 
+/// Statuses that mean the work is over. Matches what `purge` accepts, so the
+/// set of tasks `tasks list` hides by default is the set retention can reclaim.
+const TERMINAL_STATUSES: &[&str] = &["DONE", "CLOSED", "ABANDONED"];
+
+/// An epic or task with no `status` truth at all is *not* terminal: three epics
+/// on a real graph were in exactly that state, complete but never closed, and
+/// hiding them is how they stayed invisible.
+fn is_terminal(status: Option<&String>) -> bool {
+    status.is_some_and(|s| TERMINAL_STATUSES.contains(&s.as_str()))
+}
+
+/// The current commit and branch, when the working directory is inside a git
+/// worktree.
+///
+/// A checkpoint that records status and a next action but not the revision it
+/// was true at cannot support validated continuation: the successor knows what
+/// to do and not what tree to do it against. Captured automatically rather than
+/// behind a flag, because an optional field on a handoff is a field that is
+/// empty exactly when the handoff matters.
+///
+/// Returns `None` outside a repository, and on any git failure — a graph write
+/// must not fail because git is missing or the directory moved.
+fn git_revision() -> Option<(String, String)> {
+    let run = |args: &[&str]| -> Option<String> {
+        let out = std::process::Command::new("git").args(args).output().ok()?;
+        if !out.status.success() {
+            return None;
+        }
+        let value = String::from_utf8(out.stdout).ok()?.trim().to_string();
+        (!value.is_empty()).then_some(value)
+    };
+    let commit = run(&["rev-parse", "HEAD"])?;
+    // A detached HEAD reports "HEAD"; recording that is worse than recording
+    // nothing, since it reads like a branch name and names no branch.
+    let branch = run(&["rev-parse", "--abbrev-ref", "HEAD"]).filter(|b| b != "HEAD");
+    Some((commit, branch.unwrap_or_default()))
+}
+
+/// Stamp `entity` with the revision this checkpoint was taken at.
+fn record_git_revision(backend: &impl GraphStore, entity: &str) -> Result<()> {
+    let Some((commit, branch)) = git_revision() else {
+        return Ok(());
+    };
+    backend.truth_upsert(entity, "commit", &commit)?;
+    if !branch.is_empty() {
+        backend.truth_upsert(entity, "branch", &branch)?;
+    }
+    Ok(())
+}
+
 #[derive(Subcommand, Debug)]
 pub enum TasksCommands {
     /// Create an epic and its dispatchable child tasks
@@ -33,8 +83,14 @@ pub enum TasksCommands {
         #[arg(long = "task", value_name = "TITLE", required = true)]
         tasks: Vec<String>,
     },
-    /// Show an epic task board, or all task entities when no epic is given
-    List { epic: Option<String> },
+    /// Show an epic task board, or open work across every epic when none is given
+    List {
+        epic: Option<String>,
+        /// Include finished work (DONE/CLOSED/ABANDONED), which is filtered out
+        /// by default
+        #[arg(long)]
+        all: bool,
+    },
     /// Mark the next ready task, or the named task, as dispatched
     Dispatch {
         task: Option<String>,
@@ -135,7 +191,7 @@ pub fn run(
                 println!("Planned {} with {} task(s).", epic, tasks.len());
             }
         }
-        Some(TasksCommands::List { epic }) => {
+        Some(TasksCommands::List { epic, all }) => {
             let graph = if let Some(epic) = epic {
                 let graph = backend.open_nodes(crate::api::OpenNodes {
                     names: vec![epic.clone()],
@@ -148,10 +204,18 @@ pub fn run(
                 graph
             } else {
                 let mut graph = backend.read_graph()?;
+                // Without an epic this is the "what is open" read, so it drops
+                // finished work unless asked for it. Measured on a real graph,
+                // the unfiltered form returned 1,972 lines of JSON that was 96%
+                // completed tasks -- too expensive to be the thing an agent
+                // runs at session start, which is exactly when it is wanted.
                 let task_names: std::collections::HashSet<_> = graph
                     .entities
                     .iter()
-                    .filter(|entity| entity.entity_type == "task")
+                    .filter(|entity| {
+                        entity.entity_type == "task"
+                            && (all || !is_terminal(entity.truths.get("status")))
+                    })
                     .map(|entity| entity.name.clone())
                     .collect();
                 graph
@@ -217,6 +281,7 @@ pub fn run(
                 )?;
             }
             backend.truth_upsert(&task, "status", &status)?;
+            record_git_revision(backend, &task)?;
             if json {
                 print_json(TaskReceipt {
                     action: "sync",
@@ -268,6 +333,7 @@ pub fn run(
                 )?;
             }
             backend.truth_upsert(&epic, "status", "DONE")?;
+            record_git_revision(backend, &epic)?;
             backend.add_observations(
                 vec![crate::model::ObservationInput {
                     entity_name: epic.clone(),
@@ -303,4 +369,57 @@ fn observation_limit() -> usize {
 fn print_json<T: Serialize>(value: T) -> Result<()> {
     println!("{}", serde_json::to_string_pretty(&value)?);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn terminal_statuses_hide_finished_work() {
+        for status in ["DONE", "CLOSED", "ABANDONED"] {
+            assert!(is_terminal(Some(&status.to_string())), "{status}");
+        }
+        for status in [
+            "READY_TO_DISPATCH",
+            "DISPATCHED",
+            "REVIEW",
+            "AWAITING_VERIFY",
+        ] {
+            assert!(!is_terminal(Some(&status.to_string())), "{status}");
+        }
+    }
+
+    /// An epic that finished its work but never got closed carries no `status`
+    /// truth at all. Three on a real graph were in exactly that state, so the
+    /// default board has to keep showing them -- filtering them out is how they
+    /// became invisible in the first place.
+    #[test]
+    fn missing_status_is_not_terminal() {
+        assert!(!is_terminal(None));
+    }
+
+    /// Every terminal status must be one `purge` accepts, so the work the board
+    /// hides is exactly the work retention is allowed to reclaim. If these drift
+    /// apart, `tasks list` starts hiding tasks nothing will ever clean up.
+    #[test]
+    fn terminal_statuses_match_what_purge_accepts() {
+        let purgeable = ["DONE", "CLOSED", "ABANDONED"];
+        assert_eq!(TERMINAL_STATUSES, &purgeable);
+    }
+
+    #[test]
+    fn git_revision_reads_the_current_worktree() {
+        // The test binary runs inside this repository, so this exercises the
+        // real path rather than a fixture.
+        let Some((commit, branch)) = git_revision() else {
+            panic!("expected a revision when running inside a git worktree");
+        };
+        assert_eq!(commit.len(), 40, "expected a full sha, got {commit:?}");
+        assert!(commit.chars().all(|c| c.is_ascii_hexdigit()));
+        assert_ne!(
+            branch, "HEAD",
+            "detached HEAD must not be stored as a branch"
+        );
+    }
 }

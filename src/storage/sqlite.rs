@@ -744,21 +744,38 @@ impl SnapshotStore for SqliteStore {
         } else {
             self.read_graph_scoped(scope, rationale)?
         };
+        // Carry the change trail for exactly the entities being exported, so a
+        // scoped handoff says not just what is true but what was corrected.
+        let mut truth_history = Vec::new();
+        for entity in &graph.entities {
+            let versions = self.truth_history(&entity.name, None)?;
+            if !versions.is_empty() {
+                truth_history.push(crate::api::EntityTruthHistory {
+                    entity_name: entity.name.clone(),
+                    versions,
+                });
+            }
+        }
         Ok(Snapshot {
             api_version: crate::api::v2::API_VERSION,
             format_version: crate::api::v2::SNAPSHOT_FORMAT_VERSION,
             source_backend: "sqlite".into(),
             source_schema_version: SCHEMA_VERSION as u32,
             graph,
+            truth_history,
         })
     }
+    /// Restoring `truth_history` is guarded against a re-import duplicating
+    /// rows: a version is identified by `(entity, key, valid_until)`, and the
+    /// history table is append-only, so a row that already exists is the same
+    /// row rather than a new one.
     fn import_snapshot(&self, snapshot: Snapshot) -> ApiResult<ImportReport> {
         if snapshot.api_version != crate::api::v2::API_VERSION
             || snapshot.format_version != crate::api::v2::SNAPSHOT_FORMAT_VERSION
         {
             return Err(ApiError::Invalid("unsupported snapshot version".into()));
         }
-        self.write(|tx| { let mut report = ImportReport::default(); for entity in snapshot.graph.entities { let name=normalize(&entity.name); let inserted=tx.execute("INSERT OR IGNORE INTO asobi_entities(name,entity_type) VALUES (?,?)", params![name,entity.entity_type])?; if inserted==1 {report.entities_created+=1;} for obs in entity.observations { tx.execute("INSERT INTO asobi_observations(entity_name,content) VALUES (?,?)", params![normalize(&entity.name),obs])?; report.observations_added+=1; } for (key,value) in entity.truths { tx.execute("INSERT INTO asobi_truths(entity_name,key,value) VALUES (?,?,?) ON CONFLICT(entity_name,key) DO UPDATE SET value=excluded.value,updated_at=CURRENT_TIMESTAMP", params![normalize(&entity.name),key,value])?; report.truths_updated+=1; } } for rel in snapshot.graph.relations { tx.execute("INSERT OR REPLACE INTO asobi_relations(from_entity,to_entity,relation_type) VALUES (?,?,?)", params![normalize(&rel.from),normalize(&rel.to),rel.relation_type])?; report.relations_added+=1; } Ok(report) })
+        self.write(|tx| { let mut report = ImportReport::default(); for entity in snapshot.graph.entities { let name=normalize(&entity.name); let inserted=tx.execute("INSERT OR IGNORE INTO asobi_entities(name,entity_type) VALUES (?,?)", params![name,entity.entity_type])?; if inserted==1 {report.entities_created+=1;} for obs in entity.observations { tx.execute("INSERT INTO asobi_observations(entity_name,content) VALUES (?,?)", params![normalize(&entity.name),obs])?; report.observations_added+=1; } for (key,value) in entity.truths { tx.execute("INSERT INTO asobi_truths(entity_name,key,value) VALUES (?,?,?) ON CONFLICT(entity_name,key) DO UPDATE SET value=excluded.value,updated_at=CURRENT_TIMESTAMP", params![normalize(&entity.name),key,value])?; report.truths_updated+=1; } } for rel in snapshot.graph.relations { tx.execute("INSERT OR REPLACE INTO asobi_relations(from_entity,to_entity,relation_type) VALUES (?,?,?)", params![normalize(&rel.from),normalize(&rel.to),rel.relation_type])?; report.relations_added+=1; } for entry in snapshot.truth_history { let name = normalize(&entry.entity_name); for version in entry.versions { tx.execute("INSERT INTO asobi_truth_history(entity_name,key,value,valid_from,valid_until) SELECT ?,?,?,?,? WHERE NOT EXISTS (SELECT 1 FROM asobi_truth_history WHERE entity_name=? AND key=? AND valid_until=?)", params![name,version.key,version.value,version.valid_from,version.valid_until,name,version.key,version.valid_until])?; } } Ok(report) })
     }
 }
 

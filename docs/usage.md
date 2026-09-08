@@ -159,7 +159,7 @@ asobi graph | jq '.entities[] | select(.entityType == "session")'
 
 | Goal | Command | Includes |
 | --- | --- | --- |
-| Portable handoff | `asobi export -o graph.json` | Entities, observations, truths, relations |
+| Portable handoff | `asobi export -o graph.json` | Entities, observations, truths, relations, and the truth change trail |
 | Scoped handoff | `asobi export --scope "proj:epic" -o epic.json` | One epic subtree |
 | Full SQLite archive | `asobi backup` | Complete database, including task state. Skills live on disk and are backed up with the repository, not here. |
 
@@ -197,7 +197,7 @@ asobi history "project-x"            # all superseded truth values, newest first
 asobi history "project-x" "language" # history for one truth key
 ```
 
-Overwriting a truth records the previous value with its valid-time window; the current value stays a single row. History is opt-in via `history` (never shown in `search`/`graph`/`show`) and is local — JSON `export`/`import` carries current graph state only, not the change log.
+Overwriting a truth records the previous value with its valid-time window; the current value stays a single row. History is opt-in via `history` and never shown in `search`/`graph`/`show`. Since 0.7 `export` does carry it, so a handoff can distinguish a fact that was always true from one corrected an hour ago; re-importing the same snapshot does not duplicate the trail.
 
 **Manage skills (reusable workflows and knowledge):**
 
@@ -316,7 +316,7 @@ asobi rm-truth <NAME> <KEY>
 asobi history <NAME> [KEY]
 ```
 
-`truth` adds or overwrites a key-value fact. Overwriting archives the superseded value with its valid-time window, so current state stays a single value while the change trail survives. `history` replays those superseded values newest-first, optionally narrowed to one key; the currently-valid value lives on the entity and is read with `show`. History never appears in `graph`, `search`, or `show`, and is local physical state that JSON `export`/`import` does not carry.
+`truth` adds or overwrites a key-value fact. Overwriting archives the superseded value with its valid-time window, so current state stays a single value while the change trail survives. `history` replays those superseded values newest-first, optionally narrowed to one key; the currently-valid value lives on the entity and is read with `show`. History never appears in `graph`, `search`, or `show`. `export` carries it, scoped to the entities exported, so a handoff keeps the change trail; re-importing a snapshot does not duplicate it.
 
 ### Delete
 
@@ -375,13 +375,17 @@ asobi skills show <NAME>
 
 ```
 asobi tasks plan <EPIC> --objective <TEXT> --task <TITLE>...
-asobi tasks list [EPIC]
+asobi tasks list [EPIC] [--all]
 asobi tasks dispatch [TASK] [--agent <NAME>]
 asobi tasks sync <TASK> [--status <STATUS>] [--note <TEXT>]
 asobi tasks close <EPIC> [--lesson <TEXT>]
 ```
 
 These are ordinary graph entities under a workflow contract: status is a truth, notes are observations, and child tasks link to their epic with `part_of`. Task status moves through `READY_TO_DISPATCH → DISPATCHED → REVIEW → AWAITING_VERIFY → DONE`. `dispatch` claims a task and records the claim atomically — it marks ownership and does **not** launch an agent; omitting `TASK` claims the first ready one. Use `asobi tasks <command> --help` for the full argument list.
+
+Without an `EPIC`, `tasks list` is the "what is open" read: it returns tasks and epics that are not `DONE`, `CLOSED` or `ABANDONED`. Pass `--all` for the complete board including finished work. An entity with no `status` truth counts as open — which is what surfaces an epic whose children are all `DONE` but which was never closed: it appears alone, with no open children under it.
+
+`tasks sync` and `tasks close` also record a `commit` and `branch` truth when run inside a git worktree, so a checkpoint says which revision it was true at. A detached `HEAD` records the commit and no branch, and running outside a repository records neither — neither case is an error.
 
 ## Entity types and naming
 
