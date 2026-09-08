@@ -11,7 +11,12 @@ So the filesystem becomes the only copy.
 - **Skills are no longer graph entities.** They do not appear in `graph`, `search`, or `show`. Search one with `rg` over the skills directory.
 - **`show` no longer returns `body`.** The field existed only to carry skill bodies and is gone from the response contract; `asobi schema` reflects this.
 - **Schema is now 6.** Upgrading drops the `asobi_skills` table and deletes `skill`-typed entities rather than leaving them as husks with no body — cascades take their truths, observations and relations. Nothing there was the only copy: the bodies are on disk, and `skills sync` rewrites that tree from `asobi.toml` regardless. The upgrade runs `PRAGMA incremental_vacuum` so the file shrinks with the graph.
-- **Reference inlining is gone.** Skill install used to fold a skill's local `.md` references into its stored body (0.6.3). That inverted the specification's progressive disclosure — a deliberately tiered skill became a monolith, at exactly the token multiple the tiering exists to avoid — and covered only markdown, so bundled scripts and assets vanished regardless. Resources are copied instead; a body now says what its author wrote.
+- **Reference inlining is gone**, replaced by the directory copy above. Inlining (0.6.3) folded a skill's local `.md` references into its stored body, which inverted the specification's progressive disclosure — a deliberately tiered skill became a monolith, at exactly the token multiple the tiering exists to avoid — and only ever covered markdown, so scripts and assets vanished regardless.
+
+  Measured against `mattpocock/skills`: `tdd` keeps its authored 38-line body with `mocking.md` and `tests.md` beside it, loaded on demand, instead of a 138-line blob. And `diagnosing-bugs`, whose body instructs the agent to run `scripts/hitl-loop.template.sh`, previously installed _without that script_ — inlining could not carry it. It now ships.
+
+  A skill with no directory of its own cannot bring anything along: its parent belongs to the checkout, and copying that would drag in every sibling skill. Installing one that points at a local file now warns and names the fix — the specification already says a skill that ships resources is a directory containing `SKILL.md`. Only unambiguous markdown links are reported; guessing at backtick-quoted paths is what made inlining unreliable.
+
 - **`SkillStore` and `SkillRecord` are removed** from `api::v2`. Library consumers implementing the trait no longer need to; there is no storage-side skill surface at all.
 
 ### Added

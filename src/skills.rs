@@ -266,6 +266,7 @@ pub fn collect_skills_from_dir(
             body,
             bundle_dir,
         });
+        warn_unresolvable_references(collected.last().expect("just pushed"));
     }
     Ok(collected)
 }
@@ -365,6 +366,57 @@ pub fn read_installed_skills(dir: &Path) -> Result<Vec<InstalledSkill>> {
 /// without them leaves a skill whose instructions reference files that are not
 /// there — the failure is silent, since nothing reads the body until an agent
 /// does.
+/// Warn when a skill with no directory of its own points at a local file.
+///
+/// A bare `<name>.md` skill has no bundle to bring along -- its parent belongs
+/// to the checkout, and copying that would drag in every sibling skill -- so a
+/// relative reference in its body cannot resolve once installed. Reference
+/// inlining (0.6.3) papered over this by folding the target's text into the
+/// body, which defeated on-demand loading and only ever worked for markdown.
+///
+/// Only unambiguous markdown links are considered. A backtick-quoted path is
+/// as often an example or a generated output as a reference, and guessing was
+/// what made inlining unreliable.
+///
+/// The fix belongs to the skill's author, and the specification already states
+/// it: a skill that ships resources is a directory containing `SKILL.md`.
+fn warn_unresolvable_references(skill: &CollectedSkill) {
+    if skill.bundle_dir.is_some() {
+        return;
+    }
+    for target in markdown_link_targets(&skill.body) {
+        tracing::warn!(
+            "skill '{}' references '{}', which is not installed: it has no directory of \
+             its own, so only its SKILL.md is written. Move it into a directory with \
+             SKILL.md to ship the file alongside.",
+            skill.name,
+            target
+        );
+    }
+}
+
+/// Targets of `[text](target)` links that look like a local file reference.
+fn markdown_link_targets(body: &str) -> Vec<&str> {
+    let mut found = Vec::new();
+    for (index, _) in body.match_indices("](") {
+        let open = index + 2;
+        let Some(end) = body[open..].find(')') else {
+            continue;
+        };
+        let raw = body[open..open + end].trim();
+        let target = raw.split_whitespace().next().unwrap_or(raw);
+        let external = target.is_empty()
+            || target.starts_with('#')
+            || target.contains("://")
+            || target.starts_with("mailto:")
+            || target.starts_with("tel:");
+        if !external && !found.contains(&target) {
+            found.push(target);
+        }
+    }
+    found
+}
+
 fn copy_bundle(from: Option<&Path>, to: &Path) -> Result<()> {
     let Some(from) = from else { return Ok(()) };
     for entry in WalkDir::new(from).into_iter().filter_map(|e| e.ok()) {
