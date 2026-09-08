@@ -1,11 +1,11 @@
 {
-  "skills": [
-    {
-      "dir": "azusachino-harus-skills@asobi",
-      "name": "asobi",
-      "description": "Use Asobi's persistent SQLite knowledge graph for session continuity, durable task dispatch, keyword recall, and reusable skills.",
-      "source": "https://github.com/azusachino/harus-skills.git",
-      "version": "c29a1a7c9e4f328c5cb010652bf2da3fefa3d9b8"
-    }
-  ]
+    "skills": [
+        {
+            "dir": "azusachino-harus-skills@asobi",
+            "name": "asobi",
+            "description": "Use Asobi's persistent SQLite knowledge graph for session continuity, durable task dispatch, keyword recall, and reusable skills.",
+            "source": "https://github.com/azusachino/harus-skills.git",
+            "version": "c29a1a7c9e4f328c5cb010652bf2da3fefa3d9b8"
+        }
+    ]
 }

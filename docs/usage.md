@@ -144,9 +144,9 @@ asobi purge --type task --status DONE --older-than 90
 asobi purge --type task --status DONE --older-than 90 --apply
 ```
 
-Purge is restricted to `session` and `task` entities. Durable knowledge and installed skills are never accepted by this command. Use `--json` for a machine-readable candidate report, and review the dry-run output before adding `--apply` to a scheduled job. An applied purge also runs `PRAGMA incremental_vacuum` to return the freed pages to the OS, so the database file shrinks along with the graph rather than only growing a free list.
+Purge is restricted to `session` and `task` entities. Durable knowledge is never accepted by this command. Use `--json` for a machine-readable candidate report, and review the dry-run output before adding `--apply` to a scheduled job. An applied purge also runs `PRAGMA incremental_vacuum` to return the freed pages to the OS, so the database file shrinks along with the graph rather than only growing a free list.
 
-`compact` syncs only durable _knowledge_ entities (project, decisions, references, preferences) to Markdown. Volatile state (`session`, `task`) and self-indexing `skill` entities stay graph-only — query them with `search` / `show`, and use `export` / `backup` for full archival.
+`compact` syncs only durable _knowledge_ entities (project, decisions, references, preferences) to Markdown. Volatile state (`session`, `task`) stays graph-only — query it with `search` / `show`, and use `export` / `backup` for full archival. Skills are not in the graph at all; they live on disk under the skills directory.
 
 **Inspect the full graph:**
 
@@ -161,7 +161,7 @@ asobi graph | jq '.entities[] | select(.entityType == "session")'
 | --- | --- | --- |
 | Portable handoff | `asobi export -o graph.json` | Entities, observations, truths, relations |
 | Scoped handoff | `asobi export --scope "proj:epic" -o epic.json` | One epic subtree |
-| Full SQLite archive | `asobi backup` | Complete database, including skills and task state |
+| Full SQLite archive | `asobi backup` | Complete database, including task state. Skills live on disk and are backed up with the repository, not here. |
 
 ```bash
 asobi import graph.json
@@ -229,7 +229,11 @@ subdir = "skills"                # only walk this directory of the checkout
 asobi skills sync
 ```
 
-`sync` treats the config as the whole truth: it installs what is declared, prunes what is not, and writes each selected skill to `<path>/<source-slug>@<skill-name>/SKILL.md` so agents can read it off the filesystem. Directories without `@` in the name — vendored checkouts, hand-written skills — are left alone. Declare exactly one of `all = true` or `select = [...]` per source.
+`sync` treats the config as the whole truth: it installs what is declared, prunes what is not, and writes each selected skill to `<path>/<source-slug>@<skill-name>/SKILL.md`. Directories without `@` in the name — vendored checkouts, hand-written skills — are left alone. Declare exactly one of `all = true` or `select = [...]` per source.
+
+The skills directory is the store of record: since 0.7 a skill exists on disk and nowhere else, so it does not appear in `graph`, `search`, or `show`, and `rg` over the skills directory is how you search one. `path` defaults to `.agents/skills`, resolved against the `asobi.toml` that declares it, or against the discovered workspace root when no config declares a `[skills]` block — so `skills` and `skills show` work under a plain `asobi init` too.
+
+Alongside the skill directories, `sync` writes `.asobi-skills.json` recording each skill's source and the exact commit it came from. `asobi skills` reports that commit. Committing the whole tree, manifest included, is what turns an upstream skill change into a reviewable diff.
 
 Some sources mirror every skill across several tool-specific directories (`.opencode/`, `.kiro/`, a canonical `skills/`, ...) with the same `name:` in each copy — that collides on install, since a skill name must be unique within a source. `subdir` scopes the walk to one directory of the checkout so the mirrors are never seen; `asobi skills install <url> --subdir <path> ...` does the same for the imperative form.
 
@@ -363,9 +367,9 @@ asobi skills remove <NAME | SOURCE>
 asobi skills show <NAME>
 ```
 
-`install` takes a git URL or a local path; git sources are shallow-cloned into a reused cache under `.asobi/caches/<slug>`. Frontmatter supplies the metadata, with the name falling back to the file or directory name, and the body is stored as graph-backed skill data. `--all` is a full sync that prunes skills deleted or renamed upstream; `--select` and the interactive picker are purely additive. Passing neither flag opens a numbered picker, which needs a TTY and otherwise errors asking for a flag. `--subdir` scopes the walk to one directory of the checkout, for sources that mirror the same skills across several tool-specific directories and would otherwise collide on name.
+`install` takes a git URL or a local path; git sources are shallow-cloned into a reused cache under `.asobi/caches/<slug>`. Frontmatter supplies the metadata, with the name falling back to the file or directory name. `--all` is a full sync of that source, pruning skills deleted or renamed upstream; `--select` and the interactive picker are additive. Passing neither flag opens a numbered picker, which needs a TTY and otherwise errors asking for a flag. `--subdir` scopes the walk to one directory of the checkout, for sources that mirror the same skills across several tool-specific directories and would otherwise collide on name. Installing one source never disturbs another's skills.
 
-`sync` reconciles against the `[skills]` block in the discovered `asobi.toml`, as described under [Common workflows](#common-workflows). `update` refreshes from cache via `git fetch` and `reset --hard`, re-cloning if that fails, and prunes like `--all`; it needs `git` on `PATH`. `show` prints a skill body as raw Markdown, accepting either the fully-qualified `skill:<slug>:<name>` or the short name. Never hand-edit installed skill entities — they are replaced on the next sync.
+`sync` reconciles against the `[skills]` block in the discovered `asobi.toml`, as described under [Common workflows](#common-workflows). `update` refreshes from cache via `git fetch` and `reset --hard`, re-cloning if that fails; it needs `git` on `PATH`, and a scoped `update <source>` leaves other sources alone. `show` prints a skill's `SKILL.md` as raw Markdown, matched on its frontmatter name or its directory name. Never hand-edit an installed skill — the next sync overwrites it; edit the source repository instead.
 
 ### Tasks
 
@@ -459,7 +463,6 @@ The payload for `graph` and `search` is a lazy JSON structure (excluding `observ
         "key": "value"
       },
       "observationCount": 12,
-      "body": "string",
       "observationsDetailed": [
         {
           "id": 123,
@@ -478,7 +481,7 @@ The payload for `graph` and `search` is a lazy JSON structure (excluding `observ
 }
 ```
 
-`observationsDetailed` is present only when `--with-ids` was passed, and `body` only for skill entities.
+`observationsDetailed` is present only when `--with-ids` was passed.
 
 ### Search behavior
 
