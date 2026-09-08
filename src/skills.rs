@@ -32,14 +32,10 @@ pub struct CollectedSkill {
     pub version: String,
     /// The full `SKILL.md` text, frontmatter included.
     pub body: String,
-    /// The skill's own directory in the source checkout, when it has one —
-    /// i.e. when the entry point is a conventional `SKILL.md`/`index.md` rather
-    /// than a bare `<name>.md`. Its contents (`references/`, `scripts/`,
-    /// `assets/`, anything else) are copied alongside the body.
-    ///
-    /// `None` for a bare `.md` skill, whose parent directory belongs to the
-    /// checkout rather than to the skill — copying it would drag in siblings.
-    pub bundle_dir: Option<std::path::PathBuf>,
+    /// The skill's own directory in the source checkout. Every skill has one:
+    /// a skill *is* a directory containing `SKILL.md`. Its Markdown is copied
+    /// alongside the body so on-demand references resolve after install.
+    pub bundle_dir: std::path::PathBuf,
 }
 
 /// What one sync changed on disk.
@@ -96,22 +92,6 @@ pub fn derive_source_slug(url: &str) -> String {
     }
 
     crate::normalize::normalize_key(url)
-}
-
-/// When a skill file has no frontmatter `name:`, derive it from the filename
-/// stem — except for convention filenames (`SKILL.md`, `index.md`), where the
-/// skill's identity is the parent directory name.
-fn resolve_skill_name_fallback(path: &Path) -> String {
-    let file_stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
-    if file_stem.eq_ignore_ascii_case("SKILL") || file_stem.eq_ignore_ascii_case("index") {
-        path.parent()
-            .and_then(|p| p.file_name())
-            .and_then(|n| n.to_str())
-            .unwrap_or(file_stem)
-            .to_string()
-    } else {
-        file_stem.to_string()
-    }
 }
 
 pub fn resolve_selection(
@@ -180,7 +160,7 @@ pub fn collect_skills_from_dir(
     is_tty: bool,
 ) -> Result<Vec<CollectedSkill>> {
     let mut parsed_skills = Vec::new();
-    let mut skill_contents: HashMap<String, (String, Option<std::path::PathBuf>)> = HashMap::new();
+    let mut skill_contents: HashMap<String, (String, std::path::PathBuf)> = HashMap::new();
     // Every file path that claimed each name. Real-world skill repos sometimes
     // mirror the same skill under two tool-specific directories (e.g.
     // `.opencode/skills/x/` and `skills/x/`) and those mirrors can genuinely
@@ -192,37 +172,50 @@ pub fn collect_skills_from_dir(
     // collision only blocks installing *that* name: a narrow `--select` of an
     // unrelated, unambiguous skill in the same source still succeeds.
     let mut skill_paths: HashMap<String, Vec<std::path::PathBuf>> = HashMap::new();
+    // A skill is a directory containing `SKILL.md`, which is what the Agent
+    // Skills specification defines and the only shape supported here. Loose
+    // `<name>.md` files were once accepted too, which bought a name-fallback
+    // rule, an optional bundle, and a class of skill whose relative references
+    // could never resolve -- three kinds of complexity for a shape the spec
+    // does not have.
     for entry in WalkDir::new(dir_path)
         .into_iter()
         .filter_map(|e| e.ok())
-        .filter(|e| e.path().is_file() && e.path().extension().is_some_and(|ext| ext == "md"))
+        .filter(|e| e.path().is_file())
+        .filter(|e| {
+            e.path()
+                .file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.eq_ignore_ascii_case("SKILL.md"))
+        })
     {
+        let Some(bundle_dir) = entry.path().parent().map(Path::to_path_buf) else {
+            continue;
+        };
         let content = std::fs::read_to_string(entry.path())?.replace("\r\n", "\n");
         if let Some((parsed_name, parsed_desc)) = parse_frontmatter(&content) {
-            let name = parsed_name.unwrap_or_else(|| resolve_skill_name_fallback(entry.path()));
+            // The spec requires a skill's directory to be named for it, so the
+            // directory is the right answer when frontmatter omits the name.
+            let name = parsed_name.unwrap_or_else(|| {
+                bundle_dir
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("skill")
+                    .to_string()
+            });
             skill_paths
                 .entry(name.clone())
                 .or_default()
                 .push(entry.path().to_path_buf());
-            // A skill that owns a directory brings that directory with it.
-            // The spec's progressive disclosure depends on `references/` and
-            // `scripts/` still being there to read on demand, so they are
-            // copied rather than folded into the body.
-            let stem = entry
-                .path()
-                .file_stem()
-                .and_then(|s| s.to_str())
-                .unwrap_or("");
-            let bundle_dir = (stem.eq_ignore_ascii_case("SKILL")
-                || stem.eq_ignore_ascii_case("index"))
-            .then(|| entry.path().parent().map(Path::to_path_buf))
-            .flatten();
             parsed_skills.push((name.clone(), parsed_desc.unwrap_or_default()));
             skill_contents.insert(name, (content, bundle_dir));
         }
     }
     if parsed_skills.is_empty() {
-        bail!("No valid skills found in {}", source);
+        bail!(
+            "No skills found in {source}: a skill is a directory containing SKILL.md \
+             (see https://agentskills.io/specification)"
+        );
     }
     let selected_names = resolve_selection(&parsed_skills, mode, is_tty)?;
     if let Some(name) = selected_names
@@ -266,7 +259,6 @@ pub fn collect_skills_from_dir(
             body,
             bundle_dir,
         });
-        warn_unresolvable_references(collected.last().expect("just pushed"));
     }
     Ok(collected)
 }
@@ -366,59 +358,9 @@ pub fn read_installed_skills(dir: &Path) -> Result<Vec<InstalledSkill>> {
 /// without them leaves a skill whose instructions reference files that are not
 /// there — the failure is silent, since nothing reads the body until an agent
 /// does.
-/// Warn when a skill with no directory of its own points at a local file.
-///
-/// A bare `<name>.md` skill has no bundle to bring along -- its parent belongs
-/// to the checkout, and copying that would drag in every sibling skill -- so a
-/// relative reference in its body cannot resolve once installed. Reference
-/// inlining (0.6.3) papered over this by folding the target's text into the
-/// body, which defeated on-demand loading and only ever worked for markdown.
-///
-/// Only unambiguous markdown links are considered. A backtick-quoted path is
-/// as often an example or a generated output as a reference, and guessing was
-/// what made inlining unreliable.
-///
-/// The fix belongs to the skill's author, and the specification already states
-/// it: a skill that ships resources is a directory containing `SKILL.md`.
-fn warn_unresolvable_references(skill: &CollectedSkill) {
-    if skill.bundle_dir.is_some() {
-        return;
-    }
-    for target in markdown_link_targets(&skill.body) {
-        tracing::warn!(
-            "skill '{}' references '{}', which is not installed: it has no directory of \
-             its own, so only its SKILL.md is written. Move it into a directory with \
-             SKILL.md to ship the file alongside.",
-            skill.name,
-            target
-        );
-    }
-}
-
-/// Targets of `[text](target)` links that look like a local file reference.
-fn markdown_link_targets(body: &str) -> Vec<&str> {
-    let mut found = Vec::new();
-    for (index, _) in body.match_indices("](") {
-        let open = index + 2;
-        let Some(end) = body[open..].find(')') else {
-            continue;
-        };
-        let raw = body[open..open + end].trim();
-        let target = raw.split_whitespace().next().unwrap_or(raw);
-        let external = target.is_empty()
-            || target.starts_with('#')
-            || target.contains("://")
-            || target.starts_with("mailto:")
-            || target.starts_with("tel:");
-        if !external && !found.contains(&target) {
-            found.push(target);
-        }
-    }
-    found
-}
-
-fn copy_bundle(from: Option<&Path>, to: &Path) -> Result<()> {
-    let Some(from) = from else { return Ok(()) };
+fn copy_bundle(skill: &CollectedSkill, to: &Path) -> Result<()> {
+    let from = skill.bundle_dir.as_path();
+    let mut skipped = Vec::new();
     for entry in WalkDir::new(from).into_iter().filter_map(|e| e.ok()) {
         let relative = entry.path().strip_prefix(from).unwrap_or(entry.path());
         if relative.as_os_str().is_empty() {
@@ -429,27 +371,59 @@ fn copy_bundle(from: Option<&Path>, to: &Path) -> Result<()> {
         if relative.as_os_str().eq_ignore_ascii_case("SKILL.md") {
             continue;
         }
-        let target = to.join(relative);
         if entry.file_type().is_dir() {
-            std::fs::create_dir_all(&target)?;
-        } else if entry.file_type().is_file() {
-            if let Some(parent) = target.parent() {
-                std::fs::create_dir_all(parent)?;
-            }
-            // Same mtime reasoning as the body: skip a byte-identical file.
-            let unchanged = std::fs::read(entry.path())
-                .ok()
-                .zip(std::fs::read(&target).ok())
-                .is_some_and(|(src, dst)| src == dst);
-            if !unchanged {
-                std::fs::copy(entry.path(), &target)?;
-            }
+            continue;
         }
-        // Symlinks are deliberately not followed: a skill source is untrusted
-        // input, and a link pointing outside the checkout would copy whatever
-        // it names into the skills tree.
+        if !entry.file_type().is_file() {
+            // Symlinks are deliberately not followed: a skill source is
+            // untrusted input, and a link out of the checkout would copy
+            // whatever it names into the skills tree.
+            continue;
+        }
+        if !is_markdown(entry.path()) {
+            skipped.push(relative.display().to_string());
+            continue;
+        }
+        let target = to.join(relative);
+        if let Some(parent) = target.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        // Same mtime reasoning as the body: skip a byte-identical file.
+        let unchanged = std::fs::read(entry.path())
+            .ok()
+            .zip(std::fs::read(&target).ok())
+            .is_some_and(|(src, dst)| src == dst);
+        if !unchanged {
+            std::fs::copy(entry.path(), &target)?;
+        }
+    }
+
+    if !skipped.is_empty() {
+        skipped.sort();
+        tracing::warn!(
+            "skill '{}': did not install {} non-Markdown file(s) ({}). Asobi installs \
+             instructions, not executables or data -- fetch them from the source if a \
+             step genuinely needs them.",
+            skill.name,
+            skipped.len(),
+            skipped.join(", ")
+        );
     }
     Ok(())
+}
+
+/// Markdown is the only thing a skill install writes besides `SKILL.md`.
+///
+/// The rest of a skill's directory -- `scripts/`, `assets/`, tool-specific
+/// config -- is fetched from a git URL and is exactly where the published
+/// attack research finds payloads hidden, precisely because scanners read the
+/// body and not the artifacts beside it. Writing an upstream script to disk on
+/// the strength of a `select` line is a bigger promise than a skill installer
+/// should make; a human who wants one can fetch it deliberately.
+fn is_markdown(path: &Path) -> bool {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| e.eq_ignore_ascii_case("md") || e.eq_ignore_ascii_case("markdown"))
 }
 
 /// Write `desired` out as `<dir>/<slug>@<name>/SKILL.md` plus its bundled
@@ -475,7 +449,7 @@ pub fn materialize_skills(dir: &Path, desired: &[CollectedSkill]) -> Result<Mate
         // Bundled resources are refreshed every run: an upstream change to a
         // `references/` file does not necessarily change `SKILL.md`, so gating
         // the copy on the body would let them drift.
-        copy_bundle(skill.bundle_dir.as_deref(), &skill_dir)?;
+        copy_bundle(skill, &skill_dir)?;
         // Leave an already-current body alone so a no-op sync does not churn
         // mtimes that file watchers key off.
         if std::fs::read_to_string(&file).is_ok_and(|existing| existing == skill.body) {
@@ -524,6 +498,18 @@ pub fn materialize_skills(dir: &Path, desired: &[CollectedSkill]) -> Result<Mate
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Write a spec-shaped skill: a directory named for it, holding SKILL.md.
+    fn write_skill(root: &Path, name: &str, body: &str) -> std::path::PathBuf {
+        let dir = root.join(name);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("SKILL.md"),
+            format!("---\nname: {name}\ndescription: {name} description\n---\n{body}\n"),
+        )
+        .unwrap();
+        dir
+    }
 
     #[test]
     fn test_parse_frontmatter_valid() {
@@ -623,7 +609,8 @@ mod tests {
             .unwrap();
 
         // 2. Create a skill file
-        let skill_file = repo_path.join("test-skill.md");
+        let skill_file = repo_path.join("repo-skill").join("SKILL.md");
+        std::fs::create_dir_all(skill_file.parent().unwrap()).unwrap();
         std::fs::write(
             &skill_file,
             "---\nname: repo-skill\ndescription: cloned skill\n---\nbody text\n",
@@ -633,7 +620,7 @@ mod tests {
         // 3. Commit the file
         std::process::Command::new("git")
             .arg("add")
-            .arg("test-skill.md")
+            .arg("repo-skill/SKILL.md")
             .current_dir(repo_path)
             .status()
             .unwrap();
@@ -693,16 +680,8 @@ mod tests {
         use tempfile::tempdir;
         let src_dir = tempdir().unwrap();
         let src = src_dir.path();
-        std::fs::write(
-            src.join("alpha.md"),
-            "---\nname: alpha\ndescription: a\n---\nalpha body\n",
-        )
-        .unwrap();
-        std::fs::write(
-            src.join("beta.md"),
-            "---\nname: beta\ndescription: b\n---\nbeta body\n",
-        )
-        .unwrap();
+        write_skill(src, "alpha", "alpha body");
+        write_skill(src, "beta", "beta body");
         let source = src.to_str().unwrap();
         let out_dir = tempdir().unwrap();
         let out = out_dir.path();
@@ -713,7 +692,7 @@ mod tests {
         assert_eq!(read_installed_skills(out).unwrap().len(), 2);
 
         // Upstream removes `beta`; the next sync must drop it from disk.
-        std::fs::remove_file(src.join("beta.md")).unwrap();
+        std::fs::remove_dir_all(src.join("beta")).unwrap();
         let second = collect_skills_from_dir(src, source, "v2", SelectionMode::All, false).unwrap();
         let outcome = materialize_skills(out, &second).unwrap();
 
@@ -731,11 +710,7 @@ mod tests {
         use tempfile::tempdir;
         let src_dir = tempdir().unwrap();
         let src = src_dir.path();
-        std::fs::write(
-            src.join("alpha.md"),
-            "---\nname: alpha\ndescription: a\n---\nalpha body\n",
-        )
-        .unwrap();
+        write_skill(src, "alpha", "alpha body");
         let out_dir = tempdir().unwrap();
         let out = out_dir.path();
         let collected = collect_skills_from_dir(
@@ -752,7 +727,7 @@ mod tests {
         let installed = read_installed_skills(out).unwrap();
         assert_eq!(installed[0].source, "https://example.com/o/r.git");
         assert_eq!(installed[0].version, "abc123");
-        assert_eq!(installed[0].description, "a");
+        assert_eq!(installed[0].description, "alpha description");
     }
 
     /// Without a manifest — an older tree, or one a human pruned by hand —
@@ -781,16 +756,8 @@ mod tests {
         use tempfile::tempdir;
         let src_dir = tempdir().unwrap();
         let src = src_dir.path();
-        std::fs::write(
-            src.join("alpha.md"),
-            "---\nname: alpha\ndescription: a\n---\nalpha body\n",
-        )
-        .unwrap();
-        std::fs::write(
-            src.join("beta.md"),
-            "---\nname: beta\ndescription: b\n---\nbeta body\n",
-        )
-        .unwrap();
+        write_skill(src, "alpha", "alpha body");
+        write_skill(src, "beta", "beta body");
         let source = src.to_str().unwrap();
 
         let collected =
@@ -819,7 +786,7 @@ mod tests {
         assert!(written.removed.is_empty());
         assert_eq!(
             std::fs::read_to_string(out.join(&alpha_dir).join("SKILL.md")).unwrap(),
-            "---\nname: alpha\ndescription: a\n---\nalpha body\n"
+            "---\nname: alpha\ndescription: alpha description\n---\nalpha body\n"
         );
 
         // Re-running with the same desired set is a no-op on disk.
@@ -871,7 +838,8 @@ mod tests {
             .unwrap();
 
         // 2. Create skill files with missing name and description respectively
-        let refactor_file = repo_path.join("refactor.md");
+        let refactor_file = repo_path.join("refactor").join("SKILL.md");
+        std::fs::create_dir_all(refactor_file.parent().unwrap()).unwrap();
         std::fs::write(
             &refactor_file,
             "---\ndescription: Iterative refactoring loop\n---\nrefactor body\n",
@@ -890,7 +858,7 @@ mod tests {
         // 3. Commit files
         std::process::Command::new("git")
             .arg("add")
-            .arg("refactor.md")
+            .arg("refactor/SKILL.md")
             .arg("software-design-review/SKILL.md")
             .current_dir(repo_path)
             .status()
@@ -956,6 +924,8 @@ mod tests {
         std::fs::create_dir_all(src.join("references")).unwrap();
         std::fs::create_dir_all(src.join("scripts")).unwrap();
 
+        // Written directly rather than via the helper: this body carries a
+        // reference link, which is the whole point of the test.
         std::fs::write(
             src.join("SKILL.md"),
             "---\nname: triage\ndescription: toc-style skill\n---\n\
@@ -983,21 +953,22 @@ mod tests {
         materialize_skills(out, &collected).unwrap();
         let installed = out.join(&collected[0].dir_name);
 
-        // ...and the files it points at are actually there to be read.
+        // ...the Markdown it points at is there to be read...
         assert_eq!(
             std::fs::read_to_string(installed.join("references/AGENT-BRIEF.md")).unwrap(),
             "# Agent Brief\n\nWrite briefs like this.\n"
         );
-        assert_eq!(
-            std::fs::read_to_string(installed.join("scripts/extract.py")).unwrap(),
-            "print('hi')\n"
-        );
+        // ...and the script is not. Auxiliary artifacts are where the published
+        // attack research finds payloads, so an install writes instructions and
+        // leaves fetched executables where they came from.
+        assert!(!installed.join("scripts/extract.py").exists());
     }
 
-    /// A bare `<name>.md` skill has no directory of its own -- its parent
-    /// belongs to the checkout -- so nothing beside it may be dragged along.
+    /// A loose `<name>.md` is not a skill. Accepting them bought a name
+    /// fallback, an optional bundle, and a shape whose relative references
+    /// could never resolve once installed.
     #[test]
-    fn test_bare_markdown_skill_copies_no_siblings() {
+    fn test_loose_markdown_is_not_a_skill() {
         use tempfile::tempdir;
         let src_dir = tempdir().unwrap();
         let src = src_dir.path();
@@ -1006,20 +977,14 @@ mod tests {
             "---\nname: alpha\ndescription: a\n---\nalpha body\n",
         )
         .unwrap();
-        std::fs::write(src.join("unrelated.txt"), "not mine").unwrap();
 
-        let collected =
+        let err =
             collect_skills_from_dir(src, src.to_str().unwrap(), "v1", SelectionMode::All, false)
-                .unwrap();
-        assert_eq!(collected.len(), 1);
-        assert!(collected[0].bundle_dir.is_none());
-
-        let out_dir = tempdir().unwrap();
-        let out = out_dir.path();
-        materialize_skills(out, &collected).unwrap();
-        let installed = out.join(&collected[0].dir_name);
-        assert!(installed.join("SKILL.md").is_file());
-        assert!(!installed.join("unrelated.txt").exists());
+                .unwrap_err();
+        assert!(
+            err.to_string().contains("directory containing SKILL.md"),
+            "message was: {err}"
+        );
     }
 
     #[test]
@@ -1031,18 +996,8 @@ mod tests {
         // Mirrors a real pattern: the same skill name declared under two
         // tool-specific directories, with genuinely different descriptions --
         // picking one silently would drop the other's content.
-        std::fs::create_dir(src.join("skills")).unwrap();
-        std::fs::create_dir(src.join(".opencode")).unwrap();
-        std::fs::write(
-            src.join("skills/one.md"),
-            "---\nname: dup\ndescription: canonical copy\n---\nbody one\n",
-        )
-        .unwrap();
-        std::fs::write(
-            src.join(".opencode/two.md"),
-            "---\nname: dup\ndescription: mirrored copy\n---\nbody two\n",
-        )
-        .unwrap();
+        write_skill(&src.join("skills"), "dup", "body one");
+        write_skill(&src.join(".opencode"), "dup", "body two");
 
         let source = src.to_str().unwrap();
 
@@ -1050,8 +1005,8 @@ mod tests {
             collect_skills_from_dir(src, source, "v1", SelectionMode::All, false).unwrap_err();
         let message = err.to_string();
         assert!(message.contains("dup"), "message was: {message}");
-        assert!(message.contains("one.md"), "message was: {message}");
-        assert!(message.contains("two.md"), "message was: {message}");
+        assert!(message.contains("skills/dup"), "message was: {message}");
+        assert!(message.contains(".opencode/dup"), "message was: {message}");
     }
 
     #[test]
@@ -1063,23 +1018,9 @@ mod tests {
         // Same collision as above, plus one unambiguous skill elsewhere in the
         // same source. A narrow `--select` of the unambiguous one must still
         // succeed -- the collision only matters for the name it actually blocks.
-        std::fs::create_dir(src.join("skills")).unwrap();
-        std::fs::create_dir(src.join(".opencode")).unwrap();
-        std::fs::write(
-            src.join("skills/one.md"),
-            "---\nname: dup\ndescription: canonical copy\n---\nbody one\n",
-        )
-        .unwrap();
-        std::fs::write(
-            src.join(".opencode/two.md"),
-            "---\nname: dup\ndescription: mirrored copy\n---\nbody two\n",
-        )
-        .unwrap();
-        std::fs::write(
-            src.join("fine.md"),
-            "---\nname: fine\ndescription: no conflict\n---\nfine body\n",
-        )
-        .unwrap();
+        write_skill(&src.join("skills"), "dup", "body one");
+        write_skill(&src.join(".opencode"), "dup", "body two");
+        write_skill(src, "fine", "fine body");
 
         let source = src.to_str().unwrap();
 

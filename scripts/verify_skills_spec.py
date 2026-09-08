@@ -35,7 +35,11 @@ ROOT = Path(__file__).resolve().parents[1]
 BIN = ROOT / "target" / "debug" / "asobi"
 SKILLS_REF = "skills-ref@0.1.5"
 
-BUNDLED = ("references/REFERENCE.md", "scripts/run.sh", "assets/table.json")
+# Markdown a skill points at must survive installation; everything else must
+# not. Auxiliary artifacts are where the published attack research finds
+# payloads hidden, so an install writes instructions and nothing executable.
+INSTALLED = ("references/REFERENCE.md",)
+WITHHELD = ("scripts/run.sh", "assets/table.json")
 
 FIXTURE = {
     "SKILL.md": (
@@ -127,13 +131,18 @@ def main() -> None:
         installed = install_fixture(work)
 
         for skill_dir in installed:
-            # Bundled resources must survive installation: the spec loads them
-            # on demand when the body points at them, so a body referencing a
-            # file that is not there is a skill that breaks only once used.
+            # Referenced Markdown must survive installation: the spec loads it
+            # on demand when the body points at it, so a body referencing a file
+            # that is not there is a skill that breaks only once used.
             failures += [
-                f"{skill_dir.name}: bundled {relative} was not installed"
-                for relative in BUNDLED
+                f"{skill_dir.name}: referenced {relative} was not installed"
+                for relative in INSTALLED
                 if not (skill_dir / relative).is_file()
+            ]
+            failures += [
+                f"{skill_dir.name}: {relative} was installed; only Markdown should be"
+                for relative in WITHHELD
+                if (skill_dir / relative).exists()
             ]
 
             name = frontmatter_name(skill_dir / "SKILL.md")
@@ -164,7 +173,9 @@ def main() -> None:
         sys.exit(
             "\nAgent Skills spec violations:\n" + "\n".join(f"  {f}" for f in failures)
         )
-    print(f"agent skills spec: {count} skill(s) conform, bundled resources intact")
+    print(
+        f"agent skills spec: {count} skill(s) conform, Markdown intact, executables withheld"
+    )
 
 
 if __name__ == "__main__":

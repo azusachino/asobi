@@ -358,9 +358,9 @@ fn reload(
         source: installed.source.clone(),
         version: installed.version.clone(),
         body,
-        // Already materialized: its bundled files are in place under the
-        // skills directory, and materialize never clears a directory it is
-        // rewriting, so there is nothing to copy.
-        bundle_dir: None,
+        // Already materialized, so its own installed directory is the bundle.
+        // Copying it onto itself is a no-op: every file compares byte-identical
+        // and is skipped, which keeps this path from churning mtimes.
+        bundle_dir: dir.join(&installed.dir),
     })
 }
