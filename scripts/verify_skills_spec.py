@@ -113,17 +113,11 @@ def install_fixture(work: Path) -> list[Path]:
         sys.exit(f"install wrote nothing under {skills_root}")
 
     # The manifest is state, so it sits in the data directory (here `home`,
-    # since ASOBI_HOME unifies the roots) rather than beside the skills, and is
-    # named for the skills directory it describes. Glob rather than recompute
-    # the key: this checks that a manifest was written, not how it is named.
-    manifests = list(home.glob("skills-*.json"))
-    if len(manifests) != 1:
-        sys.exit(
-            f"expected exactly one provenance manifest under {home}, found {manifests}"
-        )
-    recorded = {
-        entry["dir"] for entry in json.loads(manifests[0].read_text())["skills"]
-    }
+    # since ASOBI_HOME unifies the roots) rather than beside the skills.
+    manifest = home / "skills.json"
+    if not manifest.is_file():
+        sys.exit(f"missing provenance manifest: {manifest}")
+    recorded = {entry["dir"] for entry in json.loads(manifest.read_text())["skills"]}
     if orphans := {d.name for d in installed} - recorded:
         sys.exit(f"installed but absent from the manifest: {sorted(orphans)}")
     return installed

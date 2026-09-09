@@ -503,11 +503,12 @@ def skills_sync_checks() -> None:
         assert not list(skills_dir.glob("*@beta")), "unselected skill was written"
         assert (skills_dir / "vendored-upstream").is_dir()
 
-        # The manifest is state, so it lands in `data_dir` -- named for the
-        # skills directory it describes -- and the skills directory holds
-        # nothing but skills.
-        manifests = list((project / ".asobi" / "data").glob("skills-*.json"))
-        assert len(manifests) == 1, f"expected one manifest, got {manifests}"
+        # The manifest is state, so it lands in `data_dir` -- one skills.json,
+        # naming the skills directory it describes -- and the skills directory
+        # holds nothing but skills.
+        manifest = project / ".asobi" / "data" / "skills.json"
+        assert manifest.is_file(), f"no manifest at {manifest}"
+        assert json.loads(manifest.read_text())["dir"] == str(skills_dir)
         assert not list(skills_dir.glob("*.json")), "manifest written beside skills"
         assert not (skills_dir / ".asobi-skills.json").exists()
 

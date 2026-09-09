@@ -294,11 +294,15 @@ pub struct InstalledSkill {
 ///
 /// The manifest is state, so it belongs under `data_dir` rather than in the
 /// skills directory, which asobi treats as project content (see
-/// `AsobiPaths::root`). The two are anchored differently — under the XDG
-/// fallback `data_dir` is global while the skills directory follows the
-/// working directory — so the file is keyed by the directory it describes.
-/// Without that key every project sharing an XDG state tree would read, and
-/// overwrite, one another's manifest.
+/// `AsobiPaths::root`). One file, `skills.json`, describing one skills
+/// directory.
+///
+/// The two paths are not anchored together: under the XDG fallback `data_dir`
+/// is global while the skills directory follows the working directory, so two
+/// projects can share a data directory and disagree about which skills tree
+/// they mean. The manifest therefore records the directory it describes, and
+/// [`read_installed_skills`] ignores one written for a different tree rather
+/// than reporting its contents — or, worse, reporting nothing.
 pub struct SkillsTree {
     pub dir: PathBuf,
     pub manifest: PathBuf,
@@ -308,42 +312,37 @@ impl SkillsTree {
     pub fn new(data_dir: &Path, skills_dir: &Path) -> Self {
         Self {
             dir: skills_dir.to_path_buf(),
-            manifest: data_dir.join(format!("skills-{:016x}.json", path_key(skills_dir))),
+            manifest: data_dir.join(MANIFEST_FILE),
         }
     }
 }
 
-/// FNV-1a over the path's bytes. Written out rather than taken from
-/// `DefaultHasher`, whose output is explicitly not stable across Rust
-/// releases — a toolchain bump must not orphan every manifest on disk. The
-/// path is used as given, without canonicalizing: it is already absolute (it
-/// is resolved against `AsobiPaths::root`), and resolving symlinks would key
-/// the same directory differently depending on whether it existed yet.
-fn path_key(path: &Path) -> u64 {
-    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
-    for byte in path.as_os_str().as_encoded_bytes() {
-        hash ^= u64::from(*byte);
-        hash = hash.wrapping_mul(0x100_0000_01b3);
-    }
-    hash
-}
+/// The installed-skill manifest, under `data_dir`.
+pub const MANIFEST_FILE: &str = "skills.json";
 
 #[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
 struct Manifest {
+    /// The skills directory these entries describe. Recorded because one
+    /// `data_dir` can be reached from more than one skills directory, and a
+    /// manifest that cannot say which one it means is indistinguishable from
+    /// a manifest saying the tree is empty.
+    #[serde(default)]
+    dir: String,
     skills: Vec<InstalledSkill>,
 }
 
 /// Read the installed-skill manifest for `tree`.
 ///
 /// Falls back to scanning `<slug>@<name>` directories when the manifest is
-/// absent — a tree a human edited, or one written before the manifest
-/// existed — so listing still works, at the cost of empty `source`/`version`.
-/// Directories without `@` are ignored either way, the same convention
-/// [`materialize_skills`] prunes by.
+/// absent, unreadable, or describes a different skills directory — a tree a
+/// human edited, or another project's — so listing still works, at the cost
+/// of empty `source`/`version`. Directories without `@` are ignored either
+/// way, the same convention [`materialize_skills`] prunes by.
 pub fn read_installed_skills(tree: &SkillsTree) -> Result<Vec<InstalledSkill>> {
     let dir = tree.dir.as_path();
     if let Ok(raw) = std::fs::read_to_string(&tree.manifest)
         && let Ok(manifest) = serde_json::from_str::<Manifest>(&raw)
+        && Path::new(&manifest.dir) == dir
     {
         let mut skills = manifest.skills;
         skills.retain(|s| dir.join(&s.dir).join("SKILL.md").is_file());
@@ -515,6 +514,7 @@ pub fn materialize_skills(
     }
 
     let manifest = Manifest {
+        dir: dir.to_string_lossy().into_owned(),
         skills: desired
             .iter()
             .map(|s| InstalledSkill {
@@ -820,11 +820,13 @@ mod tests {
 
     /// Two skills directories sharing one `data_dir` — what the XDG fallback
     /// produces for any two projects on a machine, since `data_dir` is global
-    /// there while the skills directory follows the working directory. Each
-    /// must get its own manifest, or one project's sync silently rewrites the
-    /// other's provenance.
+    /// there while the skills directory follows the working directory. They
+    /// share the one `skills.json`, so the second must recognise the manifest
+    /// as describing someone else's tree and scan its own instead of trusting
+    /// it. Reporting the other tree's skills would be wrong; reporting nothing
+    /// would be worse, because it is indistinguishable from an empty tree.
     #[test]
-    fn test_manifests_are_keyed_per_skills_dir() {
+    fn test_manifest_for_another_tree_is_ignored() {
         use tempfile::tempdir;
         let src_dir = tempdir().unwrap();
         let src = src_dir.path();
@@ -842,25 +844,26 @@ mod tests {
         let data = root.path().join("state");
         let one = SkillsTree::new(&data, &root.path().join("a/.agents/skills"));
         let two = SkillsTree::new(&data, &root.path().join("b/.agents/skills"));
-        assert_ne!(one.manifest, two.manifest);
+        assert_eq!(one.manifest, two.manifest, "one file, shared");
 
         materialize_skills(&one, &collected).unwrap();
-        // Nothing is installed under `two`, so its own manifest is absent and
-        // it must not inherit `one`'s.
-        assert!(!two.manifest.exists());
-        assert!(read_installed_skills(&two).unwrap().is_empty());
         assert_eq!(read_installed_skills(&one).unwrap().len(), 1);
-    }
 
-    /// The key must not move under a toolchain upgrade, or every manifest on
-    /// disk is orphaned at once. Pinned so a swap away from FNV-1a is a
-    /// deliberate, visible change rather than a silent one.
-    #[test]
-    fn test_path_key_is_stable() {
-        assert_eq!(
-            path_key(Path::new("/home/u/p/.agents/skills")),
-            0x06e8_0bce_a145_c5e8
-        );
+        // `two` is empty on disk, and must not inherit `one`'s entry.
+        assert!(read_installed_skills(&two).unwrap().is_empty());
+
+        // Once `two` has a skill of its own, the shared manifest still points
+        // at `one`, so the scan is what surfaces it — with no provenance.
+        let beta = two.dir.join("some-source@beta");
+        std::fs::create_dir_all(&beta).unwrap();
+        std::fs::write(beta.join("SKILL.md"), "---\nname: beta\n---\nbody\n").unwrap();
+        let found = read_installed_skills(&two).unwrap();
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].name, "beta");
+        assert!(found[0].version.is_empty());
+
+        // And `one` is untouched by any of it.
+        assert_eq!(read_installed_skills(&one).unwrap()[0].name, "alpha");
     }
 
     /// Without a manifest — an older tree, or one a human pruned by hand —
