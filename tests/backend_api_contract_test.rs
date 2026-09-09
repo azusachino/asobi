@@ -235,8 +235,11 @@ fn purge_is_preview_first_and_leaves_durable_knowledge() {
             .entities
             .is_empty()
     );
+    // The purged entity leaves the index with its observations. Asserting the
+    // whole result is empty would be wrong now that a multi-word query widens:
+    // "note" still matches the durable concept that survived, correctly.
     assert!(
-        store
+        !store
             .search_nodes(SearchQuery {
                 query: "old task note".into(),
                 limit: 10,
@@ -244,7 +247,8 @@ fn purge_is_preview_first_and_leaves_durable_knowledge() {
             })
             .unwrap()
             .entities
-            .is_empty()
+            .iter()
+            .any(|e| e.name == "project:task")
     );
     // The durable concept survives, and there is no request that could have
     // reached it: the policy is a constant now rather than validated flags, so
@@ -406,7 +410,7 @@ fn opening_a_pre_v5_database_drops_superseded_tables_and_enables_incremental_vac
     let user_version: i64 = conn
         .query_row("PRAGMA user_version", [], |r| r.get(0))
         .unwrap();
-    assert_eq!(user_version, 7);
+    assert_eq!(user_version, 8);
     let auto_vacuum: i64 = conn
         .query_row("PRAGMA auto_vacuum", [], |r| r.get(0))
         .unwrap();
@@ -570,4 +574,116 @@ fn finished_work_is_swept_on_the_first_write_not_on_reads() {
     let after = reopened.read_graph().unwrap();
     assert_eq!(after.entities.len(), 1, "the finished task is gone");
     assert_eq!(after.entities[0].name, "project:concept");
+}
+
+/// Truth values are searchable. The convention is to store a pitfall's
+/// human-readable warning in a `title` truth so session start can surface it
+/// cheaply — which made the one sentence explaining a dead end the one thing
+/// recall could not reach.
+#[test]
+fn search_reaches_truth_values_not_just_observations() {
+    let (_dir, store) = store();
+    store
+        .create_entities(vec![EntityInput {
+            name: "proj:pitfall:cache".into(),
+            entity_type: "concept".into(),
+            observations: vec!["tried: redeploying the server image".into()],
+        }])
+        .unwrap();
+    store
+        .truth_upsert(
+            "proj:pitfall:cache",
+            "title",
+            "bump the Valkey generation manually",
+        )
+        .unwrap();
+
+    let hits = |q: &str| {
+        store
+            .search_nodes(SearchQuery {
+                query: q.into(),
+                limit: 10,
+                filters: vec![],
+            })
+            .unwrap()
+            .entities
+            .len()
+    };
+    assert_eq!(
+        hits("Valkey"),
+        1,
+        "a token only in a truth must be findable"
+    );
+    assert_eq!(hits("redeploying"), 1, "observations still match");
+}
+
+/// A multi-word question must not fail closed. FTS5 ANDs bare terms, so a
+/// natural-language query whose words are spread across an observation, a truth
+/// and a name matched nothing — and an empty result is indistinguishable from
+/// "nothing was ever recorded", which is the wrong way for a pitfall lookup to
+/// fail.
+#[test]
+fn search_widens_rather_than_returning_a_silent_zero() {
+    let (_dir, store) = store();
+    store
+        .create_entities(vec![EntityInput {
+            name: "proj:pitfall:cache".into(),
+            entity_type: "concept".into(),
+            observations: vec!["tried: deploying a new image".into()],
+        }])
+        .unwrap();
+    store
+        .truth_upsert("proj:pitfall:cache", "title", "bump the cache generation")
+        .unwrap();
+
+    // No entity contains all four words, so the strict AND finds nothing.
+    let widened = store
+        .search_nodes(SearchQuery {
+            query: "deploying without cache bump".into(),
+            limit: 10,
+            filters: vec![],
+        })
+        .unwrap();
+    assert_eq!(
+        widened.entities.len(),
+        1,
+        "should widen rather than return nothing"
+    );
+    assert_eq!(widened.entities[0].name, "proj:pitfall:cache");
+}
+
+/// Ranking survives to the caller. The entity fetch used `ORDER BY name`, which
+/// re-sorted results alphabetically and silently discarded whatever ranking
+/// search had computed — so relevance never reached the caller at all.
+#[test]
+fn search_returns_results_in_ranked_order_not_alphabetical() {
+    let (_dir, store) = store();
+    store
+        .create_entities(vec![
+            EntityInput {
+                name: "aaa-unrelated".into(),
+                entity_type: "concept".into(),
+                observations: vec!["mentions widget once".into()],
+            },
+            EntityInput {
+                name: "zzz-the-match".into(),
+                entity_type: "concept".into(),
+                observations: vec!["widget widget widget, entirely about the widget".into()],
+            },
+        ])
+        .unwrap();
+    store
+        .truth_upsert("zzz-the-match", "title", "the widget explained")
+        .unwrap();
+
+    let ranked = store
+        .search_nodes(SearchQuery {
+            query: "widget".into(),
+            limit: 10,
+            filters: vec![],
+        })
+        .unwrap();
+    // Alphabetically `aaa-unrelated` wins; by relevance it does not, and it is
+    // matched by only one path where the other is matched by two.
+    assert_eq!(ranked.entities[0].name, "zzz-the-match");
 }

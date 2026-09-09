@@ -16,7 +16,7 @@ use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-const SCHEMA_VERSION: i64 = 7;
+const SCHEMA_VERSION: i64 = 8;
 const DEFAULT_DATABASE_FILENAME: &str = "asobi.db";
 const DEFAULT_BUSY_TIMEOUT_MS: u64 = 15_000;
 const DEFAULT_OBSERVATION_LIMIT: usize = 200;
@@ -96,6 +96,104 @@ fn collect_purge_candidates(
     .collect()
 }
 
+/// Entities matching `term`, across every path Asobi indexes: observation
+/// text, truth values, and the entity's own name or type.
+///
+/// Truth values were unsearchable before 0.7, which mattered because the
+/// convention is to store a pitfall's human-readable warning in a `title`
+/// truth -- so the one sentence explaining a dead end was the one thing recall
+/// could not reach.
+/// How many candidates each path contributes to the fusion, before the caller
+/// truncates to its own limit.
+///
+/// Fixed rather than derived from `--limit`, so ranking does not shift when the
+/// caller asks for more: capping each path at the requested limit meant a wider
+/// request pulled in weaker candidates that diluted the fused order, and the
+/// same entity moved position depending on how many results were asked for.
+const CANDIDATE_POOL: i64 = 100;
+
+fn matching_names(conn: &Connection, term: &str, limit: i64) -> rusqlite::Result<Vec<String>> {
+    // A negative limit means "unbounded" (a filtered search post-filters), and
+    // the pool has to be at least as generous as the caller's request.
+    let pool = if limit < 0 {
+        -1
+    } else {
+        limit.max(CANDIDATE_POOL)
+    };
+    let ranked = |sql: &str, params: &[&dyn ToSql]| -> rusqlite::Result<Vec<String>> {
+        let mut stmt = conn.prepare(sql)?;
+        let rows = stmt.query_map(params_from_iter(params.iter().copied()), |r| {
+            r.get::<_, String>(0)
+        });
+        // A malformed FTS5 query is a user error, not a failure: the other
+        // paths still answer, and the LIKE fallback usually does.
+        Ok(match rows {
+            Ok(rows) => rows.flatten().collect(),
+            Err(_) => Vec::new(),
+        })
+    };
+
+    let like = format!("%{term}%");
+    let paths = [
+        ranked(
+            "SELECT DISTINCT o.entity_name FROM asobi_obs_fts
+             JOIN asobi_observations o ON asobi_obs_fts.rowid = o.rowid
+             WHERE asobi_obs_fts MATCH ? ORDER BY bm25(asobi_obs_fts) LIMIT ?",
+            &[&term, &pool],
+        )?,
+        ranked(
+            "SELECT DISTINCT t.entity_name FROM asobi_truth_fts
+             JOIN asobi_truths t ON asobi_truth_fts.rowid = t.rowid
+             WHERE asobi_truth_fts MATCH ? ORDER BY bm25(asobi_truth_fts) LIMIT ?",
+            &[&term, &pool],
+        )?,
+        ranked(
+            "SELECT name FROM asobi_entities
+             WHERE name LIKE ? OR entity_type LIKE ? ORDER BY name LIMIT ?",
+            &[&like, &like, &pool],
+        )?,
+    ];
+
+    // Reciprocal rank fusion across the three paths.
+    //
+    // Concatenating them meant every observation match outranked every truth
+    // match, so an entity found only by its `title` landed last however good
+    // the match was -- and the ordering shifted with `--limit`, since each path
+    // was capped before the merge. Fusing by rank instead lets a strong match
+    // in one path compete with a strong match in another, and rewards an entity
+    // that several paths agree on. The constant 60 is the conventional RRF
+    // damping value: large enough that the top few ranks are not runaway
+    // favourites, small enough that rank still dominates.
+    const RRF_DAMPING: f64 = 60.0;
+    let mut scored: BTreeMap<String, f64> = BTreeMap::new();
+    for path in &paths {
+        for (rank, name) in path.iter().enumerate() {
+            *scored.entry(name.clone()).or_insert(0.0) += 1.0 / (RRF_DAMPING + rank as f64 + 1.0);
+        }
+    }
+    let mut fused: Vec<(String, f64)> = scored.into_iter().collect();
+    // Name as the tiebreak, so equal scores order deterministically.
+    fused.sort_by(|a, b| b.1.total_cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    Ok(fused.into_iter().map(|(name, _)| name).collect())
+}
+
+/// Rewrite a multi-word query as `a OR b OR c`, or `None` when there is nothing
+/// to widen -- a single term, or one already carrying FTS5 operators, where
+/// rewriting would either change nothing or corrupt the caller's intent.
+fn widen_query(term: &str) -> Option<String> {
+    let words: Vec<&str> = term.split_whitespace().collect();
+    if words.len() < 2 {
+        return None;
+    }
+    if words
+        .iter()
+        .any(|w| matches!(*w, "AND" | "OR" | "NOT") || w.contains('"'))
+    {
+        return None;
+    }
+    Some(words.join(" OR "))
+}
+
 pub struct SqliteStore {
     conn: Mutex<Connection>,
     db_path: PathBuf,
@@ -166,6 +264,11 @@ impl SqliteStore {
         if previous_version > 0 && previous_version < 7 {
             Self::upgrade_to_v7(conn)?;
         }
+        if previous_version > 0 && previous_version < 8 {
+            // The truth index is created by the schema batch below; an existing
+            // database needs it populated from rows that predate the triggers.
+            conn.execute_batch("DROP TABLE IF EXISTS asobi_truth_fts;")?;
+        }
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS asobi_entities (
                 name TEXT PRIMARY KEY,
@@ -196,6 +299,20 @@ impl SqliteStore {
                 PRIMARY KEY (entity_name, key)
             );
             CREATE INDEX IF NOT EXISTS idx_truths_lookup ON asobi_truths(key, value, entity_name);
+            CREATE VIRTUAL TABLE IF NOT EXISTS asobi_truth_fts USING fts5(
+                value, content='asobi_truths', content_rowid='rowid',
+                tokenize='porter unicode61'
+            );
+            CREATE TRIGGER IF NOT EXISTS asobi_truth_ai AFTER INSERT ON asobi_truths BEGIN
+                INSERT INTO asobi_truth_fts(rowid, value) VALUES (new.rowid, new.value);
+            END;
+            CREATE TRIGGER IF NOT EXISTS asobi_truth_ad AFTER DELETE ON asobi_truths BEGIN
+                INSERT INTO asobi_truth_fts(asobi_truth_fts, rowid, value) VALUES ('delete', old.rowid, old.value);
+            END;
+            CREATE TRIGGER IF NOT EXISTS asobi_truth_au AFTER UPDATE ON asobi_truths BEGIN
+                INSERT INTO asobi_truth_fts(asobi_truth_fts, rowid, value) VALUES ('delete', old.rowid, old.value);
+                INSERT INTO asobi_truth_fts(rowid, value) VALUES (new.rowid, new.value);
+            END;
             CREATE VIRTUAL TABLE IF NOT EXISTS asobi_obs_fts USING fts5(
                 content, content='asobi_observations', content_rowid='rowid',
                 tokenize='porter unicode61'
@@ -210,13 +327,20 @@ impl SqliteStore {
                 INSERT INTO asobi_obs_fts(asobi_obs_fts, rowid, content) VALUES ('delete', old.rowid, old.content);
                 INSERT INTO asobi_obs_fts(rowid, content) VALUES (new.rowid, new.content);
             END;
-            PRAGMA user_version = 7;",
+            PRAGMA user_version = 8;",
         )?;
         let count: i64 =
             conn.query_row("SELECT count(*) FROM asobi_observations", [], |r| r.get(0))?;
         if count > 0 && previous_version < SCHEMA_VERSION {
             let _ = conn.execute(
                 "INSERT INTO asobi_obs_fts(asobi_obs_fts) VALUES ('rebuild')",
+                [],
+            );
+        }
+        let truths: i64 = conn.query_row("SELECT count(*) FROM asobi_truths", [], |r| r.get(0))?;
+        if truths > 0 && previous_version < SCHEMA_VERSION {
+            let _ = conn.execute(
+                "INSERT INTO asobi_truth_fts(asobi_truth_fts) VALUES ('rebuild')",
                 [],
             );
         }
@@ -430,7 +554,7 @@ fn graph_from_connection(
             "SELECT name, entity_type FROM asobi_entities WHERE 0".to_string()
         }
         Some(values) => format!(
-            "SELECT name, entity_type FROM asobi_entities WHERE name IN ({}) ORDER BY name",
+            "SELECT name, entity_type FROM asobi_entities WHERE name IN ({})",
             (0..values.len()).map(|_| "?").collect::<Vec<_>>().join(",")
         ),
         None => "SELECT name, entity_type FROM asobi_entities ORDER BY name".to_string(),
@@ -438,10 +562,23 @@ fn graph_from_connection(
     let values = selected.unwrap_or_default();
     let entity_rows: Vec<(String, String)> = if entity_sql.contains("IN (") {
         let mut stmt = conn.prepare(&entity_sql)?;
-        stmt.query_map(rusqlite::params_from_iter(values.iter()), |r| {
-            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
-        })?
-        .collect::<rusqlite::Result<Vec<_>>>()?
+        let mut rows = stmt
+            .query_map(rusqlite::params_from_iter(values.iter()), |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        // `IN (...)` returns rows in whatever order SQLite likes, so restore
+        // the caller's. That order is meaningful: for `search` it is the fused
+        // relevance ranking, and for `show` it is the order the names were
+        // asked for. Sorting by name here -- which is what this did -- silently
+        // discarded every ranking the search had just computed.
+        let position: std::collections::HashMap<&str, usize> = values
+            .iter()
+            .enumerate()
+            .map(|(index, name)| (name.as_str(), index))
+            .collect();
+        rows.sort_by_key(|(name, _)| position.get(name.as_str()).copied().unwrap_or(usize::MAX));
+        rows
     } else {
         let mut stmt = conn.prepare(&entity_sql)?;
         stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?
@@ -732,21 +869,27 @@ impl SearchStore for SqliteStore {
         let limit = if query.limit == 0 { 100 } else { query.limit };
         self.read(|conn| {
             let mut names = Vec::new();
+            let mut widened = false;
             if !term.is_empty() {
                 let search_limit = if query.filters.is_empty() {
                     limit as i64
                 } else {
                     -1
                 };
-                let mut stmt = conn.prepare("SELECT DISTINCT o.entity_name FROM asobi_obs_fts JOIN asobi_observations o ON asobi_obs_fts.rowid=o.rowid WHERE asobi_obs_fts MATCH ? ORDER BY bm25(asobi_obs_fts) LIMIT ?")?;
-                if let Ok(rows) = stmt.query_map(params![term, search_limit], |r| r.get::<_, String>(0)) {
-                    for row in rows.flatten() {
-                        names.push(row);
-                    }
+                names = matching_names(conn, &term, search_limit)?;
+
+                // FTS5 ANDs bare terms, and each index is searched separately,
+                // so a question whose words are spread across an observation,
+                // a truth and a name matches nothing at all -- and an empty
+                // result is indistinguishable from "nothing was ever recorded".
+                // That is the wrong way for a pitfall lookup to fail, so widen
+                // to OR and let the caller know the query was loosened.
+                if names.is_empty()
+                    && let Some(widened_term) = widen_query(&term)
+                {
+                    names = matching_names(conn, &widened_term, search_limit)?;
+                    widened = !names.is_empty();
                 }
-                let like = format!("%{}%", term);
-                let mut stmt = conn.prepare("SELECT name FROM asobi_entities WHERE name LIKE ? OR entity_type LIKE ? ORDER BY name LIMIT ?")?;
-                for row in stmt.query_map(params![like, format!("%{}%", term), search_limit], |r| r.get::<_, String>(0))? { let name = row?; if !names.contains(&name) { names.push(name); } }
             }
             if !query.filters.is_empty() {
                 let mut sql = String::from("SELECT e.name FROM asobi_entities e");
@@ -768,6 +911,14 @@ impl SearchStore for SqliteStore {
                 }
             }
             names.truncate(limit);
+            if widened {
+                tracing::warn!(
+                    "no exact match for {:?}; widened to any-term and found {}. \
+                     Narrow with fewer words, or quote an exact phrase.",
+                    term,
+                    names.len()
+                );
+            }
             graph_from_connection(conn, Some(&names), &[], false, 0)
         })
     }

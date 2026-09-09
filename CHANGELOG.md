@@ -39,8 +39,13 @@ So the filesystem becomes the only copy.
 
 - **`show` returns the most recent observations, not the whole trail.** `--limit` defaults to 20; `--limit 0` restores the full read, which is what `export` uses. `observationCount` still reports the true total, so a caller can always tell what it is not being shown. `graph` and `search` were already lean and `show` was the one unbounded eager read: on a real graph, loading `iroha:session` at 156 observations cost **157 KB**, and the session-start read the asobi skill prescribes cost **180 KB** — roughly 45,000 tokens to answer "where was I". They are now 26 KB and 48 KB.
 
+- **Search reaches truth values.** A third FTS index covers `asobi_truths`, so an entity is findable by what its truths say. This was a real hole: the convention is to store a pitfall's human-readable warning in a `title` truth, which made the one sentence explaining a dead end the one thing recall could not reach. Verified against a real graph — the pitfall whose title reads "bump the Valkey generation manually" was unfindable by any word in it.
+- **A multi-word query widens instead of failing closed.** FTS5 ANDs bare terms, so a natural-language question whose words are spread across an observation, a truth and a name matched nothing — and an empty result is indistinguishable from "nothing was ever recorded", which is the wrong way for a pitfall lookup to fail. `search` now retries with `OR` and reports the widening on stderr.
+- **Search results come back ranked.** The three retrieval paths are combined with reciprocal rank fusion rather than concatenated, over a fixed candidate pool so ranking does not shift with `--limit`.
+
 ### Fixed
 
+- **`search` was returning results in alphabetical order, never relevance order.** The entity fetch ended in `ORDER BY name`, which re-sorted the result set and discarded whatever ranking search had just computed — for every release that has shipped. `show` now also returns entities in the order they were asked for. On a real graph, the pitfall answering "deploy without cache bump" went from _no results at all_ to third.
 - **`skills` and `skills show` work under a plain `asobi init`.** The skills directory now falls back to `.agents/skills` under the discovered root when no `asobi.toml` declares a `[skills]` block. Previously every skills path assumed a project-local config, but `asobi init` without `--local` writes none — so the default XDG install had no reachable skills directory.
 - **`skills install` and `skills update` no longer disturb other sources.** Both rewrite the tree, so they now carry unaffected sources through untouched; `--all` remains a full sync of its own source, and a scoped `update <source>` leaves siblings alone.
 

@@ -315,8 +315,18 @@ asobi search [QUERY] [--limit <N>] [--where KEY=VALUE ...]
 
 Returns a subgraph of matching entities, in the same payload shape as `graph`, plus the relations between them. Two search paths are merged in order:
 
-1. **FTS5 over observations** — porter stemming with BM25 ranking. `"tokio async"` ranks entities containing both words higher, and the FTS5 operators `AND`, `OR`, `NOT` and the `*` prefix wildcard all apply.
-2. **LIKE over entity name and type** — a substring fallback that always runs, catching exact-name lookups such as `UserPreferences` and entities that have no observations at all.
+1. **FTS5 over observations** — porter stemming with BM25 ranking.
+2. **FTS5 over truth values** — so an entity is findable by what its truths say, not only by its observations. This matters for the convention of storing a pitfall's human-readable warning in a `title` truth.
+3. **LIKE over entity name and type** — a substring fallback catching exact-name lookups such as `UserPreferences`, and entities with no text at all.
+
+The three are combined with reciprocal rank fusion rather than concatenated, so a strong match in one path competes with a strong match in another and an entity several paths agree on ranks higher. Results come back in that fused order. Each path contributes a fixed candidate pool before fusion, so ranking does not shift when you ask for more results.
+
+FTS5 operators `AND`, `OR`, `NOT` and the `*` prefix wildcard all apply. Bare terms are ANDed, so a multi-word question can match nothing even when every word appears somewhere. Rather than return a silent zero — indistinguishable from "nothing was ever recorded" — `search` retries the query with `OR` and says so on stderr:
+
+```
+WARN no exact match for "deploy without cache bump"; widened to any-term and
+     found 10. Narrow with fewer words, or quote an exact phrase.
+```
 
 `--where KEY=VALUE` filters the results by entity truths and is repeatable; multiple filters intersect (AND). A query term and `--where` filters likewise intersect. `--limit` defaults to **10** matched nodes — raise it explicitly for a larger ranked read. Use `graph` when the whole graph is genuinely wanted; a deliberately broad `search` query is not an export.
 
