@@ -1,6 +1,6 @@
 use asobi::api::{
     BackupRequest, BackupStore, GraphStore, MaintenanceStore, OpenNodes, PurgeRequest, SearchQuery,
-    SearchStore, SnapshotStore, TaskStore,
+    SearchStore, TaskStore,
 };
 use asobi::model::{EntityInput, RelationInput};
 use asobi::storage::SqliteStore;
@@ -259,7 +259,7 @@ fn purge_is_preview_first_and_leaves_durable_knowledge() {
 }
 
 #[test]
-fn snapshot_and_physical_backup_are_supported() {
+fn physical_backup_is_supported() {
     let (dir, live_store) = store();
     live_store
         .create_entities(vec![EntityInput {
@@ -268,10 +268,6 @@ fn snapshot_and_physical_backup_are_supported() {
             observations: vec!["portable graph state".into()],
         }])
         .unwrap();
-    let snapshot = live_store.export_snapshot(&[], false).unwrap();
-    assert_eq!(snapshot.source_backend, "sqlite");
-    assert_eq!(snapshot.graph.entities.len(), 1);
-
     let backup = dir.path().join("backup.db");
     let receipt = live_store
         .backup(BackupRequest {

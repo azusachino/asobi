@@ -422,7 +422,11 @@ These are ordinary graph entities under a workflow contract: status is a truth, 
 
 Without an `EPIC`, `tasks list` is the "what is open" read: it returns tasks and epics that are not `DONE`, `CLOSED` or `ABANDONED`. Pass `--all` for the complete board including finished work. An entity with no `status` truth counts as open — which is what surfaces an epic whose children are all `DONE` but which was never closed: it appears alone, with no open children under it.
 
-`tasks sync` and `tasks close` also record a `commit` and `branch` truth when run inside a git worktree, so a checkpoint says which revision it was true at. A detached `HEAD` records the commit and no branch, and running outside a repository records neither — neither case is an error.
+A checkpoint is more useful when it says which revision it was true at, but Asobi does not capture that for you: one graph can serve several repositories — a workspace of submodules resolves to the same graph from every directory — so the commit it would read depends on where the command was run, not on what the task is about. Record it yourself when the handoff warrants it, from the repository the work is actually in:
+
+```bash
+asobi truth "[project]:[epic]:task-N" commit "$(git -C path/to/repo rev-parse HEAD)"
+```
 
 ## Entity types and naming
 
@@ -461,7 +465,7 @@ asobi schema
 asobi schema --command show
 ```
 
-The schema document carries its own `schemaVersion`, independent from the storage/export `apiVersion`. Use the command-specific schema to validate and parse the corresponding payload; no extra response wrapper is required.
+The schema document carries its own `schemaVersion`. Use the command-specific schema to validate and parse the corresponding payload; no extra response wrapper is required — `export` writes the graph itself, not an envelope around it.
 
 ### Output format
 

@@ -31,45 +31,6 @@ fn is_terminal(status: Option<&String>) -> bool {
     status.is_some_and(|s| TERMINAL_STATUSES.contains(&s.as_str()))
 }
 
-/// The current commit and branch, when the working directory is inside a git
-/// worktree.
-///
-/// A checkpoint that records status and a next action but not the revision it
-/// was true at cannot support validated continuation: the successor knows what
-/// to do and not what tree to do it against. Captured automatically rather than
-/// behind a flag, because an optional field on a handoff is a field that is
-/// empty exactly when the handoff matters.
-///
-/// Returns `None` outside a repository, and on any git failure — a graph write
-/// must not fail because git is missing or the directory moved.
-fn git_revision() -> Option<(String, String)> {
-    let run = |args: &[&str]| -> Option<String> {
-        let out = std::process::Command::new("git").args(args).output().ok()?;
-        if !out.status.success() {
-            return None;
-        }
-        let value = String::from_utf8(out.stdout).ok()?.trim().to_string();
-        (!value.is_empty()).then_some(value)
-    };
-    let commit = run(&["rev-parse", "HEAD"])?;
-    // A detached HEAD reports "HEAD"; recording that is worse than recording
-    // nothing, since it reads like a branch name and names no branch.
-    let branch = run(&["rev-parse", "--abbrev-ref", "HEAD"]).filter(|b| b != "HEAD");
-    Some((commit, branch.unwrap_or_default()))
-}
-
-/// Stamp `entity` with the revision this checkpoint was taken at.
-fn record_git_revision(backend: &impl GraphStore, entity: &str) -> Result<()> {
-    let Some((commit, branch)) = git_revision() else {
-        return Ok(());
-    };
-    backend.truth_upsert(entity, "commit", &commit)?;
-    if !branch.is_empty() {
-        backend.truth_upsert(entity, "branch", &branch)?;
-    }
-    Ok(())
-}
-
 #[derive(Subcommand, Debug)]
 pub enum TasksCommands {
     /// Create an epic and its dispatchable child tasks
@@ -281,7 +242,6 @@ pub fn run(
                 )?;
             }
             backend.truth_upsert(&task, "status", &status)?;
-            record_git_revision(backend, &task)?;
             if json {
                 print_json(TaskReceipt {
                     action: "sync",
@@ -333,7 +293,6 @@ pub fn run(
                 )?;
             }
             backend.truth_upsert(&epic, "status", "DONE")?;
-            record_git_revision(backend, &epic)?;
             backend.add_observations(
                 vec![crate::model::ObservationInput {
                     entity_name: epic.clone(),
@@ -406,20 +365,5 @@ mod tests {
     fn terminal_statuses_match_what_purge_accepts() {
         let purgeable = ["DONE", "CLOSED", "ABANDONED"];
         assert_eq!(TERMINAL_STATUSES, &purgeable);
-    }
-
-    #[test]
-    fn git_revision_reads_the_current_worktree() {
-        // The test binary runs inside this repository, so this exercises the
-        // real path rather than a fixture.
-        let Some((commit, branch)) = git_revision() else {
-            panic!("expected a revision when running inside a git worktree");
-        };
-        assert_eq!(commit.len(), 40, "expected a full sha, got {commit:?}");
-        assert!(commit.chars().all(|c| c.is_ascii_hexdigit()));
-        assert_ne!(
-            branch, "HEAD",
-            "detached HEAD must not be stored as a branch"
-        );
     }
 }

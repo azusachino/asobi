@@ -6,7 +6,6 @@
 use crate::model::{EntityInput, Graph, ObservationDeletion, ObservationInput, RelationInput};
 
 pub const API_VERSION: u32 = 2;
-pub const SNAPSHOT_FORMAT_VERSION: u32 = 1;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ApiError {
@@ -126,26 +125,6 @@ pub struct BackendInfo {
     pub capabilities: BackendCapabilities,
 }
 
-#[derive(Debug, Clone, Default, schemars::JsonSchema, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ImportReport {
-    pub entities_created: usize,
-    pub entities_updated: usize,
-    pub observations_added: usize,
-    pub relations_added: usize,
-    pub truths_updated: usize,
-}
-
-#[derive(Debug, Clone, schemars::JsonSchema, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Snapshot {
-    pub api_version: u32,
-    pub format_version: u32,
-    pub source_backend: String,
-    pub source_schema_version: u32,
-    pub graph: Graph,
-}
-
 #[derive(Debug, Clone, schemars::JsonSchema, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BackupRequest {
@@ -190,11 +169,6 @@ pub trait GraphStore {
 
 pub trait SearchStore {
     fn search_nodes(&self, query: SearchQuery) -> ApiResult<Graph>;
-}
-
-pub trait SnapshotStore {
-    fn export_snapshot(&self, scope: &[String], rationale: bool) -> ApiResult<Snapshot>;
-    fn import_snapshot(&self, snapshot: Snapshot) -> ApiResult<ImportReport>;
 }
 
 pub trait BackupStore {
