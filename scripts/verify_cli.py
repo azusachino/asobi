@@ -404,11 +404,17 @@ def skills_checks() -> None:
         assert "Installed Skills (" in listed
         assert "alpha" in listed
         assert "nested" in listed
-        assert "Alpha skill" in listed
+        # Name and version, grouped under the source. No description: the
+        # manifest stopped recording one, because re-serializing it out of
+        # frontmatter meant a `description: >` skill recorded the literal ">".
+        assert "local" in listed
+        assert "Alpha skill" not in listed
 
-        # show resolves a short name and prints the raw body unescaped.
+        # show resolves a short name and prints the raw body unescaped --
+        # which is where the description is actually readable.
         shown = run(["skills", "show", "alpha"], env).stdout
         assert "Alpha body here" in shown
+        assert "description: Alpha skill" in shown
 
         # Remove by source string clears every skill from that source.
         run(["skills", "remove", str(src)], env)
@@ -496,6 +502,14 @@ def skills_sync_checks() -> None:
         assert "alpha body" in written[0].read_text()
         assert not list(skills_dir.glob("*@beta")), "unselected skill was written"
         assert (skills_dir / "vendored-upstream").is_dir()
+
+        # The manifest is state, so it lands in `data_dir` -- named for the
+        # skills directory it describes -- and the skills directory holds
+        # nothing but skills.
+        manifests = list((project / ".asobi" / "data").glob("skills-*.json"))
+        assert len(manifests) == 1, f"expected one manifest, got {manifests}"
+        assert not list(skills_dir.glob("*.json")), "manifest written beside skills"
+        assert not (skills_dir / ".asobi-skills.json").exists()
 
         listed = run(["skills"], env, cwd=project).stdout
         assert "alpha" in listed
