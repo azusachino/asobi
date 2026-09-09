@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.7.2 — State goes in the state directory
 
 ### Changed
 
