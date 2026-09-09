@@ -217,6 +217,14 @@ asobi rm-truth "project-x" "language"
 
 Writing the same key again replaces the value. Asobi keeps no archive of what it held before: that store was unbounded, had no reader, and where a trail genuinely matters the observations carry it in better form — a task's `status` history said `DISPATCHED` where the observation beside it said "dispatched to codex".
 
+**Install the companion skill.** Asobi ships no `SKILL.md` of its own — this document describes what the CLI _is_, and when to reach for it is agent policy. The maintained skill lives in [harus-skills](https://github.com/azusachino/harus-skills):
+
+```bash
+asobi skills install https://github.com/azusachino/harus-skills.git --select asobi
+```
+
+Nothing installs it for you, and no source is configured by default: a skill is natural-language instruction loaded straight into an agent's context, so which ones arrive should be a decision you made. Pin it with `--rev` if you want updates to be deliberate.
+
 **Manage skills (reusable workflows and knowledge):**
 
 ```bash
