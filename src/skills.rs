@@ -25,7 +25,6 @@ pub struct CollectedSkill {
     pub dir_name: String,
     /// The frontmatter `name`, as declared.
     pub name: String,
-    pub description: String,
     /// Canonical source URL or path this came from.
     pub source: String,
     /// Resolved git commit, or `local` for a path source.
@@ -241,11 +240,6 @@ pub fn collect_skills_from_dir(
         let (body, bundle_dir) = skill_contents
             .remove(&name)
             .ok_or_else(|| anyhow!("Content missing for skill {}", name))?;
-        let description = parsed_skills
-            .iter()
-            .find(|(n, _)| n == &name)
-            .map(|(_, d)| d.clone())
-            .unwrap_or_default();
         collected.push(CollectedSkill {
             dir_name: format!(
                 "{}@{}",
@@ -253,7 +247,6 @@ pub fn collect_skills_from_dir(
                 crate::normalize::slugify(&name)
             ),
             name,
-            description,
             source: source.to_string(),
             version: version.to_string(),
             body,
@@ -264,14 +257,21 @@ pub fn collect_skills_from_dir(
 }
 
 /// A skill as recorded on disk, for `skills` and `skills show`.
+///
+/// Carries no `description`. It used to, and it was the one field the manifest
+/// could get *wrong*: `dir` is derived, `source` and `version` come from git,
+/// but `description` was re-serialized out of frontmatter by
+/// [`crate::frontmatter`], a deliberately narrow subset with no support for
+/// multi-line scalars — so a skill declaring `description: >` had the literal
+/// `">"` recorded and then reported by `skills`. Widening the parser to fix a
+/// field nothing depends on is the wrong trade; the description already sits
+/// in the `SKILL.md` beside this record, which `skills show` prints in full.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct InstalledSkill {
     /// On-disk directory name: `<source-slug>@<skill-name>`.
     pub dir: String,
     pub name: String,
-    #[serde(default)]
-    pub description: String,
     /// Canonical source URL or path.
     #[serde(default)]
     pub source: String,
@@ -368,7 +368,7 @@ pub fn read_installed_skills(tree: &SkillsTree) -> Result<Vec<InstalledSkill>> {
         let Ok(content) = std::fs::read_to_string(entry.path().join("SKILL.md")) else {
             continue;
         };
-        let (name, description) = parse_frontmatter(&content).unwrap_or((None, None));
+        let (name, _) = parse_frontmatter(&content).unwrap_or((None, None));
         found.push(InstalledSkill {
             name: name.unwrap_or_else(|| {
                 dir_name
@@ -376,7 +376,6 @@ pub fn read_installed_skills(tree: &SkillsTree) -> Result<Vec<InstalledSkill>> {
                     .map(|(_, n)| n.to_string())
                     .unwrap_or_else(|| dir_name.clone())
             }),
-            description: description.unwrap_or_default(),
             dir: dir_name,
             source: String::new(),
             version: String::new(),
@@ -521,7 +520,6 @@ pub fn materialize_skills(
             .map(|s| InstalledSkill {
                 dir: s.dir_name.clone(),
                 name: s.name.clone(),
-                description: s.description.clone(),
                 source: s.source.clone(),
                 version: s.version.clone(),
             })
@@ -786,7 +784,38 @@ mod tests {
         let installed = read_installed_skills(&tree).unwrap();
         assert_eq!(installed[0].source, "https://example.com/o/r.git");
         assert_eq!(installed[0].version, "abc123");
-        assert_eq!(installed[0].description, "alpha description");
+    }
+
+    /// A folded or literal block scalar is the shape that made recording a
+    /// description untenable: `crate::frontmatter` is a narrow subset that
+    /// reads `description: >` as the literal `">"`. The manifest must not
+    /// carry the field at all, so no such value can reach it.
+    #[test]
+    fn test_manifest_records_no_description() {
+        use tempfile::tempdir;
+        let src_dir = tempdir().unwrap();
+        let src = src_dir.path();
+        let folded = src.join("folded");
+        std::fs::create_dir_all(&folded).unwrap();
+        std::fs::write(
+            folded.join("SKILL.md"),
+            "---\nname: folded\ndescription: >\n  wrapped over\n  two lines\n---\nbody\n",
+        )
+        .unwrap();
+
+        let out_dir = tempdir().unwrap();
+        let (_out, tree) = tree_under(out_dir.path());
+        let collected =
+            collect_skills_from_dir(src, "local", "v1", SelectionMode::All, false).unwrap();
+        materialize_skills(&tree, &collected).unwrap();
+
+        let raw = std::fs::read_to_string(&tree.manifest).unwrap();
+        assert!(!raw.contains("description"), "manifest carried: {raw}");
+        assert!(
+            !raw.contains('>'),
+            "manifest carried a folded marker: {raw}"
+        );
+        assert_eq!(read_installed_skills(&tree).unwrap()[0].name, "folded");
     }
 
     /// Two skills directories sharing one `data_dir` — what the XDG fallback
@@ -1005,17 +1034,12 @@ mod tests {
         )
         .unwrap();
 
-        // 6. Verify skills collected correctly with name fallbacks
+        // 6. A skill with no `name:` falls back to its directory name, and one
+        // with no `description:` is still collected -- neither field being
+        // declared is a reason to drop a skill on the floor.
         assert_eq!(collected.len(), 2);
-
-        let refactor = collected.iter().find(|s| s.name == "refactor").unwrap();
-        assert_eq!(refactor.description, "Iterative refactoring loop");
-
-        let sdr = collected
-            .iter()
-            .find(|s| s.name == "software-design-review")
-            .unwrap();
-        assert_eq!(sdr.description, "");
+        assert!(collected.iter().any(|s| s.name == "refactor"));
+        assert!(collected.iter().any(|s| s.name == "software-design-review"));
     }
 
     /// A skill that owns a directory ships its bundled resources with it.

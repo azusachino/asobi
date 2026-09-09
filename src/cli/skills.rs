@@ -137,7 +137,7 @@ pub(crate) fn run(paths: &AsobiPaths, subcommand: Option<SkillsCommands>) -> Res
                     } else {
                         s.version.clone()
                     };
-                    println!("  {} · {} · {}", s.name, s.description, version);
+                    println!("  {} · {}", s.name, version);
                 }
             }
         }
@@ -364,7 +364,6 @@ fn reload(
     Some(crate::skills::CollectedSkill {
         dir_name: installed.dir.clone(),
         name: installed.name.clone(),
-        description: installed.description.clone(),
         source: installed.source.clone(),
         version: installed.version.clone(),
         body,
