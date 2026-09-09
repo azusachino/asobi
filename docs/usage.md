@@ -184,7 +184,7 @@ cp .asobi/data/asobi.db backup.db          # project-local
 cp ~/.local/share/asobi/data/asobi.db .    # XDG
 ```
 
-0.8 removed `backup`/`restore` and `export`/`import`. Between them they were three archival mechanisms for one single-file database: `backup` had grown a managed directory with its own retention policy, integrity checks and a pre-restore safety copy, and `export` had grown subgraph scoping (`--scope`, `--rationale`) with the traversal rules to match. `cp` is the backup, and `sqlite3` reads the file if you want to inspect it without Asobi.
+0.7.1 removed `backup`/`restore` and `export`/`import`. Between them they were three archival mechanisms for one single-file database: `backup` had grown a managed directory with its own retention policy, integrity checks and a pre-restore safety copy, and `export` had grown subgraph scoping (`--scope`, `--rationale`) with the traversal rules to match. `cp` is the backup, and `sqlite3` reads the file if you want to inspect it without Asobi.
 
 The one thing this genuinely gives up is moving a single entity between two graphs — a project-local one and the XDG one, say. Re-create it with `new`/`truth`/`obs`; it is a handful of commands, and it happens rarely enough that a subgraph traversal engine was the wrong price to pay for it.
 

@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.7.1 — One way to copy the file
 
 ### Breaking
 
