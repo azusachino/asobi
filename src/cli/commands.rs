@@ -146,46 +146,9 @@ pub(crate) enum Commands {
         shell: CompletionShell,
     },
 
-    /// Export the knowledge graph to a JSON file
-    Export {
-        /// Path to the output JSON file
-        #[arg(short, long)]
-        output: Option<String>,
-        /// Restrict the export to the subgraph rooted at these entities
-        /// (repeatable). Pulls each root, its `part_of` children (transitively),
-        /// and the `depends_on` targets they cite. Omit to export the whole graph.
-        #[arg(long)]
-        scope: Vec<String>,
-        /// With --scope, also follow one hop of `supersedes`/`extends` off the
-        /// cited leaves (the rationale chain behind a decision).
-        #[arg(long)]
-        rationale: bool,
-    },
-    /// Import a knowledge graph from a JSON file
-    Import {
-        /// Path to the input JSON file
-        file: String,
-    },
     /// Reset the knowledge graph (delete all entities, relations, and observations)
     Reset {
         /// Force reset without confirmation
-        #[arg(long)]
-        force: bool,
-    },
-    /// Snapshot the database to a single consistent file (VACUUM INTO)
-    Backup {
-        /// Destination path (default: `<data_dir>/backups/asobi-<timestamp>.db`)
-        #[arg(short, long)]
-        output: Option<String>,
-        /// Snapshots to retain in the default backup directory (oldest pruned)
-        #[arg(long, default_value_t = 3)]
-        keep: usize,
-    },
-    /// Replace the live database with a snapshot file
-    Restore {
-        /// Path to the snapshot file to restore from
-        file: String,
-        /// Skip the confirmation prompt
         #[arg(long)]
         force: bool,
     },

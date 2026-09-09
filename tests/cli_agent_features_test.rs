@@ -183,8 +183,9 @@ fn test_cli_agent_features() {
     // 11. Test JSON error formatting when --json is set globally
     let output = Command::new(&bin_path)
         .arg("--json")
-        .arg("import")
-        .arg("nonexistent_file_xyz.json")
+        .arg("skills")
+        .arg("show")
+        .arg("no_such_skill_xyz")
         .env("ASOBI_DATABASE_URL", db_path_str)
         .output()
         .expect("failed to execute asobi");
@@ -192,10 +193,5 @@ fn test_cli_agent_features() {
     let stdout_str = String::from_utf8(output.stdout).unwrap();
     let err_json: serde_json::Value =
         serde_json::from_str(&stdout_str).expect("Expected stdout to be JSON error");
-    assert!(
-        err_json["error"]
-            .as_str()
-            .unwrap()
-            .contains("No such file or directory")
-    );
+    assert!(err_json["error"].as_str().unwrap().contains("not found"));
 }

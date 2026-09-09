@@ -77,7 +77,6 @@ fn schema_registry() -> Vec<SchemaRow> {
     use crate::model::Graph;
     let rows: Vec<SchemaRow> = vec![
         ("capabilities", schema_for_data::<CapabilitiesReceipt>),
-        ("export", schema_for_data::<Graph>),
         ("graph", schema_for_data::<Graph>),
         ("link", schema_for_data::<Graph>),
         ("new", schema_for_data::<Graph>),

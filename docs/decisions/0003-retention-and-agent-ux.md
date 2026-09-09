@@ -2,7 +2,7 @@
 
 ## Status
 
-Implemented in 0.6.1 for shell completions and preview-first operational purging.
+Implemented in 0.6.1 for shell completions and preview-first operational purging. **Partly superseded by 0.7.0**: this ADR's central choice — that retention stays explicit and never runs implicitly — was reversed. Six weeks of evidence showed the graph reaching 96% finished work because a manual, dry-run-by-default, never-implicit `purge` was never once invoked. Retention now runs automatically before the first write of a process (7 days by default, `retention_days`/`ASOBI_RETENTION_DAYS`, `0` to disable), and `purge` lost `--type`, `--status` and `--dry-run`. The reasoning below is retained as the record of why explicit-only looked right at the time; the test it failed was simply **if it is optional, it will not happen**.
 
 ## Context
 

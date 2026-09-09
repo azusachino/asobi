@@ -57,7 +57,7 @@ pub fn sync_graph_to_markdown(graph_store: &impl GraphStore) -> Result<usize> {
 ///   operational state that flips constantly and is already cheaply queryable
 ///   from the graph via `search --where status=…` / `show`. Embedding it only
 ///   churns the graph and pollutes operational reads; full archival
-///   lives in `export` / `backup`, not here.
+///   is not this command's job.
 /// - `skill`: the installer owns skill records. Syncing them here would emit a
 ///   second topic under the slug, so a skill stays graph- and installer-owned —
 ///   read it via `search`, `show`, or `skills show`.

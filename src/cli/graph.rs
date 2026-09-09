@@ -1,9 +1,6 @@
 use super::commands::Commands;
-use super::dispatch::import_graph;
 use super::output::*;
-use crate::api::{
-    BackupStore, GraphStore, MaintenanceStore, OpenNodes, SearchQuery, SearchStore, Stats,
-};
+use crate::api::{GraphStore, MaintenanceStore, OpenNodes, SearchQuery, SearchStore, Stats};
 use anyhow::Result;
 use tracing::info;
 
@@ -296,40 +293,6 @@ pub(crate) fn run(backend: &crate::storage::Storage, command: Commands, json: bo
             })?;
         }
 
-        Commands::Export {
-            output,
-            scope,
-            rationale,
-        } => {
-            let graph = if scope.is_empty() {
-                backend.read_graph_full()?
-            } else {
-                backend.read_graph_scoped(&scope, rationale)?
-            };
-            if let Some(path) = output {
-                let json = serde_json::to_string_pretty(&graph)?;
-                std::fs::write(&path, json)?;
-                crate::application::restrict_permissions(std::path::Path::new(&path), 0o600)?;
-                info!("Graph exported to {}", path);
-            } else {
-                print_json(graph)?;
-            }
-        }
-        Commands::Import { file } => {
-            let content = std::fs::read_to_string(&file)?;
-            let graph: crate::model::Graph = serde_json::from_str(&content)?;
-
-            let had_entities = !graph.entities.is_empty();
-            let had_relations = !graph.relations.is_empty();
-            import_graph(backend, graph)?;
-            if had_entities {
-                info!("Imported entities, observations, and truths.");
-            }
-            if had_relations {
-                info!("Imported relations.");
-            }
-            info!("Import complete.");
-        }
         Commands::Reset { force } => {
             if !force {
                 use std::io::Write;
@@ -345,14 +308,6 @@ pub(crate) fn run(backend: &crate::storage::Storage, command: Commands, json: bo
             backend.reset()?;
             info!("Knowledge graph reset successfully.");
         }
-        Commands::Backup { output, keep } => {
-            let receipt = backend.backup(crate::api::BackupRequest {
-                destination: output.map(std::path::PathBuf::from).unwrap_or_default(),
-                keep,
-            })?;
-            info!("Backup written to {}", receipt.path.display());
-        }
-        Commands::Restore { .. } => unreachable!("restore handled before borrowing storage"),
         _ => unreachable!("non-graph command routed to graph handler"),
     }
     Ok(())
