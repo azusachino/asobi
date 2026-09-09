@@ -119,7 +119,7 @@ asobi search --where status=READY # find all entities with status truth set to R
 asobi search "bug" --where status=READY --where priority=high # filter by multiple truths AND the query
 ```
 
-Use `graph` for full export. `search` is intentionally top-K by default so a broad term does not accidentally return the whole graph.
+Use `graph` when the whole graph is wanted. `search` is intentionally top-K by default so a broad term does not accidentally return it.
 
 **Persist state — truths for the current value, observations for the trail:**
 
@@ -184,7 +184,7 @@ cp .asobi/data/asobi.db backup.db          # project-local
 cp ~/.local/share/asobi/data/asobi.db .    # XDG
 ```
 
-0.7.1 removed `backup`/`restore` and `export`/`import`. Between them they were three archival mechanisms for one single-file database: `backup` had grown a managed directory with its own retention policy, integrity checks and a pre-restore safety copy, and `export` had grown subgraph scoping (`--scope`, `--rationale`) with the traversal rules to match. `cp` is the backup, and `sqlite3` reads the file if you want to inspect it without Asobi.
+There is no archival command. `cp` is the backup, and `sqlite3` reads the file if you want to inspect it without Asobi. (Earlier releases shipped `backup`/`restore` and `export`/`import`; see `CHANGELOG.md` for why they went.)
 
 The one thing this genuinely gives up is moving a single entity between two graphs — a project-local one and the XDG one, say. Re-create it with `new`/`truth`/`obs`; it is a handful of commands, and it happens rarely enough that a subgraph traversal engine was the wrong price to pay for it.
 
@@ -238,7 +238,7 @@ asobi skills sync
 
 `sync` treats the config as the whole truth: it installs what is declared, prunes what is not, and writes each selected skill to `<path>/<source-slug>@<skill-name>/SKILL.md`. Directories without `@` in the name — vendored checkouts, hand-written skills — are left alone. Declare exactly one of `all = true` or `select = [...]` per source.
 
-The skills directory is the store of record: since 0.7 a skill exists on disk and nowhere else, so it does not appear in `graph`, `search`, or `show`, and `rg` over the skills directory is how you search one. `path` defaults to `.agents/skills`, resolved against the `asobi.toml` that declares it, or against the discovered workspace root when no config declares a `[skills]` block — so `skills` and `skills show` work under a plain `asobi init` too.
+The skills directory is the store of record: a skill exists on disk and nowhere else, so it does not appear in `graph`, `search`, or `show`, and `rg` over the skills directory is how you search one. `path` defaults to `.agents/skills`, resolved against the `asobi.toml` that declares it, or against the discovered workspace root when no config declares a `[skills]` block — so `skills` and `skills show` work under a plain `asobi init` too.
 
 Alongside the skill directories, `sync` writes `.asobi-skills.json` recording each skill's source and the exact commit it came from. `asobi skills` reports that commit. Committing the whole tree, manifest included, is what turns an upstream skill change into a reviewable diff.
 
@@ -316,7 +316,7 @@ WARN no exact match for "deploy without cache bump"; widened to any-term and
      found 10. Narrow with fewer words, or quote an exact phrase.
 ```
 
-`--where KEY=VALUE` filters the results by entity truths and is repeatable; multiple filters intersect (AND). A query term and `--where` filters likewise intersect. `--limit` defaults to **10** matched nodes — raise it explicitly for a larger ranked read. Use `graph` when the whole graph is genuinely wanted; a deliberately broad `search` query is not an export.
+`--where KEY=VALUE` filters the results by entity truths and is repeatable; multiple filters intersect (AND). A query term and `--where` filters likewise intersect. `--limit` defaults to **10** matched nodes — raise it explicitly for a larger ranked read. Use `graph` when the whole graph is genuinely wanted; widening `search` until it returns everything is not the same thing.
 
 ```
 asobi show <NAME> [<NAME> ...] [--expand <RELATION_TYPE> ...] [--with-ids]
@@ -371,7 +371,7 @@ asobi purge [--older-than <DAYS>] [--apply]
 asobi reset [--force]
 ```
 
-`compact` projects **durable knowledge** entities — `project`, `concept`, `reference`, `preference`, `standard` — and their truths into Markdown under `.asobi/topics/`. Volatile `session` and `task` entities and self-indexing `skill` entities are skipped by design; read those with `search`/`show` and archive them with `export`.
+`compact` projects **durable knowledge** entities — `project`, `concept`, `reference`, `preference`, `standard` — and their truths into Markdown under `.asobi/topics/`. Volatile `session` and `task` entities are skipped by design; read those with `search`/`show`. Skills are not graph entities at all, so nothing about them reaches `compact`.
 
 `purge` is a dry run unless given `--apply`, and accepts only `session` entities plus terminal task statuses (`DONE`, `CLOSED`, `ABANDONED`) — durable knowledge is refused, and skills are not in the graph to begin with. It defaults to entities inactive for 30 days. It never runs implicitly during `graph`, `search`, `compact`, or startup. An applied purge also runs `PRAGMA incremental_vacuum`, so the database file shrinks with the graph rather than retaining a free list.
 
@@ -440,7 +440,7 @@ Names are hierarchical and colon-separated — `project-x`, `project-x:session`,
 
 **Mutating** commands print a one-line confirmation (`Entity 'X' created.`, `Observation added.`) to **stderr** and leave **stdout empty** on success. A scripted caller must branch on the exit code, not on stdout being non-empty.
 
-**Read** commands (`graph`, `search`, `show`, `stats`, `export`, `capabilities`, `schema`) write their JSON payload to **stdout**. `asobi skills show` writes raw Markdown instead, since its purpose is to be read.
+**Read** commands (`graph`, `search`, `show`, `stats`, `capabilities`, `schema`) write their JSON payload to **stdout**. `asobi skills show` writes raw Markdown instead, since its purpose is to be read.
 
 The global `--json` flag makes a mutation also print the affected entities, and the relations among them, to stdout — `asobi new A task --json` removes the follow-up `show` round-trip, and `rm --json` returns `{ "deleted": [...] }`. It has no effect on read commands, which already emit JSON.
 
@@ -453,7 +453,7 @@ asobi schema
 asobi schema --command show
 ```
 
-The schema document carries its own `schemaVersion`. Use the command-specific schema to validate and parse the corresponding payload; no extra response wrapper is required — `export` writes the graph itself, not an envelope around it.
+The schema document carries its own `schemaVersion`. Use the command-specific schema to validate and parse the corresponding payload; no extra response wrapper is required — a read writes its payload itself, not an envelope around it.
 
 ### Output format
 

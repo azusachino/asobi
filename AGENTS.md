@@ -1,6 +1,6 @@
 # Asobi
 
-Persistent knowledge-graph CLI for humans and AI agents. Asobi 0.7 stores entities, observations, truths, relations, and task state in a local SQLite database. Skills are deliberately **not** in that list: 0.7 moved them onto the filesystem, because the disk copy under `.agents/skills/` is the one agents actually read.
+Persistent knowledge-graph CLI for humans and AI agents. Asobi stores entities, observations, truths, relations, and task state in a local SQLite database. Skills are deliberately **not** in that list: they live on the filesystem, because the disk copy under `.agents/skills/` is the one agents actually read.
 
 ## Stack and layout
 
@@ -19,7 +19,7 @@ Rust 2024, Clap, tracing, rusqlite with bundled SQLite/FTS5, and Python scripts 
 
 ## CLI surface
 
-Graph: `new`, `obs`, `link`, `rm`, `rm-obs`, `update-obs`, `unlink`, `graph`, `search`, and `show`. Truths: `truth` and `rm-truth` — a truth is the current value only, since 0.7 removed `history` along with the archive-on-overwrite path. Maintenance: `compact`, `purge`, `init`, `stats`, `capabilities`, `schema`, `completions`, and `reset`. 0.7.1 removed `backup`/`restore` and `export`/`import`: the graph is a single SQLite file, so `cp` is the backup and there is no serialization path to maintain. Agent workflows: `skills` and `tasks` with their nested subcommands.
+Graph: `new`, `obs`, `link`, `rm`, `rm-obs`, `update-obs`, `unlink`, `graph`, `search`, and `show`. Truths: `truth` and `rm-truth` — a truth is the current value and nothing else, with no archive behind an overwrite. Maintenance: `compact`, `purge`, `init`, `stats`, `capabilities`, `schema`, `completions`, and `reset`. There is no archival command: the graph is a single SQLite file, so `cp` is the backup and there is no serialization path to maintain. Agent workflows: `skills` and `tasks` with their nested subcommands.
 
 `asobi schema` is the machine-readable response contract, and `docs/usage.md` is the user-facing command reference — the single one. This repository documents what the CLI _is_ and ships no `SKILL.md`; agent workflow guidance for Asobi lives in the [`asobi` skill](https://github.com/azusachino/harus-skills/blob/main/skills/asobi/SKILL.md). Install that skill with:
 
