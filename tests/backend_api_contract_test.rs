@@ -1,6 +1,5 @@
 use asobi::api::{
-    BackupRequest, BackupStore, GraphStore, MaintenanceStore, OpenNodes, PurgeRequest, SearchQuery,
-    SearchStore, TaskStore,
+    GraphStore, MaintenanceStore, OpenNodes, PurgeRequest, SearchQuery, SearchStore, TaskStore,
 };
 use asobi::model::{EntityInput, RelationInput};
 use asobi::storage::SqliteStore;
@@ -23,7 +22,6 @@ fn sqlite_implements_the_v2_contract() {
     assert_eq!(capabilities.backend, "sqlite");
     assert_eq!(capabilities.keyword_search_kind, "fts5");
     assert!(capabilities.multi_process);
-    assert!(capabilities.physical_backup);
 }
 
 #[test]
@@ -256,91 +254,6 @@ fn purge_is_preview_first_and_leaves_durable_knowledge() {
     let survivors = store.read_graph().unwrap();
     assert_eq!(survivors.entities.len(), 1);
     assert_eq!(survivors.entities[0].name, "project:concept");
-}
-
-#[test]
-fn physical_backup_is_supported() {
-    let (dir, live_store) = store();
-    live_store
-        .create_entities(vec![EntityInput {
-            name: "snapshot:test".into(),
-            entity_type: "concept".into(),
-            observations: vec!["portable graph state".into()],
-        }])
-        .unwrap();
-    let backup = dir.path().join("backup.db");
-    let receipt = live_store
-        .backup(BackupRequest {
-            destination: backup.clone(),
-            keep: 1,
-        })
-        .unwrap();
-    assert_eq!(receipt.path, backup);
-    assert!(backup.exists());
-}
-
-#[test]
-fn managed_backup_retention_prunes_old_snapshots() {
-    let (dir, store) = store();
-    store
-        .create_entities(vec![EntityInput {
-            name: "retention:test".into(),
-            entity_type: "concept".into(),
-            observations: vec!["retention data".into()],
-        }])
-        .unwrap();
-
-    for _ in 0..3 {
-        store
-            .backup(BackupRequest {
-                destination: PathBuf::new(),
-                keep: 2,
-            })
-            .unwrap();
-    }
-
-    let backups = fs::read_dir(dir.path().join("backups"))
-        .unwrap()
-        .filter_map(|entry| entry.ok())
-        .filter(|entry| entry.file_name().to_string_lossy().starts_with("asobi-"))
-        .count();
-    assert_eq!(backups, 2);
-}
-
-#[test]
-fn restore_rejects_non_asobi_sqlite_and_removes_sidecars() {
-    let (dir, live_store) = store();
-    live_store
-        .create_entities(vec![EntityInput {
-            name: "restore:test".into(),
-            entity_type: "concept".into(),
-            observations: vec!["restore data".into()],
-        }])
-        .unwrap();
-
-    let source = dir.path().join("source.db");
-    live_store
-        .backup(BackupRequest {
-            destination: source.clone(),
-            keep: 1,
-        })
-        .unwrap();
-    let live = dir.path().join("contract.db");
-    fs::write(format!("{}-wal", live.display()), b"stale wal").unwrap();
-    fs::write(format!("{}-shm", live.display()), b"stale shm").unwrap();
-    live_store.restore(source, true).unwrap();
-    assert!(!PathBuf::from(format!("{}-wal", live.display())).exists());
-    assert!(!PathBuf::from(format!("{}-shm", live.display())).exists());
-
-    let invalid_source = dir.path().join("invalid.db");
-    let invalid = Connection::open(&invalid_source).unwrap();
-    invalid
-        .execute("CREATE TABLE unrelated (value TEXT)", [])
-        .unwrap();
-    drop(invalid);
-    let (_invalid_dir, invalid_store) = store();
-    let error = invalid_store.restore(invalid_source, true).unwrap_err();
-    assert!(error.to_string().contains("not an Asobi SQLite database"));
 }
 
 // storage-boundary: provider-test -- this test names the libSQL/Turso-era

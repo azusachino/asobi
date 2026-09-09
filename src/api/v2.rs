@@ -93,8 +93,6 @@ pub struct BackendCapabilities {
     pub keyword_search: bool,
     /// `fts5`, `indexed-token`, or `none`.
     pub keyword_search_kind: String,
-    pub logical_snapshots: bool,
-    pub physical_backup: bool,
     /// Whether separate CLI processes may open the same state concurrently.
     pub multi_process: bool,
 }
@@ -125,20 +123,6 @@ pub struct BackendInfo {
     pub capabilities: BackendCapabilities,
 }
 
-#[derive(Debug, Clone, schemars::JsonSchema, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct BackupRequest {
-    pub destination: std::path::PathBuf,
-    pub keep: usize,
-}
-
-#[derive(Debug, Clone, schemars::JsonSchema, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct BackupReceipt {
-    pub path: std::path::PathBuf,
-    pub backend: String,
-}
-
 pub trait GraphStore {
     fn create_entities(&self, entities: Vec<EntityInput>) -> ApiResult<()>;
     fn add_observations(&self, observations: Vec<ObservationInput>, limit: usize) -> ApiResult<()>;
@@ -163,19 +147,11 @@ pub trait GraphStore {
     fn truth_delete(&self, entity: &str, key: &str) -> ApiResult<()>;
     fn read_graph(&self) -> ApiResult<Graph>;
     fn read_graph_full(&self) -> ApiResult<Graph>;
-    fn read_graph_scoped(&self, scope: &[String], rationale: bool) -> ApiResult<Graph>;
     fn open_nodes(&self, req: OpenNodes) -> ApiResult<Graph>;
 }
 
 pub trait SearchStore {
     fn search_nodes(&self, query: SearchQuery) -> ApiResult<Graph>;
-}
-
-pub trait BackupStore {
-    fn backup(&self, request: BackupRequest) -> ApiResult<BackupReceipt>;
-    fn restore(self, source: std::path::PathBuf, force: bool) -> ApiResult<()>
-    where
-        Self: Sized;
 }
 
 pub trait MaintenanceStore {

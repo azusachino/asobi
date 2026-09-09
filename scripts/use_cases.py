@@ -212,14 +212,6 @@ def main() -> None:
         stats = json.loads(run_cmd(["stats", "--json"], db_path))
         assert stats["entities"] > 0
 
-        # Exercise the portable and physical archival paths used at handoff.
-        export_path = str(Path(tmp_dir) / "daily.json")
-        run_cmd(["export", "-o", export_path], db_path)
-        assert Path(export_path).is_file()
-        backup_path = str(Path(tmp_dir) / "daily.db")
-        run_cmd(["backup", "-o", backup_path], db_path)
-        assert Path(backup_path).is_file()
-
         print("\nAll integration use-cases successfully validated!")
 
 

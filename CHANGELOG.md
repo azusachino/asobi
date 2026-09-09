@@ -1,5 +1,23 @@
 # Changelog
 
+## Unreleased
+
+### Breaking
+
+- **All four archival commands are removed: `backup`, `restore`, `export`, `import`.** The graph is one SQLite file, and it had grown three mechanisms for copying it.
+
+  `backup` had accumulated its own retention policy (`--keep`, a managed `backups/` directory, oldest-pruned-first), integrity checking, owner-only permissions, and a pre-restore safety copy with WAL-sidecar cleanup — roughly 130 lines of storage code plus a `BackupStore` trait, to produce an opaque `.db` file that `cp` produces for free.
+
+  `export` had accumulated subgraph scoping: `--scope` walking transitive `part_of` children and one-hop `depends_on` targets, `--rationale` following a further hop of `supersedes`/`extends`, a `read_graph_scoped` method on `GraphStore`, a `scoped_names` traversal in storage, and a 130-line verification suite for the traversal rules. That is a graph query engine grown inside a serializer, for an operation whose real-world use was moving the occasional entity between a project-local graph and the XDG one.
+
+  `cp` is the backup. `sqlite3` reads the file directly if you want to inspect it without Asobi. Moving a single entity between graphs is now `new`/`truth`/`obs` — a handful of commands, and rare enough that a traversal engine was the wrong price.
+
+  Also gone: the `BackupStore` trait with `BackupRequest`/`BackupReceipt`, `GraphStore::read_graph_scoped`, and the `physicalBackup` and `logicalSnapshots` fields on `capabilities`.
+
+### Fixed
+
+- **Documentation caught up with 0.7.** `AGENTS.md` still opened with "Asobi 0.6 stores … skills … in SQLite" and listed the removed `history` command; `README.md`'s architecture diagram still advertised the deleted `SkillStore` and `SnapshotStore` traits, and its command list still offered `history`; `docs/architecture.md` still said 0.6 and still listed snapshots in `api::v2`. ADR 0003 now records that its central choice — retention stays explicit and never implicit — was reversed in 0.7, rather than leaving a superseded decision reading as current.
+
 ## v0.7.0 — Skills leave the graph
 
 Over a third of Asobi was a skill installer: `skills.rs`, `cli/skills.rs` and `skills_config.rs` came to 1,798 of 4,985 lines. It stored every skill twice — once as a graph entity carrying a body, once on disk — and the disk copy was the one agents actually read, because `.agents/skills/` is what the Agent Skills ecosystem understands and what `rg` reaches. Measured against a real six-week-old graph, the graph copy had accumulated nothing: all 33 installed skills had zero observations and a lone `description` truth.

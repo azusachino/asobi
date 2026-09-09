@@ -1,7 +1,7 @@
 use crate::api::v2::{
-    ApiError, ApiResult, BackendCapabilities, BackendHealth, BackupReceipt, BackupRequest,
-    BackupStore, GraphStore, MaintenanceStore, OpenNodes, PurgeCandidate, PurgeReport,
-    PurgeRequest, SearchQuery, SearchStore, Stats, StorageLocation, TaskStore,
+    ApiError, ApiResult, BackendCapabilities, BackendHealth, GraphStore, MaintenanceStore,
+    OpenNodes, PurgeCandidate, PurgeReport, PurgeRequest, SearchQuery, SearchStore, Stats,
+    StorageLocation, TaskStore,
 };
 use crate::model::{
     EntityInput, EntityOutput, Graph, ObservationDeletion, ObservationInput, RelationInput,
@@ -10,8 +10,7 @@ use rusqlite::{
     Connection, OptionalExtension, ToSql, Transaction, TransactionBehavior, params,
     params_from_iter,
 };
-use std::cmp::Reverse;
-use std::collections::{BTreeMap, HashSet};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
@@ -667,66 +666,6 @@ fn graph_from_connection(
     })
 }
 
-fn scoped_names(
-    conn: &Connection,
-    roots: &[String],
-    rationale: bool,
-) -> rusqlite::Result<Vec<String>> {
-    let mut selected: HashSet<String> = roots.iter().map(|name| normalize(name)).collect();
-    let relations = conn
-        .prepare("SELECT from_entity, to_entity, relation_type FROM asobi_relations")?
-        .query_map([], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, String>(2)?,
-            ))
-        })?
-        .collect::<rusqlite::Result<Vec<_>>>()?;
-
-    // Expand only inward `part_of` edges, so selecting an epic never drags in
-    // its parent project or a sibling epic.
-    loop {
-        let before = selected.len();
-        for (from, to, kind) in &relations {
-            if kind == "part_of" && selected.contains(to) {
-                selected.insert(from.clone());
-            }
-        }
-        if selected.len() == before {
-            break;
-        }
-    }
-
-    // Include one-hop rationale/dependency targets from the selected subtree.
-    let cited: Vec<String> = relations
-        .iter()
-        .filter(|(from, _, kind)| {
-            selected.contains(from) && (kind == "depends_on" || (rationale && kind == "extends"))
-        })
-        .map(|(_, to, _)| to.clone())
-        .collect();
-    selected.extend(cited);
-    if rationale {
-        let rationale_targets: Vec<String> = relations
-            .iter()
-            .filter(|(from, _, kind)| selected.contains(from) && kind == "extends")
-            .map(|(_, to, _)| to.clone())
-            .collect();
-        selected.extend(rationale_targets);
-    }
-    let excluded: HashSet<String> = conn
-        .prepare(
-            "SELECT name FROM asobi_entities WHERE entity_type IN ('session','preference','standard')",
-        )?
-        .query_map([], |row| row.get(0))?
-        .collect::<rusqlite::Result<HashSet<_>>>()?;
-    selected.retain(|name| !excluded.contains(name));
-    let mut names: Vec<_> = selected.into_iter().collect();
-    names.sort();
-    Ok(names)
-}
-
 impl GraphStore for SqliteStore {
     fn create_entities(&self, entities: Vec<EntityInput>) -> ApiResult<()> {
         self.write(|tx| {
@@ -846,17 +785,6 @@ impl GraphStore for SqliteStore {
     fn read_graph_full(&self) -> ApiResult<Graph> {
         self.graph(None, &[], true, 0)
     }
-    fn read_graph_scoped(&self, scope: &[String], rationale: bool) -> ApiResult<Graph> {
-        self.read(|conn| {
-            let names = scoped_names(conn, scope, rationale)?;
-            let included: HashSet<_> = names.iter().cloned().collect();
-            let mut graph = graph_from_connection(conn, Some(&names), &[], true, 0)?;
-            graph
-                .relations
-                .retain(|rel| included.contains(&rel.from) && included.contains(&rel.to));
-            Ok(graph)
-        })
-    }
     fn open_nodes(&self, req: OpenNodes) -> ApiResult<Graph> {
         self.graph(Some(&req.names), &req.expand, true, req.observation_limit)
     }
@@ -923,151 +851,6 @@ impl SearchStore for SqliteStore {
     }
 }
 
-impl BackupStore for SqliteStore {
-    fn backup(&self, request: BackupRequest) -> ApiResult<BackupReceipt> {
-        let managed = request.destination.as_os_str().is_empty();
-        let destination = if managed {
-            let backup_dir = self
-                .db_path
-                .parent()
-                .unwrap_or_else(|| Path::new("."))
-                .join("backups");
-            std::fs::create_dir_all(&backup_dir).map_err(backend_error)?;
-            backup_dir.join(format!("asobi-{}.db", backup_timestamp()?))
-        } else {
-            request.destination
-        };
-        if let Some(parent) = destination.parent() {
-            std::fs::create_dir_all(parent).map_err(backend_error)?;
-        }
-        let escaped = destination.to_string_lossy().replace('\'', "''");
-        self.read(|conn| conn.execute(&format!("VACUUM INTO '{}'", escaped), []))?;
-        if managed {
-            prune_managed_backups(
-                destination.parent().unwrap_or_else(|| Path::new(".")),
-                request.keep,
-            )?;
-        }
-        Ok(BackupReceipt {
-            path: destination,
-            backend: "sqlite".into(),
-        })
-    }
-    fn restore(self, source: PathBuf, force: bool) -> ApiResult<()> {
-        if !source.exists() {
-            return Err(ApiError::NotFound(source.display().to_string()));
-        }
-        let db_path = self.db_path.clone();
-        if db_path.exists() && !force {
-            return Err(ApiError::Conflict(format!(
-                "database exists: {}",
-                db_path.display()
-            )));
-        }
-        let check = Connection::open(&source).map_err(backend_error)?;
-        let result: String = check
-            .query_row("PRAGMA integrity_check", [], |r| r.get(0))
-            .map_err(backend_error)?;
-        if result != "ok" {
-            return Err(ApiError::Backend(format!(
-                "backup integrity check failed: {result}"
-            )));
-        }
-        let schema_version: i64 = check
-            .query_row("PRAGMA user_version", [], |row| row.get(0))
-            .map_err(backend_error)?;
-        if schema_version != SCHEMA_VERSION {
-            return Err(ApiError::Invalid(format!(
-                "not an Asobi SQLite database: unsupported schema version {schema_version}"
-            )));
-        }
-        for table in [
-            "asobi_entities",
-            "asobi_observations",
-            "asobi_relations",
-            "asobi_truths",
-            "asobi_obs_fts",
-        ] {
-            let exists: bool = check
-                .query_row(
-                    "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name = ? AND type = 'table')",
-                    [table],
-                    |row| row.get(0),
-                )
-                .map_err(backend_error)?;
-            if !exists {
-                return Err(ApiError::Invalid(format!(
-                    "not an Asobi SQLite database: missing {table}"
-                )));
-            }
-        }
-        drop(check);
-        if db_path.exists() {
-            self.read(|conn| conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);"))?;
-            let backup_dir = db_path
-                .parent()
-                .unwrap_or_else(|| Path::new("."))
-                .join("backups");
-            std::fs::create_dir_all(&backup_dir).map_err(backend_error)?;
-            let stamp = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map_err(backend_error)?
-                .as_nanos();
-            std::fs::copy(&db_path, backup_dir.join(format!("pre-restore-{stamp}.db")))
-                .map_err(backend_error)?;
-        }
-        drop(self);
-        remove_database_sidecars(&db_path)?;
-        std::fs::copy(source, db_path)
-            .map(|_| ())
-            .map_err(backend_error)
-    }
-}
-
-fn backup_timestamp() -> ApiResult<u128> {
-    Ok(std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_err(backend_error)?
-        .as_nanos())
-}
-
-fn prune_managed_backups(directory: &Path, keep: usize) -> ApiResult<()> {
-    let mut backups = std::fs::read_dir(directory)
-        .map_err(backend_error)?
-        .filter_map(|entry| entry.ok())
-        .filter(|entry| {
-            let name = entry.file_name();
-            let name = name.to_string_lossy();
-            name.starts_with("asobi-") && name.ends_with(".db")
-        })
-        .map(|entry| {
-            let modified = entry
-                .metadata()
-                .and_then(|metadata| metadata.modified())
-                .unwrap_or(std::time::UNIX_EPOCH);
-            (entry.path(), modified)
-        })
-        .collect::<Vec<_>>();
-    backups.sort_by_key(|(_, modified)| Reverse(*modified));
-    for (path, _) in backups.into_iter().skip(keep.max(1)) {
-        std::fs::remove_file(path).map_err(backend_error)?;
-    }
-    Ok(())
-}
-
-fn remove_database_sidecars(path: &Path) -> ApiResult<()> {
-    for suffix in ["-wal", "-shm"] {
-        let mut sidecar = path.as_os_str().to_os_string();
-        sidecar.push(suffix);
-        match std::fs::remove_file(PathBuf::from(sidecar)) {
-            Ok(()) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => return Err(backend_error(error)),
-        }
-    }
-    Ok(())
-}
-
 impl MaintenanceStore for SqliteStore {
     fn stats(&self) -> ApiResult<Stats> {
         self.read(|conn| {
@@ -1132,8 +915,6 @@ impl MaintenanceStore for SqliteStore {
             backend: "sqlite".into(),
             keyword_search: true,
             keyword_search_kind: "fts5".into(),
-            logical_snapshots: true,
-            physical_backup: true,
             multi_process: true,
         })
     }

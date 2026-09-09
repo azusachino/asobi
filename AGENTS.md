@@ -9,7 +9,7 @@ Rust 2024, Clap, tracing, rusqlite with bundled SQLite/FTS5, and Python scripts 
 - `src/main.rs` — thin process entry point
 - `src/cli/` — command parsing, routing, output, skills, and runtime setup
 - `src/api/v2.rs` — backend-neutral synchronous capability traits
-- `src/storage/sqlite.rs` — schema, FTS5, graph CRUD, transactions, backup/restore
+- `src/storage/sqlite.rs` — schema, FTS5, graph CRUD, transactions, migrations
 - `src/tasks.rs` — durable task planning, dispatch, sync, and close workflows
 - `src/skills.rs` / `src/skills_config.rs` — skill parsing and materialization to disk, and the declarative `[skills]` block that `skills sync` reconciles
 - `src/frontmatter.rs` — the shared YAML-frontmatter subset. Deliberately not a real YAML parser; read its module doc before widening it
@@ -19,7 +19,7 @@ Rust 2024, Clap, tracing, rusqlite with bundled SQLite/FTS5, and Python scripts 
 
 ## CLI surface
 
-Graph: `new`, `obs`, `link`, `rm`, `rm-obs`, `update-obs`, `unlink`, `graph`, `search`, and `show`. Truths: `truth` and `rm-truth` — a truth is the current value only, since 0.7 removed `history` along with the archive-on-overwrite path. Maintenance: `compact`, `purge`, `init`, `stats`, `capabilities`, `schema`, `completions`, `export`, `import`, `reset`, `backup`, and `restore`. Agent workflows: `skills` and `tasks` with their nested subcommands.
+Graph: `new`, `obs`, `link`, `rm`, `rm-obs`, `update-obs`, `unlink`, `graph`, `search`, and `show`. Truths: `truth` and `rm-truth` — a truth is the current value only, since 0.7 removed `history` along with the archive-on-overwrite path. Maintenance: `compact`, `purge`, `init`, `stats`, `capabilities`, `schema`, `completions`, and `reset`. 0.8 removed `backup`/`restore` and `export`/`import`: the graph is a single SQLite file, so `cp` is the backup and there is no serialization path to maintain. Agent workflows: `skills` and `tasks` with their nested subcommands.
 
 `asobi schema` is the machine-readable response contract, and `docs/usage.md` is the user-facing command reference — the single one. This repository documents what the CLI _is_ and ships no `SKILL.md`; agent workflow guidance for Asobi lives in the [`asobi` skill](https://github.com/azusachino/harus-skills/blob/main/skills/asobi/SKILL.md). Install that skill with:
 

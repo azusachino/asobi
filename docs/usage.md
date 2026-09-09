@@ -166,7 +166,7 @@ asobi purge --older-than 30 --apply
 
 This normally runs by itself — see [Lifecycle](#lifecycle). Reach for it to preview what would go, or to sweep a narrower window than the configured one. It only ever considers finished `session` and `task` entities; durable knowledge is not something a request can name. Use `--json` for a machine-readable candidate report. An applied purge also runs `PRAGMA incremental_vacuum`, so the database file shrinks with the graph rather than retaining a free list.
 
-`compact` syncs only durable _knowledge_ entities (project, decisions, references, preferences) to Markdown. Volatile state (`session`, `task`) stays graph-only — query it with `search` / `show`, and use `export` / `backup` for full archival. Skills are not in the graph at all; they live on disk under the skills directory.
+`compact` syncs only durable _knowledge_ entities (project, decisions, references, preferences) to Markdown. Volatile state (`session`, `task`) stays graph-only — query it with `search` / `show`. Skills are not in the graph at all; they live on disk under the skills directory.
 
 **Inspect the full graph:**
 
@@ -175,38 +175,18 @@ asobi stats                                # Quick count of entities, relations,
 asobi graph | jq '.entities[] | select(.entityType == "session")'
 ```
 
-### Backup, restore, and portable export
+### Archival
 
-| Goal | Command | Includes |
-| --- | --- | --- |
-| Portable handoff | `asobi export -o graph.json` | Entities, observations, truths, relations |
-| Scoped handoff | `asobi export --scope "proj:epic" -o epic.json` | One epic subtree |
-| Full SQLite archive | `asobi backup` | Complete database, including task state. Skills live on disk and are backed up with the repository, not here. |
+The graph is one SQLite file. Copy it:
 
 ```bash
-asobi import graph.json
-asobi backup                       # backups/asobi-<timestamp>.db; keep newest 3
-asobi backup --keep 5
-asobi backup -o /secure/asobi.db   # explicit path; never overwrites
-asobi restore /secure/asobi.db     # validate, save current DB, then prompt
-asobi restore /secure/asobi.db --force
+cp .asobi/data/asobi.db backup.db          # project-local
+cp ~/.local/share/asobi/data/asobi.db .    # XDG
 ```
 
-- `--keep` applies only to managed snapshots, not an explicit `-o` path.
-- Snapshots are integrity-checked and owner-only on Unix.
-- Restore writes `backups/pre-restore-*.db`, closes live handles, atomically replaces the database, and removes stale WAL sidecars.
+0.8 removed `backup`/`restore` and `export`/`import`. Between them they were three archival mechanisms for one single-file database: `backup` had grown a managed directory with its own retention policy, integrity checks and a pre-restore safety copy, and `export` had grown subgraph scoping (`--scope`, `--rationale`) with the traversal rules to match. `cp` is the backup, and `sqlite3` reads the file if you want to inspect it without Asobi.
 
-Scoped export is designed for handing an epic to another agent:
-
-- Includes each root, transitive `part_of` children, and one-hop `depends_on` targets.
-- `--rationale` adds one hop of `supersedes`/`extends` from cited decisions.
-- Excludes `session`, `preference`, and `standard` entities.
-- Produces ordinary JSON consumed by `asobi import`.
-
-```bash
-asobi export --scope "proj:epic" --scope "proj:other-epic" -o bundle.json
-asobi export --scope "proj:epic" --rationale -o bundle.json
-```
+The one thing this genuinely gives up is moving a single entity between two graphs — a project-local one and the XDG one, say. Re-create it with `new`/`truth`/`obs`; it is a handful of commands, and it happens rarely enough that a subgraph traversal engine was the wrong price to pay for it.
 
 **Manage truths (structured key-value attributes):**
 
@@ -391,7 +371,7 @@ asobi purge [--older-than <DAYS>] [--apply]
 asobi reset [--force]
 ```
 
-`compact` projects **durable knowledge** entities — `project`, `concept`, `reference`, `preference`, `standard` — and their truths into Markdown under `.asobi/topics/`. Volatile `session` and `task` entities and self-indexing `skill` entities are skipped by design; read those with `search`/`show` and archive them with `export` or `backup`.
+`compact` projects **durable knowledge** entities — `project`, `concept`, `reference`, `preference`, `standard` — and their truths into Markdown under `.asobi/topics/`. Volatile `session` and `task` entities and self-indexing `skill` entities are skipped by design; read those with `search`/`show` and archive them with `export`.
 
 `purge` is a dry run unless given `--apply`, and accepts only `session` entities plus terminal task statuses (`DONE`, `CLOSED`, `ABANDONED`) — durable knowledge is refused, and skills are not in the graph to begin with. It defaults to entities inactive for 30 days. It never runs implicitly during `graph`, `search`, `compact`, or startup. An applied purge also runs `PRAGMA incremental_vacuum`, so the database file shrinks with the graph rather than retaining a free list.
 

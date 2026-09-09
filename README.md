@@ -32,7 +32,7 @@ One synchronous storage contract, one bundled backend, one local file — see [A
 ```mermaid
 flowchart LR
     CLI["src/cli/*\n(commands, dispatch, graph, skills)"]
-    API["api::v2\nGraphStore · SearchStore · SkillStore\nSnapshotStore · BackupStore · MaintenanceStore · TaskStore"]
+    API["api::v2\nGraphStore · SearchStore\nMaintenanceStore · TaskStore"]
     Sqlite["SqliteStore\n(src/storage/sqlite.rs)"]
     DB[("asobi.db\nWAL + FTS5")]
 
@@ -86,11 +86,10 @@ asobi rm-obs "my-project" 1 --id
 
 - `asobi graph` / `search <q>` / `search --where status=READY` / `show <name>... --expand part_of --with-ids` — read the graph (supports subtree expansions and sequential observation IDs).
 - `asobi new <name> <type> --obs "..."` / `obs <name> "..."` / `update-obs <name> <old/id> <new> [--id]` / `rm-obs <name> <content/id> [--id]` — manage observations (supports updates and deletions by unique sequential IDs).
-- `asobi truth <name> <key> <value>` / `rm-truth <name> <key>` / `history <name> [key]` — manage truths and read their change history (overwrites are archived with valid-time; history is opt-in and never shown in `graph`/`search`/`show`).
+- `asobi truth <name> <key> <value>` / `rm-truth <name> <key>` — manage truths. A truth is the current value and nothing else: an overwrite replaces it, with no archive behind it.
 - `asobi skills install <src> --all` / `update` / `skills` / `skills show <name>` — manage skills (`--all` and `update` sync, pruning skills dropped upstream; `--select` is additive). `--subdir <path>` scopes the walk to one directory of the checkout, for sources that mirror skills across several tool-specific directories; `--rev` pins to a commit, tag, or branch. A skill that ships `references/`, `scripts/` or `assets/` is installed with them.
 - `asobi skills sync` — reconcile installed skills with the `[skills]` block in `asobi.toml`, and write each one to `.agents/skills/<source-slug>@<skill-name>/SKILL.md`. Per-source `subdir = "..."` does the same scoping declaratively.
-- `asobi stats` / `purge` / `export -o graph.json` / `import graph.json` / `reset` — inspect & manage.
-- `asobi backup` / `restore <snapshot> [--force]` — full-fidelity SQLite backups; see the [usage guide](docs/usage.md#backup-restore-and-portable-export).
+- `asobi stats` / `purge` / `reset` — inspect & manage. The graph is one SQLite file, so `cp` it to back it up.
 
 ## 🔒 Sandboxed Environments
 
