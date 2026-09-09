@@ -1,6 +1,6 @@
 use anyhow::{Result, anyhow, bail};
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -281,30 +281,68 @@ pub struct InstalledSkill {
     pub version: String,
 }
 
-/// Provenance sidecar written beside the installed skills.
+/// The two paths a skills tree spans: the directory agents read, and the
+/// manifest recording where its contents came from.
 ///
 /// Until 0.7 a skill's source and version lived on its graph entity, so with
 /// the graph copy gone they need a home on disk — and the previous arrangement
 /// recorded them so poorly that every installed skill in practice carried only
-/// a `description` and no version at all. Keeping them here makes `skills`
-/// report what commit each skill came from, lets `update` find its sources
-/// again, and gives pruning an explicit record instead of inferring intent
-/// from directory names.
-pub const MANIFEST_FILE: &str = ".asobi-skills.json";
+/// a `description` and no version at all. Recording them makes `skills` report
+/// what commit each skill came from, and lets `update` and `remove` find a
+/// source again after the fact. Pruning does *not* use the manifest: it works
+/// off the `@` directory convention, in [`materialize_skills`].
+///
+/// The manifest is state, so it belongs under `data_dir` rather than in the
+/// skills directory, which asobi treats as project content (see
+/// `AsobiPaths::root`). The two are anchored differently — under the XDG
+/// fallback `data_dir` is global while the skills directory follows the
+/// working directory — so the file is keyed by the directory it describes.
+/// Without that key every project sharing an XDG state tree would read, and
+/// overwrite, one another's manifest.
+pub struct SkillsTree {
+    pub dir: PathBuf,
+    pub manifest: PathBuf,
+}
+
+impl SkillsTree {
+    pub fn new(data_dir: &Path, skills_dir: &Path) -> Self {
+        Self {
+            dir: skills_dir.to_path_buf(),
+            manifest: data_dir.join(format!("skills-{:016x}.json", path_key(skills_dir))),
+        }
+    }
+}
+
+/// FNV-1a over the path's bytes. Written out rather than taken from
+/// `DefaultHasher`, whose output is explicitly not stable across Rust
+/// releases — a toolchain bump must not orphan every manifest on disk. The
+/// path is used as given, without canonicalizing: it is already absolute (it
+/// is resolved against `AsobiPaths::root`), and resolving symlinks would key
+/// the same directory differently depending on whether it existed yet.
+fn path_key(path: &Path) -> u64 {
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for byte in path.as_os_str().as_encoded_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x100_0000_01b3);
+    }
+    hash
+}
 
 #[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
 struct Manifest {
     skills: Vec<InstalledSkill>,
 }
 
-/// Read the installed-skill manifest from `dir`.
+/// Read the installed-skill manifest for `tree`.
 ///
 /// Falls back to scanning `<slug>@<name>` directories when the manifest is
-/// absent — an older tree, or one a human edited — so listing still works, at
-/// the cost of empty `source`/`version`. Directories without `@` are ignored
-/// either way, the same convention [`materialize_skills`] prunes by.
-pub fn read_installed_skills(dir: &Path) -> Result<Vec<InstalledSkill>> {
-    if let Ok(raw) = std::fs::read_to_string(dir.join(MANIFEST_FILE))
+/// absent — a tree a human edited, or one written before the manifest
+/// existed — so listing still works, at the cost of empty `source`/`version`.
+/// Directories without `@` are ignored either way, the same convention
+/// [`materialize_skills`] prunes by.
+pub fn read_installed_skills(tree: &SkillsTree) -> Result<Vec<InstalledSkill>> {
+    let dir = tree.dir.as_path();
+    if let Ok(raw) = std::fs::read_to_string(&tree.manifest)
         && let Ok(manifest) = serde_json::from_str::<Manifest>(&raw)
     {
         let mut skills = manifest.skills;
@@ -434,7 +472,11 @@ fn is_markdown(path: &Path) -> bool {
 /// have no `@` in their name and are never touched. Since 0.7 this is the only
 /// place a skill is stored, so this pruning pass is also what retires a skill
 /// the config stopped declaring or a source dropped upstream.
-pub fn materialize_skills(dir: &Path, desired: &[CollectedSkill]) -> Result<MaterializeOutcome> {
+pub fn materialize_skills(
+    tree: &SkillsTree,
+    desired: &[CollectedSkill],
+) -> Result<MaterializeOutcome> {
+    let dir = tree.dir.as_path();
     let mut outcome = MaterializeOutcome::default();
     let wanted: std::collections::HashSet<&str> =
         desired.iter().map(|s| s.dir_name.as_str()).collect();
@@ -485,8 +527,11 @@ pub fn materialize_skills(dir: &Path, desired: &[CollectedSkill]) -> Result<Mate
             })
             .collect(),
     };
+    if let Some(parent) = tree.manifest.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
     std::fs::write(
-        dir.join(MANIFEST_FILE),
+        &tree.manifest,
         serde_json::to_string_pretty(&manifest)? + "\n",
     )?;
 
@@ -509,6 +554,18 @@ mod tests {
         )
         .unwrap();
         dir
+    }
+
+    /// A skills tree whose manifest lives in a sibling state directory, the
+    /// way `data_dir` and the skills directory actually sit apart on disk.
+    /// Returns the skills directory too, since most assertions are about it.
+    fn tree_under(root: &Path) -> (PathBuf, SkillsTree) {
+        let skills = root.join("skills");
+        std::fs::create_dir_all(&skills).unwrap();
+        (
+            skills.clone(),
+            SkillsTree::new(&root.join("state"), &skills),
+        )
     }
 
     #[test]
@@ -684,20 +741,20 @@ mod tests {
         write_skill(src, "beta", "beta body");
         let source = src.to_str().unwrap();
         let out_dir = tempdir().unwrap();
-        let out = out_dir.path();
+        let (_out, tree) = tree_under(out_dir.path());
 
         let first = collect_skills_from_dir(src, source, "v1", SelectionMode::All, false).unwrap();
         assert_eq!(first.len(), 2);
-        materialize_skills(out, &first).unwrap();
-        assert_eq!(read_installed_skills(out).unwrap().len(), 2);
+        materialize_skills(&tree, &first).unwrap();
+        assert_eq!(read_installed_skills(&tree).unwrap().len(), 2);
 
         // Upstream removes `beta`; the next sync must drop it from disk.
         std::fs::remove_dir_all(src.join("beta")).unwrap();
         let second = collect_skills_from_dir(src, source, "v2", SelectionMode::All, false).unwrap();
-        let outcome = materialize_skills(out, &second).unwrap();
+        let outcome = materialize_skills(&tree, &second).unwrap();
 
         assert_eq!(outcome.removed.len(), 1);
-        let installed = read_installed_skills(out).unwrap();
+        let installed = read_installed_skills(&tree).unwrap();
         assert_eq!(installed.len(), 1);
         assert_eq!(installed[0].name, "alpha");
         assert_eq!(installed[0].version, "v2");
@@ -712,7 +769,8 @@ mod tests {
         let src = src_dir.path();
         write_skill(src, "alpha", "alpha body");
         let out_dir = tempdir().unwrap();
-        let out = out_dir.path();
+        let (out, tree) = tree_under(out_dir.path());
+        let out = out.as_path();
         let collected = collect_skills_from_dir(
             src,
             "https://example.com/o/r.git",
@@ -721,13 +779,59 @@ mod tests {
             false,
         )
         .unwrap();
-        materialize_skills(out, &collected).unwrap();
+        materialize_skills(&tree, &collected).unwrap();
 
-        assert!(out.join(MANIFEST_FILE).is_file());
-        let installed = read_installed_skills(out).unwrap();
+        assert!(tree.manifest.is_file());
+        assert!(!out.join(".asobi-skills.json").exists());
+        let installed = read_installed_skills(&tree).unwrap();
         assert_eq!(installed[0].source, "https://example.com/o/r.git");
         assert_eq!(installed[0].version, "abc123");
         assert_eq!(installed[0].description, "alpha description");
+    }
+
+    /// Two skills directories sharing one `data_dir` — what the XDG fallback
+    /// produces for any two projects on a machine, since `data_dir` is global
+    /// there while the skills directory follows the working directory. Each
+    /// must get its own manifest, or one project's sync silently rewrites the
+    /// other's provenance.
+    #[test]
+    fn test_manifests_are_keyed_per_skills_dir() {
+        use tempfile::tempdir;
+        let src_dir = tempdir().unwrap();
+        let src = src_dir.path();
+        write_skill(src, "alpha", "alpha body");
+        let collected = collect_skills_from_dir(
+            src,
+            "https://example.com/o/r.git",
+            "v1",
+            SelectionMode::All,
+            false,
+        )
+        .unwrap();
+
+        let root = tempdir().unwrap();
+        let data = root.path().join("state");
+        let one = SkillsTree::new(&data, &root.path().join("a/.agents/skills"));
+        let two = SkillsTree::new(&data, &root.path().join("b/.agents/skills"));
+        assert_ne!(one.manifest, two.manifest);
+
+        materialize_skills(&one, &collected).unwrap();
+        // Nothing is installed under `two`, so its own manifest is absent and
+        // it must not inherit `one`'s.
+        assert!(!two.manifest.exists());
+        assert!(read_installed_skills(&two).unwrap().is_empty());
+        assert_eq!(read_installed_skills(&one).unwrap().len(), 1);
+    }
+
+    /// The key must not move under a toolchain upgrade, or every manifest on
+    /// disk is orphaned at once. Pinned so a swap away from FNV-1a is a
+    /// deliberate, visible change rather than a silent one.
+    #[test]
+    fn test_path_key_is_stable() {
+        assert_eq!(
+            path_key(Path::new("/home/u/p/.agents/skills")),
+            0x06e8_0bce_a145_c5e8
+        );
     }
 
     /// Without a manifest — an older tree, or one a human pruned by hand —
@@ -736,7 +840,8 @@ mod tests {
     fn test_read_installed_falls_back_to_scanning() {
         use tempfile::tempdir;
         let out_dir = tempdir().unwrap();
-        let out = out_dir.path();
+        let (out, tree) = tree_under(out_dir.path());
+        let out = out.as_path();
         let dir = out.join("some-source@alpha");
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(
@@ -745,7 +850,7 @@ mod tests {
         )
         .unwrap();
 
-        let installed = read_installed_skills(out).unwrap();
+        let installed = read_installed_skills(&tree).unwrap();
         assert_eq!(installed.len(), 1);
         assert_eq!(installed[0].name, "alpha");
         assert!(installed[0].version.is_empty());
@@ -775,13 +880,14 @@ mod tests {
         let beta_dir = dir_of("beta");
 
         let out_dir = tempdir().unwrap();
-        let out = out_dir.path();
+        let (out, tree) = tree_under(out_dir.path());
+        let out = out.as_path();
         // A vendored checkout and a hand-written note: neither has an `@`, so
         // neither is ours to delete.
         std::fs::create_dir(out.join("vendored-upstream")).unwrap();
         std::fs::write(out.join("README.md"), "mine").unwrap();
 
-        let written = materialize_skills(out, &collected).unwrap();
+        let written = materialize_skills(&tree, &collected).unwrap();
         assert_eq!(written.written.len(), 2);
         assert!(written.removed.is_empty());
         assert_eq!(
@@ -790,7 +896,7 @@ mod tests {
         );
 
         // Re-running with the same desired set is a no-op on disk.
-        let again = materialize_skills(out, &collected).unwrap();
+        let again = materialize_skills(&tree, &collected).unwrap();
         assert!(again.written.is_empty());
         assert!(again.removed.is_empty());
 
@@ -800,7 +906,7 @@ mod tests {
             .filter(|s| s.name == "alpha")
             .cloned()
             .collect();
-        let narrowed = materialize_skills(out, &only_alpha).unwrap();
+        let narrowed = materialize_skills(&tree, &only_alpha).unwrap();
         assert_eq!(narrowed.removed, vec![beta_dir.clone()]);
         assert!(out.join(&alpha_dir).is_dir());
         assert!(!out.join(&beta_dir).exists());
@@ -949,8 +1055,9 @@ mod tests {
         assert!(!collected[0].body.contains("Write briefs like this."));
 
         let out_dir = tempdir().unwrap();
-        let out = out_dir.path();
-        materialize_skills(out, &collected).unwrap();
+        let (out, tree) = tree_under(out_dir.path());
+        let out = out.as_path();
+        materialize_skills(&tree, &collected).unwrap();
         let installed = out.join(&collected[0].dir_name);
 
         // ...the Markdown it points at is there to be read...

@@ -184,7 +184,7 @@ cp .asobi/data/asobi.db backup.db          # project-local
 cp ~/.local/share/asobi/data/asobi.db .    # XDG
 ```
 
-There is no archival command. `cp` is the backup, and `sqlite3` reads the file if you want to inspect it without Asobi. (Earlier releases shipped `backup`/`restore` and `export`/`import`; see `CHANGELOG.md` for why they went.)
+The graph is one SQLite file. `cp` backs it up, and `sqlite3` reads it directly.
 
 The one thing this genuinely gives up is moving a single entity between two graphs — a project-local one and the XDG one, say. Re-create it with `new`/`truth`/`obs`; it is a handful of commands, and it happens rarely enough that a subgraph traversal engine was the wrong price to pay for it.
 
@@ -240,7 +240,7 @@ asobi skills sync
 
 The skills directory is the store of record: a skill exists on disk and nowhere else, so it does not appear in `graph`, `search`, or `show`, and `rg` over the skills directory is how you search one. `path` defaults to `.agents/skills`, resolved against the `asobi.toml` that declares it, or against the discovered workspace root when no config declares a `[skills]` block — so `skills` and `skills show` work under a plain `asobi init` too.
 
-Alongside the skill directories, `sync` writes `.asobi-skills.json` recording each skill's source and the exact commit it came from. `asobi skills` reports that commit. Committing the whole tree, manifest included, is what turns an upstream skill change into a reviewable diff.
+`sync` also records each skill's source and the exact commit it came from, in a `skills-<key>.json` manifest under the data directory (`.asobi/data/` project-local, `~/.local/share/asobi/data/` under XDG). `asobi skills` reports that commit, and `update` and `remove` use it to find a source again after the fact. It lives there rather than beside the skills because it is state, not project content — and it is named for the skills directory it describes, since under XDG one global data directory serves every project's own skills directory. Committing the skill tree is what turns an upstream skill change into a reviewable diff; the manifest is regenerated and does not need committing.
 
 `rev` completes that loop. Without it a re-sync silently adopts whatever the source has moved to since; with it, adopting a new revision is an edit someone makes on purpose. An annotated tag resolves to the commit it points at, not the tag object, so the recorded version is always a commit.
 

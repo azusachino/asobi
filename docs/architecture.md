@@ -24,7 +24,7 @@ The API is synchronous because this is a local SQLite CLI: each operation is a s
 
 ## Durable projections
 
-`compact` renders durable graph entities to Markdown topics. It is a deterministic graph-to-Markdown projection; it does not ingest documents or build embeddings. Sessions and tasks remain graph data, available through graph, search, and show. Skills are not graph data: they live on the filesystem under the skills directory, with a `.asobi-skills.json` manifest recording each one's source and commit.
+`compact` renders durable graph entities to Markdown topics. It is a deterministic graph-to-Markdown projection; it does not ingest documents or build embeddings. Sessions and tasks remain graph data, available through graph, search, and show. Skills are not graph data: they live on the filesystem under the skills directory, with a `skills-<key>.json` manifest in the data directory recording each one's source and commit, keyed by the skills directory it describes.
 
 ## Verification
 

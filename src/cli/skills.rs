@@ -89,20 +89,30 @@ fn skills_dir(paths: &AsobiPaths) -> Result<std::path::PathBuf> {
     Ok(paths.root.join(".agents/skills"))
 }
 
+/// Pair the skills directory with the manifest describing it. Resolved once
+/// per command so the manifest key is computed from a single answer.
+fn skills_tree(paths: &AsobiPaths) -> Result<crate::skills::SkillsTree> {
+    Ok(crate::skills::SkillsTree::new(
+        &paths.data_dir,
+        &skills_dir(paths)?,
+    ))
+}
+
 /// Collect from one source and write the result to disk, replacing whatever
 /// that source had installed before.
 fn sync_sources(
-    dir: &std::path::Path,
+    tree: &crate::skills::SkillsTree,
     collected: Vec<crate::skills::CollectedSkill>,
 ) -> Result<crate::skills::MaterializeOutcome> {
-    crate::skills::materialize_skills(dir, &collected)
+    crate::skills::materialize_skills(tree, &collected)
 }
 
 pub(crate) fn run(paths: &AsobiPaths, subcommand: Option<SkillsCommands>) -> Result<()> {
-    let dir = skills_dir(paths)?;
+    let tree = skills_tree(paths)?;
+    let dir = tree.dir.clone();
     match subcommand {
         None => {
-            let skills = crate::skills::read_installed_skills(&dir)?;
+            let skills = crate::skills::read_installed_skills(&tree)?;
             if skills.is_empty() {
                 println!("No skills installed in {}.", dir.display());
                 return Ok(());
@@ -159,13 +169,13 @@ pub(crate) fn run(paths: &AsobiPaths, subcommand: Option<SkillsCommands>) -> Res
             // put here, replace only this source's own skills. `--all` is a
             // full sync of *this* source, so anything it dropped upstream goes.
             let slug = crate::skills::derive_source_slug(&checkout.url);
-            let mut desired: Vec<_> = crate::skills::read_installed_skills(&dir)?
+            let mut desired: Vec<_> = crate::skills::read_installed_skills(&tree)?
                 .into_iter()
                 .filter(|s| crate::skills::derive_source_slug(&s.source) != slug)
                 .filter_map(|s| reload(&dir, &s))
                 .collect();
             desired.extend(fresh);
-            let written = sync_sources(&dir, desired)?;
+            let written = sync_sources(&tree, desired)?;
             info!(
                 "Installed into {} ({} written, {} removed)",
                 dir.display(),
@@ -218,7 +228,7 @@ pub(crate) fn run(paths: &AsobiPaths, subcommand: Option<SkillsCommands>) -> Res
             // The config is the whole truth: materialize prunes every skill
             // directory it did not just write, so a source dropped from the
             // config leaves the tree without any separate bookkeeping.
-            let written = sync_sources(&dir, desired)?;
+            let written = sync_sources(&tree, desired)?;
             info!(
                 "Synced into {} ({} written, {} removed)",
                 dir.display(),
@@ -227,7 +237,7 @@ pub(crate) fn run(paths: &AsobiPaths, subcommand: Option<SkillsCommands>) -> Res
             );
         }
         Some(SkillsCommands::Update { source }) => {
-            let installed = crate::skills::read_installed_skills(&dir)?;
+            let installed = crate::skills::read_installed_skills(&tree)?;
             let sources: std::collections::BTreeSet<String> = installed
                 .iter()
                 .filter(|s| !s.source.is_empty())
@@ -286,7 +296,7 @@ pub(crate) fn run(paths: &AsobiPaths, subcommand: Option<SkillsCommands>) -> Res
                     false,
                 )?);
             }
-            let written = sync_sources(&dir, desired)?;
+            let written = sync_sources(&tree, desired)?;
             info!(
                 "Updated {} ({} written, {} removed)",
                 dir.display(),
@@ -295,7 +305,7 @@ pub(crate) fn run(paths: &AsobiPaths, subcommand: Option<SkillsCommands>) -> Res
             );
         }
         Some(SkillsCommands::Remove { target }) => {
-            let installed = crate::skills::read_installed_skills(&dir)?;
+            let installed = crate::skills::read_installed_skills(&tree)?;
             let (dropped, kept): (Vec<_>, Vec<_>) = installed.into_iter().partition(|s| {
                 s.name == target
                     || s.dir == target
@@ -310,7 +320,7 @@ pub(crate) fn run(paths: &AsobiPaths, subcommand: Option<SkillsCommands>) -> Res
                 );
             }
             let desired: Vec<_> = kept.iter().filter_map(|s| reload(&dir, s)).collect();
-            let written = sync_sources(&dir, desired)?;
+            let written = sync_sources(&tree, desired)?;
             info!(
                 "Removed {} skill(s) from {}",
                 written.removed.len(),
@@ -318,7 +328,7 @@ pub(crate) fn run(paths: &AsobiPaths, subcommand: Option<SkillsCommands>) -> Res
             );
         }
         Some(SkillsCommands::Show { name }) => {
-            let installed = crate::skills::read_installed_skills(&dir)?;
+            let installed = crate::skills::read_installed_skills(&tree)?;
             let matches: Vec<_> = installed
                 .iter()
                 .filter(|s| s.name == name || s.dir == name)
