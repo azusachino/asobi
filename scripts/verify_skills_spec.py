@@ -112,7 +112,9 @@ def install_fixture(work: Path) -> list[Path]:
     if not installed:
         sys.exit(f"install wrote nothing under {skills_root}")
 
-    manifest = skills_root / ".asobi-skills.json"
+    # The manifest is state, so it sits in the data directory (here `home`,
+    # since ASOBI_HOME unifies the roots) rather than beside the skills.
+    manifest = home / "skills.json"
     if not manifest.is_file():
         sys.exit(f"missing provenance manifest: {manifest}")
     recorded = {entry["dir"] for entry in json.loads(manifest.read_text())["skills"]}

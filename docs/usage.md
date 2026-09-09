@@ -184,7 +184,7 @@ cp .asobi/data/asobi.db backup.db          # project-local
 cp ~/.local/share/asobi/data/asobi.db .    # XDG
 ```
 
-There is no archival command. `cp` is the backup, and `sqlite3` reads the file if you want to inspect it without Asobi. (Earlier releases shipped `backup`/`restore` and `export`/`import`; see `CHANGELOG.md` for why they went.)
+The graph is one SQLite file. `cp` backs it up, and `sqlite3` reads it directly.
 
 The one thing this genuinely gives up is moving a single entity between two graphs — a project-local one and the XDG one, say. Re-create it with `new`/`truth`/`obs`; it is a handful of commands, and it happens rarely enough that a subgraph traversal engine was the wrong price to pay for it.
 
@@ -240,7 +240,11 @@ asobi skills sync
 
 The skills directory is the store of record: a skill exists on disk and nowhere else, so it does not appear in `graph`, `search`, or `show`, and `rg` over the skills directory is how you search one. `path` defaults to `.agents/skills`, resolved against the `asobi.toml` that declares it, or against the discovered workspace root when no config declares a `[skills]` block — so `skills` and `skills show` work under a plain `asobi init` too.
 
-Alongside the skill directories, `sync` writes `.asobi-skills.json` recording each skill's source and the exact commit it came from. `asobi skills` reports that commit. Committing the whole tree, manifest included, is what turns an upstream skill change into a reviewable diff.
+`sync` also records each skill's directory, name, source and the exact commit it came from, in a `skills.json` manifest under the data directory (`.asobi/data/` project-local, `~/.local/share/asobi/data/` under XDG). `asobi skills` reports that commit, and `update` and `remove` use it to find a source again after the fact. It lives there rather than beside the skills because it is state, not project content. Committing the skill tree is what turns an upstream skill change into a reviewable diff; the manifest is regenerated and does not need committing.
+
+The manifest names the skills directory it describes, in a top-level `dir` field. One data directory can be reached from more than one skills directory — under XDG the data directory is global while the skills path follows the working directory — so a manifest that could not say which tree it meant would be indistinguishable from one saying the tree is empty. When it names a different directory, `skills` falls back to scanning the actual one, listing what is there without source or commit rather than reporting another project's skills or none at all.
+
+It deliberately does not record a description. `SKILL.md` already carries one, `skills show` prints it, and re-serializing it into JSON meant putting it through Asobi's frontmatter reader — a narrow subset with no multi-line scalars, which recorded a skill declaring `description: >` as the literal `">"`. A field nothing reads is not worth a YAML parser.
 
 `rev` completes that loop. Without it a re-sync silently adopts whatever the source has moved to since; with it, adopting a new revision is an edit someone makes on purpose. An annotated tag resolves to the commit it points at, not the tag object, so the recorded version is always a commit.
 
