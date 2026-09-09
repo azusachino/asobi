@@ -10,13 +10,32 @@ pub enum SelectionMode {
     Interactive,
 }
 
-/// What one source install changed in the graph.
-#[derive(Debug, Default)]
-pub struct InstallOutcome {
-    /// Entity names installed or refreshed.
-    pub installed: Vec<String>,
-    /// Entity names dropped because the selection no longer covers them.
-    pub pruned: Vec<String>,
+/// One skill read out of a source checkout, ready to be written to disk.
+///
+/// Skills live on the filesystem and nowhere else. They were mirrored into the
+/// graph as well until 0.7, which meant every skill existed twice with the disk
+/// copy as the one agents actually read — and the graph copy accumulating
+/// nothing, since a skill has no observations and only ever carried its
+/// `description`. The files are the store of record; `.agents/skills/` is a
+/// directory the wider Agent Skills ecosystem already understands, and `rg`
+/// searches it better than a graph read did.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CollectedSkill {
+    /// On-disk directory name: `<source-slug>@<skill-name>`.
+    pub dir_name: String,
+    /// The frontmatter `name`, as declared.
+    pub name: String,
+    pub description: String,
+    /// Canonical source URL or path this came from.
+    pub source: String,
+    /// Resolved git commit, or `local` for a path source.
+    pub version: String,
+    /// The full `SKILL.md` text, frontmatter included.
+    pub body: String,
+    /// The skill's own directory in the source checkout. Every skill has one:
+    /// a skill *is* a directory containing `SKILL.md`. Its Markdown is copied
+    /// alongside the body so on-demand references resolve after install.
+    pub bundle_dir: std::path::PathBuf,
 }
 
 /// What one sync changed on disk.
@@ -75,201 +94,6 @@ pub fn derive_source_slug(url: &str) -> String {
     crate::normalize::normalize_key(url)
 }
 
-/// When a skill file has no frontmatter `name:`, derive it from the filename
-/// stem — except for convention filenames (`SKILL.md`, `index.md`), where the
-/// skill's identity is the parent directory name.
-fn resolve_skill_name_fallback(path: &Path) -> String {
-    let file_stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
-    if file_stem.eq_ignore_ascii_case("SKILL") || file_stem.eq_ignore_ascii_case("index") {
-        path.parent()
-            .and_then(|p| p.file_name())
-            .and_then(|n| n.to_str())
-            .unwrap_or(file_stem)
-            .to_string()
-    } else {
-        file_stem.to_string()
-    }
-}
-
-/// How many link hops [`inline_local_references`] follows before giving up.
-/// Real skills reference at most one or two levels deep (`SKILL.md` ->
-/// `reference.md`); this just bounds a pathological reference chain.
-const MAX_REFERENCE_DEPTH: usize = 4;
-
-/// Targets of every `[text](target)` inline link in `content`, in source
-/// order and with duplicates kept (the caller dedupes via `visited`).
-///
-/// A hand-rolled scan rather than a markdown parser or a `regex` dependency:
-/// skills only ever link with the plain inline form, and this only needs
-/// candidate paths, not a rendered document. Reference-style links
-/// (`[text][id]`) are deliberately not matched — rare in skills, and not
-/// worth a second lookup table for.
-fn markdown_link_targets(content: &str) -> Vec<&str> {
-    let mut targets = Vec::new();
-    for (i, c) in content.char_indices() {
-        if c != '[' {
-            continue;
-        }
-        let Some(close_bracket) = content[i..].find(']') else {
-            continue;
-        };
-        let after_bracket = i + close_bracket + 1;
-        if !content[after_bracket..].starts_with('(') {
-            continue;
-        }
-        let paren_start = after_bracket + 1;
-        let Some(close_paren) = content[paren_start..].find(')') else {
-            continue;
-        };
-        // A link target may carry a trailing `"title"`; only the path matters.
-        let raw = content[paren_start..paren_start + close_paren].trim();
-        let target = raw.split_whitespace().next().unwrap_or(raw);
-        if !target.is_empty() {
-            targets.push(target);
-        }
-    }
-    targets
-}
-
-/// Inline-code-span targets in `content` that look like a path to a markdown
-/// file: single backticks, no whitespace inside, ending in `.md`/`.markdown`.
-/// Skips spans inside fenced (```` ``` ````) code blocks, since those are
-/// examples to show the reader, not live references.
-///
-/// Some skills — Anthropic's own `skill-creator` among them — mention sibling
-/// docs as prose ("see `references/schemas.md` for the schema") rather than
-/// as a markdown link. The ending-in-`.md` + no-whitespace filter is loose by
-/// itself (it would also match a *generated output* mentioned in backticks,
-/// like "produces `benchmark.md`"), so the real filter is downstream: the
-/// caller only inlines a target that resolves to a file that actually exists
-/// in the source checkout, which a generated-output mention never does.
-fn backtick_path_targets(content: &str) -> Vec<&str> {
-    let mut targets = Vec::new();
-    let mut in_fence = false;
-    for line in content.lines() {
-        if line.trim_start().starts_with("```") {
-            in_fence = !in_fence;
-            continue;
-        }
-        if in_fence {
-            continue;
-        }
-        // Splitting on the delimiter puts every span *between* a pair of
-        // backticks at an odd index; unmatched trailing backticks just leave
-        // a final segment that is never treated as "inside".
-        for (idx, span) in line.split('`').enumerate() {
-            if idx % 2 == 0 {
-                continue;
-            }
-            let looks_like_markdown_path = span.ends_with(".md") || span.ends_with(".markdown");
-            if !span.is_empty() && !span.contains(char::is_whitespace) && looks_like_markdown_path {
-                targets.push(span);
-            }
-        }
-    }
-    targets
-}
-
-/// True for a link target worth following on disk: not an external URL, mail
-/// link, or a same-page anchor.
-fn is_local_reference(target: &str) -> bool {
-    !target.starts_with('#')
-        && !target.contains("://")
-        && !target.starts_with("mailto:")
-        && !target.starts_with("tel:")
-}
-
-/// Inline the local `.md`/`.markdown` files a skill references — via a
-/// markdown link or a backtick-quoted path — so a `SKILL.md` that is itself
-/// just a table of contents over sibling docs ships as one self-contained
-/// body. Asobi stores and materializes a single string per skill (see
-/// [`materialize_skills`]), so anything the skill needs at runtime has to
-/// live in that string — a reference file left beside `SKILL.md` in the
-/// source repo never reaches `.agents/skills/<slug>@<name>/`.
-///
-/// Only references that resolve inside `root_dir` are followed (no escaping
-/// the source checkout via `../..`), and a reference to another skill's own
-/// entry point (`SKILL.md`/`index.md`) is never inlined — that is a
-/// cross-skill reference to something installed as its own entity, not local
-/// content. `depth` bounds how many reference hops are followed; `visited`
-/// prevents cycles and re-inlining the same file reached two different ways.
-fn inline_local_references(
-    content: &str,
-    file_dir: &Path,
-    root_dir: &Path,
-    visited: &mut std::collections::HashSet<std::path::PathBuf>,
-    depth: usize,
-) -> String {
-    if depth == 0 {
-        return content.to_string();
-    }
-    let mut out = content.to_string();
-    let mut candidates = markdown_link_targets(content);
-    candidates.extend(backtick_path_targets(content));
-    for target in candidates {
-        if !is_local_reference(target) {
-            continue;
-        }
-        // Strip a `#fragment` before resolving; the file is what gets inlined.
-        let relative = target.split('#').next().unwrap_or(target);
-        let Ok(resolved) = file_dir.join(relative).canonicalize() else {
-            continue;
-        };
-        if !resolved.starts_with(root_dir) {
-            continue;
-        }
-        let is_markdown = resolved
-            .extension()
-            .and_then(|e| e.to_str())
-            .is_some_and(|ext| {
-                ext.eq_ignore_ascii_case("md") || ext.eq_ignore_ascii_case("markdown")
-            });
-        let is_entry_point = resolved
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .is_some_and(|stem| {
-                stem.eq_ignore_ascii_case("SKILL") || stem.eq_ignore_ascii_case("index")
-            });
-        if !is_markdown || is_entry_point || !visited.insert(resolved.clone()) {
-            continue;
-        }
-        let Ok(ref_content) = std::fs::read_to_string(&resolved) else {
-            continue;
-        };
-        let label = resolved
-            .strip_prefix(root_dir)
-            .unwrap_or(&resolved)
-            .display();
-        out.push_str(&format!("\n\n---\n\n<!-- inlined: {label} -->\n\n"));
-        let ref_dir = resolved.parent().unwrap_or(file_dir).to_path_buf();
-        out.push_str(&inline_local_references(
-            &ref_content,
-            &ref_dir,
-            root_dir,
-            visited,
-            depth - 1,
-        ));
-    }
-    out
-}
-
-/// Entry point for [`inline_local_references`]: canonicalizes `root_dir` once
-/// and seeds `visited` with the skill file's own path so a link back to
-/// itself is a no-op rather than a duplicate of the whole body.
-fn inline_references(content: &str, file_path: &Path, root_dir: &Path) -> String {
-    let Some(file_dir) = file_path.parent() else {
-        return content.to_string();
-    };
-    let Ok(root) = root_dir.canonicalize() else {
-        return content.to_string();
-    };
-    let mut visited = std::collections::HashSet::new();
-    if let Ok(canonical_self) = file_path.canonicalize() {
-        visited.insert(canonical_self);
-    }
-    inline_local_references(content, file_dir, &root, &mut visited, MAX_REFERENCE_DEPTH)
-}
-
 pub fn resolve_selection(
     skills: &[(String, String)],
     mode: SelectionMode,
@@ -325,17 +149,18 @@ pub fn resolve_selection(
     }
 }
 
-pub fn install_skills_from_dir<S: crate::api::SkillStore>(
-    store: &S,
+/// Read every skill under `dir_path`, apply `mode`, and return what should be
+/// written to disk. Touches no storage: the caller hands the result to
+/// [`materialize_skills`], which owns both writing and pruning.
+pub fn collect_skills_from_dir(
     dir_path: &Path,
     source: &str,
     version: &str,
     mode: SelectionMode,
     is_tty: bool,
-    prune: bool,
-) -> Result<InstallOutcome> {
+) -> Result<Vec<CollectedSkill>> {
     let mut parsed_skills = Vec::new();
-    let mut skill_contents = HashMap::new();
+    let mut skill_contents: HashMap<String, (String, std::path::PathBuf)> = HashMap::new();
     // Every file path that claimed each name. Real-world skill repos sometimes
     // mirror the same skill under two tool-specific directories (e.g.
     // `.opencode/skills/x/` and `skills/x/`) and those mirrors can genuinely
@@ -347,25 +172,50 @@ pub fn install_skills_from_dir<S: crate::api::SkillStore>(
     // collision only blocks installing *that* name: a narrow `--select` of an
     // unrelated, unambiguous skill in the same source still succeeds.
     let mut skill_paths: HashMap<String, Vec<std::path::PathBuf>> = HashMap::new();
+    // A skill is a directory containing `SKILL.md`, which is what the Agent
+    // Skills specification defines and the only shape supported here. Loose
+    // `<name>.md` files were once accepted too, which bought a name-fallback
+    // rule, an optional bundle, and a class of skill whose relative references
+    // could never resolve -- three kinds of complexity for a shape the spec
+    // does not have.
     for entry in WalkDir::new(dir_path)
         .into_iter()
         .filter_map(|e| e.ok())
-        .filter(|e| e.path().is_file() && e.path().extension().is_some_and(|ext| ext == "md"))
+        .filter(|e| e.path().is_file())
+        .filter(|e| {
+            e.path()
+                .file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.eq_ignore_ascii_case("SKILL.md"))
+        })
     {
+        let Some(bundle_dir) = entry.path().parent().map(Path::to_path_buf) else {
+            continue;
+        };
         let content = std::fs::read_to_string(entry.path())?.replace("\r\n", "\n");
         if let Some((parsed_name, parsed_desc)) = parse_frontmatter(&content) {
-            let name = parsed_name.unwrap_or_else(|| resolve_skill_name_fallback(entry.path()));
+            // The spec requires a skill's directory to be named for it, so the
+            // directory is the right answer when frontmatter omits the name.
+            let name = parsed_name.unwrap_or_else(|| {
+                bundle_dir
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("skill")
+                    .to_string()
+            });
             skill_paths
                 .entry(name.clone())
                 .or_default()
                 .push(entry.path().to_path_buf());
-            let body = inline_references(&content, entry.path(), dir_path);
             parsed_skills.push((name.clone(), parsed_desc.unwrap_or_default()));
-            skill_contents.insert(name, body);
+            skill_contents.insert(name, (content, bundle_dir));
         }
     }
     if parsed_skills.is_empty() {
-        bail!("No valid skills found in {}", source);
+        bail!(
+            "No skills found in {source}: a skill is a directory containing SKILL.md \
+             (see https://agentskills.io/specification)"
+        );
     }
     let selected_names = resolve_selection(&parsed_skills, mode, is_tty)?;
     if let Some(name) = selected_names
@@ -386,25 +236,9 @@ pub fn install_skills_from_dir<S: crate::api::SkillStore>(
         );
     }
     let slug = derive_source_slug(source);
-    let mut outcome = InstallOutcome::default();
-    if prune {
-        let fresh: std::collections::HashSet<String> = selected_names
-            .iter()
-            .map(|n| crate::normalize::normalize_key(&format!("skill:{}:{}", slug, n)))
-            .collect();
-        let orphans = store
-            .list_skills()?
-            .into_iter()
-            .filter(|s| derive_source_slug(&s.source) == slug && !fresh.contains(&s.entity_name))
-            .map(|s| s.entity_name)
-            .collect::<Vec<_>>();
-        if !orphans.is_empty() {
-            store.remove_skills(orphans.clone())?;
-            outcome.pruned = orphans;
-        }
-    }
+    let mut collected = Vec::new();
     for name in selected_names {
-        let body = skill_contents
+        let (body, bundle_dir) = skill_contents
             .remove(&name)
             .ok_or_else(|| anyhow!("Content missing for skill {}", name))?;
         let description = parsed_skills
@@ -412,72 +246,217 @@ pub fn install_skills_from_dir<S: crate::api::SkillStore>(
             .find(|(n, _)| n == &name)
             .map(|(_, d)| d.clone())
             .unwrap_or_default();
-        let entity_name = crate::normalize::normalize_key(&format!("skill:{}:{}", slug, name));
-        store.upsert_skill(crate::api::SkillRecord {
-            entity_name: entity_name.clone(),
-            body,
+        collected.push(CollectedSkill {
+            dir_name: format!(
+                "{}@{}",
+                crate::normalize::slugify(&slug),
+                crate::normalize::slugify(&name)
+            ),
+            name,
+            description,
             source: source.to_string(),
             version: version.to_string(),
-            description,
-        })?;
-        outcome.installed.push(entity_name);
+            body,
+            bundle_dir,
+        });
     }
-    Ok(outcome)
+    Ok(collected)
 }
 
-/// The on-disk directory for a skill entity: `skill:<slug>:<name>` becomes
-/// `<slug>@<name>`. Returns `None` for anything that is not a skill entity.
+/// A skill as recorded on disk, for `skills` and `skills show`.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InstalledSkill {
+    /// On-disk directory name: `<source-slug>@<skill-name>`.
+    pub dir: String,
+    pub name: String,
+    #[serde(default)]
+    pub description: String,
+    /// Canonical source URL or path.
+    #[serde(default)]
+    pub source: String,
+    /// The git commit this was taken from, or `local`. Empty when the manifest
+    /// was missing and this entry was recovered by scanning.
+    #[serde(default)]
+    pub version: String,
+}
+
+/// Provenance sidecar written beside the installed skills.
 ///
-/// Both halves are slugified to lowercase kebab-case, so a frontmatter name
-/// like `Verification Before Completion` lands in a canonical directory rather
-/// than carrying its display capitalisation onto the filesystem.
-pub fn skill_dir_name(entity_name: &str) -> Option<String> {
-    let rest = entity_name.strip_prefix("skill:")?;
-    let (slug, name) = rest.split_once(':')?;
-    if slug.is_empty() || name.is_empty() {
-        return None;
-    }
-    Some(format!(
-        "{}@{}",
-        crate::normalize::slugify(slug),
-        crate::normalize::slugify(name)
-    ))
+/// Until 0.7 a skill's source and version lived on its graph entity, so with
+/// the graph copy gone they need a home on disk — and the previous arrangement
+/// recorded them so poorly that every installed skill in practice carried only
+/// a `description` and no version at all. Keeping them here makes `skills`
+/// report what commit each skill came from, lets `update` find its sources
+/// again, and gives pruning an explicit record instead of inferring intent
+/// from directory names.
+pub const MANIFEST_FILE: &str = ".asobi-skills.json";
+
+#[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
+struct Manifest {
+    skills: Vec<InstalledSkill>,
 }
 
-/// Write `desired` out as `<dir>/<slug>@<name>/SKILL.md`, then remove every
-/// other `<slug>@<name>` directory under `dir`.
+/// Read the installed-skill manifest from `dir`.
+///
+/// Falls back to scanning `<slug>@<name>` directories when the manifest is
+/// absent — an older tree, or one a human edited — so listing still works, at
+/// the cost of empty `source`/`version`. Directories without `@` are ignored
+/// either way, the same convention [`materialize_skills`] prunes by.
+pub fn read_installed_skills(dir: &Path) -> Result<Vec<InstalledSkill>> {
+    if let Ok(raw) = std::fs::read_to_string(dir.join(MANIFEST_FILE))
+        && let Ok(manifest) = serde_json::from_str::<Manifest>(&raw)
+    {
+        let mut skills = manifest.skills;
+        skills.retain(|s| dir.join(&s.dir).join("SKILL.md").is_file());
+        skills.sort_by(|a, b| a.dir.cmp(&b.dir));
+        return Ok(skills);
+    }
+
+    let mut found = Vec::new();
+    let entries = match std::fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(found),
+        Err(e) => return Err(anyhow!("read {}: {e}", dir.display())),
+    };
+    for entry in entries {
+        let entry = entry?;
+        let Some(dir_name) = entry.file_name().to_str().map(str::to_string) else {
+            continue;
+        };
+        if !entry.file_type()?.is_dir() || !dir_name.contains('@') {
+            continue;
+        }
+        let Ok(content) = std::fs::read_to_string(entry.path().join("SKILL.md")) else {
+            continue;
+        };
+        let (name, description) = parse_frontmatter(&content).unwrap_or((None, None));
+        found.push(InstalledSkill {
+            name: name.unwrap_or_else(|| {
+                dir_name
+                    .split_once('@')
+                    .map(|(_, n)| n.to_string())
+                    .unwrap_or_else(|| dir_name.clone())
+            }),
+            description: description.unwrap_or_default(),
+            dir: dir_name,
+            source: String::new(),
+            version: String::new(),
+        });
+    }
+    found.sort_by(|a, b| a.dir.cmp(&b.dir));
+    Ok(found)
+}
+
+/// Copy a skill's bundled resources — `references/`, `scripts/`, `assets/`, and
+/// anything else it ships — from the source checkout into its installed
+/// directory. `SKILL.md` itself is skipped; the caller writes that from the
+/// collected body.
+///
+/// The Agent Skills spec loads these on demand, only when the body points at
+/// them, which is the whole of its progressive disclosure. Installing the body
+/// without them leaves a skill whose instructions reference files that are not
+/// there — the failure is silent, since nothing reads the body until an agent
+/// does.
+fn copy_bundle(skill: &CollectedSkill, to: &Path) -> Result<()> {
+    let from = skill.bundle_dir.as_path();
+    let mut skipped = Vec::new();
+    for entry in WalkDir::new(from).into_iter().filter_map(|e| e.ok()) {
+        let relative = entry.path().strip_prefix(from).unwrap_or(entry.path());
+        if relative.as_os_str().is_empty() {
+            continue;
+        }
+        // The entry point is written from the collected body, not copied, so a
+        // sibling `index.md` alongside a `SKILL.md` still comes across.
+        if relative.as_os_str().eq_ignore_ascii_case("SKILL.md") {
+            continue;
+        }
+        if entry.file_type().is_dir() {
+            continue;
+        }
+        if !entry.file_type().is_file() {
+            // Symlinks are deliberately not followed: a skill source is
+            // untrusted input, and a link out of the checkout would copy
+            // whatever it names into the skills tree.
+            continue;
+        }
+        if !is_markdown(entry.path()) {
+            skipped.push(relative.display().to_string());
+            continue;
+        }
+        let target = to.join(relative);
+        if let Some(parent) = target.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        // Same mtime reasoning as the body: skip a byte-identical file.
+        let unchanged = std::fs::read(entry.path())
+            .ok()
+            .zip(std::fs::read(&target).ok())
+            .is_some_and(|(src, dst)| src == dst);
+        if !unchanged {
+            std::fs::copy(entry.path(), &target)?;
+        }
+    }
+
+    if !skipped.is_empty() {
+        skipped.sort();
+        tracing::warn!(
+            "skill '{}': did not install {} non-Markdown file(s) ({}). Asobi installs \
+             instructions, not executables or data -- fetch them from the source if a \
+             step genuinely needs them.",
+            skill.name,
+            skipped.len(),
+            skipped.join(", ")
+        );
+    }
+    Ok(())
+}
+
+/// Markdown is the only thing a skill install writes besides `SKILL.md`.
+///
+/// The rest of a skill's directory -- `scripts/`, `assets/`, tool-specific
+/// config -- is fetched from a git URL and is exactly where the published
+/// attack research finds payloads hidden, precisely because scanners read the
+/// body and not the artifacts beside it. Writing an upstream script to disk on
+/// the strength of a `select` line is a bigger promise than a skill installer
+/// should make; a human who wants one can fetch it deliberately.
+fn is_markdown(path: &Path) -> bool {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| e.eq_ignore_ascii_case("md") || e.eq_ignore_ascii_case("markdown"))
+}
+
+/// Write `desired` out as `<dir>/<slug>@<name>/SKILL.md` plus its bundled
+/// resources, then remove every other `<slug>@<name>` directory under `dir`.
 ///
 /// Pruning is deliberately scoped to the `@` naming convention: directories
 /// Asobi did not write — a hand-authored skill, a vendored upstream checkout —
-/// have no `@` in their name and are never touched.
-pub fn materialize_skills<S: crate::api::SkillStore>(
-    store: &S,
-    dir: &Path,
-    desired: &[String],
-) -> Result<MaterializeOutcome> {
+/// have no `@` in their name and are never touched. Since 0.7 this is the only
+/// place a skill is stored, so this pruning pass is also what retires a skill
+/// the config stopped declaring or a source dropped upstream.
+pub fn materialize_skills(dir: &Path, desired: &[CollectedSkill]) -> Result<MaterializeOutcome> {
     let mut outcome = MaterializeOutcome::default();
-    let wanted: std::collections::HashSet<String> =
-        desired.iter().filter_map(|e| skill_dir_name(e)).collect();
+    let wanted: std::collections::HashSet<&str> =
+        desired.iter().map(|s| s.dir_name.as_str()).collect();
 
     std::fs::create_dir_all(dir)?;
 
-    for entity in desired {
-        let Some(dir_name) = skill_dir_name(entity) else {
-            continue;
-        };
-        let body = store
-            .skill_body(entity)?
-            .ok_or_else(|| anyhow!("Skill '{}' has no body to write", entity))?;
-        let skill_dir = dir.join(&dir_name);
+    for skill in desired {
+        let dir_name = &skill.dir_name;
+        let skill_dir = dir.join(dir_name);
         let file = skill_dir.join("SKILL.md");
-        // Leave an already-current file alone so a no-op sync does not churn
+        std::fs::create_dir_all(&skill_dir)?;
+        // Bundled resources are refreshed every run: an upstream change to a
+        // `references/` file does not necessarily change `SKILL.md`, so gating
+        // the copy on the body would let them drift.
+        copy_bundle(skill, &skill_dir)?;
+        // Leave an already-current body alone so a no-op sync does not churn
         // mtimes that file watchers key off.
-        if std::fs::read_to_string(&file).is_ok_and(|existing| existing == body) {
+        if std::fs::read_to_string(&file).is_ok_and(|existing| existing == skill.body) {
             continue;
         }
-        std::fs::create_dir_all(&skill_dir)?;
-        std::fs::write(&file, body)?;
-        outcome.written.push(dir_name);
+        std::fs::write(&file, &skill.body)?;
+        outcome.written.push(dir_name.clone());
     }
 
     for entry in std::fs::read_dir(dir)? {
@@ -488,11 +467,28 @@ pub fn materialize_skills<S: crate::api::SkillStore>(
         let Some(name) = entry.file_name().to_str().map(str::to_string) else {
             continue;
         };
-        if name.contains('@') && !wanted.contains(&name) {
+        if name.contains('@') && !wanted.contains(name.as_str()) {
             std::fs::remove_dir_all(entry.path())?;
             outcome.removed.push(name);
         }
     }
+
+    let manifest = Manifest {
+        skills: desired
+            .iter()
+            .map(|s| InstalledSkill {
+                dir: s.dir_name.clone(),
+                name: s.name.clone(),
+                description: s.description.clone(),
+                source: s.source.clone(),
+                version: s.version.clone(),
+            })
+            .collect(),
+    };
+    std::fs::write(
+        dir.join(MANIFEST_FILE),
+        serde_json::to_string_pretty(&manifest)? + "\n",
+    )?;
 
     outcome.written.sort();
     outcome.removed.sort();
@@ -502,8 +498,18 @@ pub fn materialize_skills<S: crate::api::SkillStore>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::api::SkillStore;
-    use crate::storage::Storage;
+
+    /// Write a spec-shaped skill: a directory named for it, holding SKILL.md.
+    fn write_skill(root: &Path, name: &str, body: &str) -> std::path::PathBuf {
+        let dir = root.join(name);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("SKILL.md"),
+            format!("---\nname: {name}\ndescription: {name} description\n---\n{body}\n"),
+        )
+        .unwrap();
+        dir
+    }
 
     #[test]
     fn test_parse_frontmatter_valid() {
@@ -603,7 +609,8 @@ mod tests {
             .unwrap();
 
         // 2. Create a skill file
-        let skill_file = repo_path.join("test-skill.md");
+        let skill_file = repo_path.join("repo-skill").join("SKILL.md");
+        std::fs::create_dir_all(skill_file.parent().unwrap()).unwrap();
         std::fs::write(
             &skill_file,
             "---\nname: repo-skill\ndescription: cloned skill\n---\nbody text\n",
@@ -613,7 +620,7 @@ mod tests {
         // 3. Commit the file
         std::process::Command::new("git")
             .arg("add")
-            .arg("test-skill.md")
+            .arg("repo-skill/SKILL.md")
             .current_dir(repo_path)
             .status()
             .unwrap();
@@ -634,16 +641,6 @@ mod tests {
             .unwrap();
         let head_commit = String::from_utf8(output.stdout).unwrap().trim().to_string();
 
-        // 4. Setup temp database
-        let db_dir = tempdir().unwrap();
-        unsafe {
-            std::env::set_var(
-                crate::paths::ENV_DATABASE_URL,
-                db_dir.path().join("test.db").to_str().unwrap(),
-            );
-        }
-        let storage = Storage::open_default().unwrap();
-
         // 5. Clone and install
         let clone_temp_dir = tempdir().unwrap();
         let clone_path = clone_temp_dir.path();
@@ -654,134 +651,104 @@ mod tests {
             .status()
             .unwrap();
 
-        install_skills_from_dir(
-            &storage,
+        let collected = collect_skills_from_dir(
             clone_path,
             repo_path.to_str().unwrap(),
             &head_commit,
             SelectionMode::All,
             false,
-            true,
         )
         .unwrap();
 
-        // 6. Verify skill installed
-        let skills = storage.list_skills().unwrap();
-        assert_eq!(skills.len(), 1);
+        // 6. Verify what was collected
+        assert_eq!(collected.len(), 1);
+        assert_eq!(collected[0].name, "repo-skill");
+        assert_eq!(collected[0].version, head_commit);
         assert_eq!(
-            skills[0].entity_name,
-            crate::normalize::normalize_key(&format!(
-                "skill:{}:repo-skill",
-                derive_source_slug(repo_path.to_str().unwrap())
-            ))
-        );
-        assert_eq!(skills[0].version, head_commit);
-    }
-
-    #[test]
-    fn test_sync_prunes_orphaned_skills() {
-        use tempfile::tempdir;
-        let src_dir = tempdir().unwrap();
-        let src = src_dir.path();
-
-        // Initial source with two skills.
-        std::fs::write(
-            src.join("alpha.md"),
-            "---\nname: alpha\ndescription: a\n---\nalpha body\n",
-        )
-        .unwrap();
-        std::fs::write(
-            src.join("beta.md"),
-            "---\nname: beta\ndescription: b\n---\nbeta body\n",
-        )
-        .unwrap();
-
-        let db_dir = tempdir().unwrap();
-        unsafe {
-            std::env::set_var(
-                crate::paths::ENV_DATABASE_URL,
-                db_dir.path().join("test.db").to_str().unwrap(),
-            );
-        }
-        let storage = Storage::open_default().unwrap();
-
-        let source = src.to_str().unwrap();
-        let slug = derive_source_slug(source);
-
-        install_skills_from_dir(&storage, src, source, "v1", SelectionMode::All, false, true)
-            .unwrap();
-        assert_eq!(storage.list_skills().unwrap().len(), 2);
-
-        // Upstream removes `beta`; a sync (install --all) must prune it.
-        std::fs::remove_file(src.join("beta.md")).unwrap();
-
-        install_skills_from_dir(&storage, src, source, "v2", SelectionMode::All, false, true)
-            .unwrap();
-
-        let skills = storage.list_skills().unwrap();
-        assert_eq!(skills.len(), 1);
-        let alpha = crate::normalize::normalize_key(&format!("skill:{}:alpha", slug));
-        assert_eq!(skills[0].entity_name, alpha);
-        assert_eq!(skills[0].version, "v2");
-    }
-
-    #[test]
-    fn test_select_does_not_prune() {
-        use tempfile::tempdir;
-        let src_dir = tempdir().unwrap();
-        let src = src_dir.path();
-
-        std::fs::write(
-            src.join("alpha.md"),
-            "---\nname: alpha\ndescription: a\n---\nalpha body\n",
-        )
-        .unwrap();
-        std::fs::write(
-            src.join("beta.md"),
-            "---\nname: beta\ndescription: b\n---\nbeta body\n",
-        )
-        .unwrap();
-
-        let db_dir = tempdir().unwrap();
-        unsafe {
-            std::env::set_var(
-                crate::paths::ENV_DATABASE_URL,
-                db_dir.path().join("test.db").to_str().unwrap(),
-            );
-        }
-        let storage = Storage::open_default().unwrap();
-        let source = src.to_str().unwrap();
-
-        // Install only alpha, then only beta — both must survive (additive).
-        for name in ["alpha", "beta"] {
-            install_skills_from_dir(
-                &storage,
-                src,
-                source,
-                "v1",
-                SelectionMode::Select(vec![name.to_string()]),
-                false,
-                false,
+            collected[0].dir_name,
+            format!(
+                "{}@repo-skill",
+                crate::normalize::slugify(&derive_source_slug(repo_path.to_str().unwrap()))
             )
-            .unwrap();
-        }
-
-        assert_eq!(storage.list_skills().unwrap().len(), 2);
+        );
     }
 
+    /// Pruning lives entirely in `materialize_skills` now that disk is the only
+    /// store: whatever the caller does not pass in this run is what goes.
     #[test]
-    fn test_skill_dir_name() {
-        assert_eq!(
-            skill_dir_name("skill:obra-superpowers:writing-plans").as_deref(),
-            Some("obra-superpowers@writing-plans")
-        );
-        // A display-cased frontmatter name is canonicalised, not carried through.
-        assert_eq!(
-            skill_dir_name("skill:obra-superpowers:Verification-Before-Completion").as_deref(),
-            Some("obra-superpowers@verification-before-completion")
-        );
-        assert_eq!(skill_dir_name("obra-superpowers:writing-plans"), None);
-        assert_eq!(skill_dir_name("skill:no-name-part"), None);
+    fn test_materialize_prunes_skills_dropped_upstream() {
+        use tempfile::tempdir;
+        let src_dir = tempdir().unwrap();
+        let src = src_dir.path();
+        write_skill(src, "alpha", "alpha body");
+        write_skill(src, "beta", "beta body");
+        let source = src.to_str().unwrap();
+        let out_dir = tempdir().unwrap();
+        let out = out_dir.path();
+
+        let first = collect_skills_from_dir(src, source, "v1", SelectionMode::All, false).unwrap();
+        assert_eq!(first.len(), 2);
+        materialize_skills(out, &first).unwrap();
+        assert_eq!(read_installed_skills(out).unwrap().len(), 2);
+
+        // Upstream removes `beta`; the next sync must drop it from disk.
+        std::fs::remove_dir_all(src.join("beta")).unwrap();
+        let second = collect_skills_from_dir(src, source, "v2", SelectionMode::All, false).unwrap();
+        let outcome = materialize_skills(out, &second).unwrap();
+
+        assert_eq!(outcome.removed.len(), 1);
+        let installed = read_installed_skills(out).unwrap();
+        assert_eq!(installed.len(), 1);
+        assert_eq!(installed[0].name, "alpha");
+        assert_eq!(installed[0].version, "v2");
+    }
+
+    /// The manifest is what carries source and version, which the graph used to
+    /// hold — and held so poorly that no installed skill had a version at all.
+    #[test]
+    fn test_manifest_records_provenance() {
+        use tempfile::tempdir;
+        let src_dir = tempdir().unwrap();
+        let src = src_dir.path();
+        write_skill(src, "alpha", "alpha body");
+        let out_dir = tempdir().unwrap();
+        let out = out_dir.path();
+        let collected = collect_skills_from_dir(
+            src,
+            "https://example.com/o/r.git",
+            "abc123",
+            SelectionMode::All,
+            false,
+        )
+        .unwrap();
+        materialize_skills(out, &collected).unwrap();
+
+        assert!(out.join(MANIFEST_FILE).is_file());
+        let installed = read_installed_skills(out).unwrap();
+        assert_eq!(installed[0].source, "https://example.com/o/r.git");
+        assert_eq!(installed[0].version, "abc123");
+        assert_eq!(installed[0].description, "alpha description");
+    }
+
+    /// Without a manifest — an older tree, or one a human pruned by hand —
+    /// listing still works off the directory names, minus the provenance.
+    #[test]
+    fn test_read_installed_falls_back_to_scanning() {
+        use tempfile::tempdir;
+        let out_dir = tempdir().unwrap();
+        let out = out_dir.path();
+        let dir = out.join("some-source@alpha");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("SKILL.md"),
+            "---\nname: alpha\ndescription: a\n---\nbody\n",
+        )
+        .unwrap();
+
+        let installed = read_installed_skills(out).unwrap();
+        assert_eq!(installed.len(), 1);
+        assert_eq!(installed[0].name, "alpha");
+        assert!(installed[0].version.is_empty());
     }
 
     #[test]
@@ -789,42 +756,23 @@ mod tests {
         use tempfile::tempdir;
         let src_dir = tempdir().unwrap();
         let src = src_dir.path();
-        std::fs::write(
-            src.join("alpha.md"),
-            "---\nname: alpha\ndescription: a\n---\nalpha body\n",
-        )
-        .unwrap();
-        std::fs::write(
-            src.join("beta.md"),
-            "---\nname: beta\ndescription: b\n---\nbeta body\n",
-        )
-        .unwrap();
-
-        let db_dir = tempdir().unwrap();
-        unsafe {
-            std::env::set_var(
-                crate::paths::ENV_DATABASE_URL,
-                db_dir.path().join("test.db").to_str().unwrap(),
-            );
-        }
-        let storage = Storage::open_default().unwrap();
+        write_skill(src, "alpha", "alpha body");
+        write_skill(src, "beta", "beta body");
         let source = src.to_str().unwrap();
 
-        let outcome =
-            install_skills_from_dir(&storage, src, source, "v1", SelectionMode::All, false, true)
-                .unwrap();
-        assert_eq!(outcome.installed.len(), 2);
-
-        let entity = |suffix: &str| -> String {
-            outcome
-                .installed
+        let collected =
+            collect_skills_from_dir(src, source, "v1", SelectionMode::All, false).unwrap();
+        assert_eq!(collected.len(), 2);
+        let dir_of = |name: &str| -> String {
+            collected
                 .iter()
-                .find(|e| e.ends_with(suffix))
+                .find(|s| s.name == name)
                 .unwrap()
+                .dir_name
                 .clone()
         };
-        let alpha_dir = skill_dir_name(&entity(":alpha")).unwrap();
-        let beta_dir = skill_dir_name(&entity(":beta")).unwrap();
+        let alpha_dir = dir_of("alpha");
+        let beta_dir = dir_of("beta");
 
         let out_dir = tempdir().unwrap();
         let out = out_dir.path();
@@ -833,21 +781,26 @@ mod tests {
         std::fs::create_dir(out.join("vendored-upstream")).unwrap();
         std::fs::write(out.join("README.md"), "mine").unwrap();
 
-        let written = materialize_skills(&storage, out, &outcome.installed).unwrap();
+        let written = materialize_skills(out, &collected).unwrap();
         assert_eq!(written.written.len(), 2);
         assert!(written.removed.is_empty());
         assert_eq!(
             std::fs::read_to_string(out.join(&alpha_dir).join("SKILL.md")).unwrap(),
-            "---\nname: alpha\ndescription: a\n---\nalpha body\n"
+            "---\nname: alpha\ndescription: alpha description\n---\nalpha body\n"
         );
 
         // Re-running with the same desired set is a no-op on disk.
-        let again = materialize_skills(&storage, out, &outcome.installed).unwrap();
+        let again = materialize_skills(out, &collected).unwrap();
         assert!(again.written.is_empty());
         assert!(again.removed.is_empty());
 
         // Narrowing the desired set removes only the dropped skill.
-        let narrowed = materialize_skills(&storage, out, &[entity(":alpha")]).unwrap();
+        let only_alpha: Vec<_> = collected
+            .iter()
+            .filter(|s| s.name == "alpha")
+            .cloned()
+            .collect();
+        let narrowed = materialize_skills(out, &only_alpha).unwrap();
         assert_eq!(narrowed.removed, vec![beta_dir.clone()]);
         assert!(out.join(&alpha_dir).is_dir());
         assert!(!out.join(&beta_dir).exists());
@@ -885,7 +838,8 @@ mod tests {
             .unwrap();
 
         // 2. Create skill files with missing name and description respectively
-        let refactor_file = repo_path.join("refactor.md");
+        let refactor_file = repo_path.join("refactor").join("SKILL.md");
+        std::fs::create_dir_all(refactor_file.parent().unwrap()).unwrap();
         std::fs::write(
             &refactor_file,
             "---\ndescription: Iterative refactoring loop\n---\nrefactor body\n",
@@ -904,7 +858,7 @@ mod tests {
         // 3. Commit files
         std::process::Command::new("git")
             .arg("add")
-            .arg("refactor.md")
+            .arg("refactor/SKILL.md")
             .arg("software-design-review/SKILL.md")
             .current_dir(repo_path)
             .status()
@@ -926,16 +880,6 @@ mod tests {
             .unwrap();
         let head_commit = String::from_utf8(output.stdout).unwrap().trim().to_string();
 
-        // 4. Setup temp database
-        let db_dir = tempdir().unwrap();
-        unsafe {
-            std::env::set_var(
-                crate::paths::ENV_DATABASE_URL,
-                db_dir.path().join("test.db").to_str().unwrap(),
-            );
-        }
-        let storage = Storage::open_default().unwrap();
-
         // 5. Clone and install
         let clone_temp_dir = tempdir().unwrap();
         let clone_path = clone_temp_dir.path();
@@ -946,224 +890,101 @@ mod tests {
             .status()
             .unwrap();
 
-        install_skills_from_dir(
-            &storage,
+        let collected = collect_skills_from_dir(
             clone_path,
             repo_path.to_str().unwrap(),
             &head_commit,
             SelectionMode::All,
             false,
-            true,
         )
         .unwrap();
 
-        // 6. Verify skills installed correctly with fallbacks
-        let skills = storage.list_skills().unwrap();
-        assert_eq!(skills.len(), 2);
+        // 6. Verify skills collected correctly with name fallbacks
+        assert_eq!(collected.len(), 2);
 
-        let slug = derive_source_slug(repo_path.to_str().unwrap());
+        let refactor = collected.iter().find(|s| s.name == "refactor").unwrap();
+        assert_eq!(refactor.description, "Iterative refactoring loop");
 
-        let refactor_entity = crate::normalize::normalize_key(&format!("skill:{}:refactor", slug));
-        let sdr_entity =
-            crate::normalize::normalize_key(&format!("skill:{}:software-design-review", slug));
-
-        let refactor_row = skills
+        let sdr = collected
             .iter()
-            .find(|s| s.entity_name == refactor_entity)
+            .find(|s| s.name == "software-design-review")
             .unwrap();
-        assert_eq!(refactor_row.description, "Iterative refactoring loop");
-
-        let sdr_row = skills.iter().find(|s| s.entity_name == sdr_entity).unwrap();
-        assert_eq!(sdr_row.description, "");
+        assert_eq!(sdr.description, "");
     }
 
+    /// A skill that owns a directory ships its bundled resources with it.
+    /// Until 0.7 those were folded into the body instead, which defeated the
+    /// spec's progressive disclosure -- and covered only markdown, so a
+    /// bundled script silently vanished.
     #[test]
-    fn test_markdown_link_targets() {
-        let content = "See [AGENT-BRIEF.md](AGENT-BRIEF.md) and \
-             [a titled link](path/to.md \"a title\") and [anchor](#section) and \
-             [site](https://example.com) plain text with no link.";
-        assert_eq!(
-            markdown_link_targets(content),
-            vec![
-                "AGENT-BRIEF.md",
-                "path/to.md",
-                "#section",
-                "https://example.com"
-            ]
-        );
-    }
-
-    #[test]
-    fn test_backtick_path_targets() {
-        let content = "See `references/schemas.md` for the schema. Also `grading.json` \
-             and `evidence` are just field names, and `path with space.md` doesn't count.\n\
-             ```\n\
-             this fenced `inside.md` mention must not match\n\
-             ```\n\
-             But `after-fence.md` on a normal line does.";
-        assert_eq!(
-            backtick_path_targets(content),
-            vec!["references/schemas.md", "after-fence.md"]
-        );
-    }
-
-    #[test]
-    fn test_is_local_reference() {
-        assert!(is_local_reference("reference.md"));
-        assert!(is_local_reference("../sibling/reference.md"));
-        assert!(!is_local_reference("#section"));
-        assert!(!is_local_reference("https://example.com/doc.md"));
-        assert!(!is_local_reference("mailto:you@example.com"));
-    }
-
-    #[test]
-    fn test_inline_references_pulls_in_sibling_docs() {
-        use tempfile::tempdir;
-        let root = tempdir().unwrap();
-        let skill_dir = root.path().join("triage");
-        std::fs::create_dir(&skill_dir).unwrap();
-
-        std::fs::write(
-            skill_dir.join("SKILL.md"),
-            "---\nname: triage\ndescription: toc-style skill\n---\n\
-             # Triage\n\n## Reference docs\n\n\
-             - [AGENT-BRIEF.md](AGENT-BRIEF.md) -- how to write agent briefs\n\
-             - [OUT-OF-SCOPE.md](OUT-OF-SCOPE.md) -- rejected work log\n\n\
-             Later: post an agent brief ([AGENT-BRIEF.md](AGENT-BRIEF.md)).\n",
-        )
-        .unwrap();
-        std::fs::write(
-            skill_dir.join("AGENT-BRIEF.md"),
-            "# Agent Brief\n\nWrite briefs like this.\n",
-        )
-        .unwrap();
-        std::fs::write(
-            skill_dir.join("OUT-OF-SCOPE.md"),
-            "# Out of Scope\n\nRejected requests live here.\n",
-        )
-        .unwrap();
-
-        let content = std::fs::read_to_string(skill_dir.join("SKILL.md")).unwrap();
-        let inlined = inline_references(&content, &skill_dir.join("SKILL.md"), root.path());
-
-        assert!(inlined.contains("Write briefs like this."));
-        assert!(inlined.contains("Rejected requests live here."));
-        // Referenced twice in the source; inlined once (`visited` dedupes).
-        assert_eq!(inlined.matches("Write briefs like this.").count(), 1);
-    }
-
-    #[test]
-    fn test_inline_references_pulls_in_backtick_referenced_docs() {
-        // Mirrors Anthropic's own skill-creator, which mentions references as
-        // prose ("see `references/schemas.md`") rather than markdown links.
-        use tempfile::tempdir;
-        let root = tempdir().unwrap();
-        let skill_dir = root.path().join("skill-creator");
-        std::fs::create_dir(&skill_dir).unwrap();
-        std::fs::create_dir(skill_dir.join("references")).unwrap();
-
-        std::fs::write(
-            skill_dir.join("SKILL.md"),
-            "---\nname: skill-creator\ndescription: toc-style skill\n---\n\
-             See `references/schemas.md` for the full schema. This step \
-             produces `benchmark.md`, which is not a file in this repo.\n",
-        )
-        .unwrap();
-        std::fs::write(
-            skill_dir.join("references/schemas.md"),
-            "# Schemas\n\nThe JSON structures live here.\n",
-        )
-        .unwrap();
-
-        let content = std::fs::read_to_string(skill_dir.join("SKILL.md")).unwrap();
-        let inlined = inline_references(&content, &skill_dir.join("SKILL.md"), root.path());
-
-        assert!(inlined.contains("The JSON structures live here."));
-        // `benchmark.md` is path-shaped but never exists on disk -- silent no-op.
-        assert!(!inlined.contains("inlined: skill-creator/benchmark.md"));
-    }
-
-    #[test]
-    fn test_inline_references_skips_path_traversal() {
-        use tempfile::tempdir;
-        let outer = tempdir().unwrap();
-        let root = outer.path().join("root");
-        std::fs::create_dir(&root).unwrap();
-        std::fs::write(outer.path().join("secret.md"), "outside content").unwrap();
-
-        let skill_file = root.join("SKILL.md");
-        std::fs::write(
-            &skill_file,
-            "---\nname: x\n---\nSee [secret](../secret.md).\n",
-        )
-        .unwrap();
-
-        let content = std::fs::read_to_string(&skill_file).unwrap();
-        let inlined = inline_references(&content, &skill_file, &root);
-        assert!(!inlined.contains("outside content"));
-    }
-
-    #[test]
-    fn test_inline_references_skips_other_skill_entry_points() {
-        use tempfile::tempdir;
-        let root = tempdir().unwrap();
-        let a_dir = root.path().join("skill-a");
-        let b_dir = root.path().join("skill-b");
-        std::fs::create_dir(&a_dir).unwrap();
-        std::fs::create_dir(&b_dir).unwrap();
-
-        std::fs::write(
-            b_dir.join("SKILL.md"),
-            "---\nname: skill-b\n---\nskill b's own body\n",
-        )
-        .unwrap();
-        let a_file = a_dir.join("SKILL.md");
-        std::fs::write(
-            &a_file,
-            "---\nname: skill-a\n---\nSee also [skill-b](../skill-b/SKILL.md).\n",
-        )
-        .unwrap();
-
-        let content = std::fs::read_to_string(&a_file).unwrap();
-        let inlined = inline_references(&content, &a_file, root.path());
-        assert!(!inlined.contains("skill b's own body"));
-    }
-
-    #[test]
-    fn test_install_from_dir_inlines_sibling_references() {
+    fn test_bundled_resources_are_copied_not_inlined() {
         use tempfile::tempdir;
         let src_dir = tempdir().unwrap();
-        let src = src_dir.path();
+        let src = src_dir.path().join("triage");
+        std::fs::create_dir_all(src.join("references")).unwrap();
+        std::fs::create_dir_all(src.join("scripts")).unwrap();
 
+        // Written directly rather than via the helper: this body carries a
+        // reference link, which is the whole point of the test.
         std::fs::write(
             src.join("SKILL.md"),
             "---\nname: triage\ndescription: toc-style skill\n---\n\
-             See [AGENT-BRIEF.md](AGENT-BRIEF.md) for the brief format.\n",
+             See [the brief format](references/AGENT-BRIEF.md).\n",
         )
         .unwrap();
         std::fs::write(
-            src.join("AGENT-BRIEF.md"),
+            src.join("references/AGENT-BRIEF.md"),
             "# Agent Brief\n\nWrite briefs like this.\n",
         )
         .unwrap();
+        std::fs::write(src.join("scripts/extract.py"), "print('hi')\n").unwrap();
 
-        let db_dir = tempdir().unwrap();
-        unsafe {
-            std::env::set_var(
-                crate::paths::ENV_DATABASE_URL,
-                db_dir.path().join("test.db").to_str().unwrap(),
-            );
-        }
-        let storage = Storage::open_default().unwrap();
         let source = src.to_str().unwrap();
+        let collected =
+            collect_skills_from_dir(&src, source, "v1", SelectionMode::All, false).unwrap();
+        assert_eq!(collected.len(), 1);
 
-        let outcome =
-            install_skills_from_dir(&storage, src, source, "v1", SelectionMode::All, false, true)
-                .unwrap();
-        assert_eq!(outcome.installed.len(), 1);
+        // The body stays as authored -- the reference is a pointer, not content.
+        assert!(collected[0].body.contains("references/AGENT-BRIEF.md"));
+        assert!(!collected[0].body.contains("Write briefs like this."));
 
-        let body = storage.skill_body(&outcome.installed[0]).unwrap().unwrap();
-        assert!(body.contains("Write briefs like this."));
+        let out_dir = tempdir().unwrap();
+        let out = out_dir.path();
+        materialize_skills(out, &collected).unwrap();
+        let installed = out.join(&collected[0].dir_name);
+
+        // ...the Markdown it points at is there to be read...
+        assert_eq!(
+            std::fs::read_to_string(installed.join("references/AGENT-BRIEF.md")).unwrap(),
+            "# Agent Brief\n\nWrite briefs like this.\n"
+        );
+        // ...and the script is not. Auxiliary artifacts are where the published
+        // attack research finds payloads, so an install writes instructions and
+        // leaves fetched executables where they came from.
+        assert!(!installed.join("scripts/extract.py").exists());
+    }
+
+    /// A loose `<name>.md` is not a skill. Accepting them bought a name
+    /// fallback, an optional bundle, and a shape whose relative references
+    /// could never resolve once installed.
+    #[test]
+    fn test_loose_markdown_is_not_a_skill() {
+        use tempfile::tempdir;
+        let src_dir = tempdir().unwrap();
+        let src = src_dir.path();
+        std::fs::write(
+            src.join("alpha.md"),
+            "---\nname: alpha\ndescription: a\n---\nalpha body\n",
+        )
+        .unwrap();
+
+        let err =
+            collect_skills_from_dir(src, src.to_str().unwrap(), "v1", SelectionMode::All, false)
+                .unwrap_err();
+        assert!(
+            err.to_string().contains("directory containing SKILL.md"),
+            "message was: {err}"
+        );
     }
 
     #[test]
@@ -1175,36 +996,17 @@ mod tests {
         // Mirrors a real pattern: the same skill name declared under two
         // tool-specific directories, with genuinely different descriptions --
         // picking one silently would drop the other's content.
-        std::fs::create_dir(src.join("skills")).unwrap();
-        std::fs::create_dir(src.join(".opencode")).unwrap();
-        std::fs::write(
-            src.join("skills/one.md"),
-            "---\nname: dup\ndescription: canonical copy\n---\nbody one\n",
-        )
-        .unwrap();
-        std::fs::write(
-            src.join(".opencode/two.md"),
-            "---\nname: dup\ndescription: mirrored copy\n---\nbody two\n",
-        )
-        .unwrap();
+        write_skill(&src.join("skills"), "dup", "body one");
+        write_skill(&src.join(".opencode"), "dup", "body two");
 
-        let db_dir = tempdir().unwrap();
-        unsafe {
-            std::env::set_var(
-                crate::paths::ENV_DATABASE_URL,
-                db_dir.path().join("test.db").to_str().unwrap(),
-            );
-        }
-        let storage = Storage::open_default().unwrap();
         let source = src.to_str().unwrap();
 
         let err =
-            install_skills_from_dir(&storage, src, source, "v1", SelectionMode::All, false, true)
-                .unwrap_err();
+            collect_skills_from_dir(src, source, "v1", SelectionMode::All, false).unwrap_err();
         let message = err.to_string();
         assert!(message.contains("dup"), "message was: {message}");
-        assert!(message.contains("one.md"), "message was: {message}");
-        assert!(message.contains("two.md"), "message was: {message}");
+        assert!(message.contains("skills/dup"), "message was: {message}");
+        assert!(message.contains(".opencode/dup"), "message was: {message}");
     }
 
     #[test]
@@ -1216,45 +1018,21 @@ mod tests {
         // Same collision as above, plus one unambiguous skill elsewhere in the
         // same source. A narrow `--select` of the unambiguous one must still
         // succeed -- the collision only matters for the name it actually blocks.
-        std::fs::create_dir(src.join("skills")).unwrap();
-        std::fs::create_dir(src.join(".opencode")).unwrap();
-        std::fs::write(
-            src.join("skills/one.md"),
-            "---\nname: dup\ndescription: canonical copy\n---\nbody one\n",
-        )
-        .unwrap();
-        std::fs::write(
-            src.join(".opencode/two.md"),
-            "---\nname: dup\ndescription: mirrored copy\n---\nbody two\n",
-        )
-        .unwrap();
-        std::fs::write(
-            src.join("fine.md"),
-            "---\nname: fine\ndescription: no conflict\n---\nfine body\n",
-        )
-        .unwrap();
+        write_skill(&src.join("skills"), "dup", "body one");
+        write_skill(&src.join(".opencode"), "dup", "body two");
+        write_skill(src, "fine", "fine body");
 
-        let db_dir = tempdir().unwrap();
-        unsafe {
-            std::env::set_var(
-                crate::paths::ENV_DATABASE_URL,
-                db_dir.path().join("test.db").to_str().unwrap(),
-            );
-        }
-        let storage = Storage::open_default().unwrap();
         let source = src.to_str().unwrap();
 
-        let outcome = install_skills_from_dir(
-            &storage,
+        let outcome = collect_skills_from_dir(
             src,
             source,
             "v1",
             SelectionMode::Select(vec!["fine".to_string()]),
             false,
-            false,
         )
         .unwrap();
-        assert_eq!(outcome.installed.len(), 1);
-        assert!(outcome.installed[0].ends_with(":fine"));
+        assert_eq!(outcome.len(), 1);
+        assert_eq!(outcome[0].name, "fine");
     }
 }

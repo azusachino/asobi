@@ -1,6 +1,6 @@
 use asobi::api::{
     BackupRequest, BackupStore, GraphStore, MaintenanceStore, OpenNodes, PurgeRequest, SearchQuery,
-    SearchStore, SkillRecord, SkillStore, SnapshotStore, TaskStore,
+    SearchStore, TaskStore,
 };
 use asobi::model::{EntityInput, RelationInput};
 use asobi::storage::SqliteStore;
@@ -84,21 +84,19 @@ fn graph_truth_search_and_task_claim_are_atomic_surfaces() {
 }
 
 #[test]
-fn graph_and_search_keep_observations_and_skill_bodies_lazy() {
+fn graph_and_search_keep_observations_lazy() {
     let (_dir, store) = store();
     store
-        .upsert_skill(SkillRecord {
-            entity_name: "skill:lean-read".into(),
-            body: "heavy skill instructions".into(),
-            source: "local".into(),
-            version: "test".into(),
-            description: "lean read regression".into(),
-        })
+        .create_entities(vec![asobi::model::EntityInput {
+            name: "lean-read".into(),
+            entity_type: "concept".into(),
+            observations: vec![],
+        }])
         .unwrap();
     store
         .add_observations(
             vec![asobi::model::ObservationInput {
-                entity_name: "skill:lean-read".into(),
+                entity_name: "lean-read".into(),
                 contents: vec!["heavy observation".into()],
             }],
             200,
@@ -109,7 +107,6 @@ fn graph_and_search_keep_observations_and_skill_bodies_lazy() {
     let entity = &lean.entities[0];
     assert_eq!(entity.observation_count, 1);
     assert!(entity.observations.is_empty());
-    assert!(entity.body.is_none());
     assert!(entity.observations_detailed.is_none());
     let lean_json = serde_json::to_value(&lean).unwrap();
     assert!(
@@ -141,31 +138,26 @@ fn graph_and_search_keep_observations_and_skill_bodies_lazy() {
     let entity = &search.entities[0];
     assert_eq!(entity.observation_count, 1);
     assert!(entity.observations.is_empty());
-    assert!(entity.body.is_none());
     assert!(entity.observations_detailed.is_none());
 
     let full = store
         .open_nodes(OpenNodes {
-            names: vec!["skill:lean-read".into()],
+            observation_limit: 0,
+            names: vec!["lean-read".into()],
             with_ids: true,
             expand: vec![],
         })
         .unwrap();
     let entity = &full.entities[0];
     assert_eq!(entity.observations, vec!["heavy observation"]);
-    assert_eq!(entity.body.as_deref(), Some("heavy skill instructions"));
     assert_eq!(entity.observations_detailed.as_ref().unwrap().len(), 1);
 
     let exported = store.read_graph_full().unwrap();
     assert_eq!(exported.entities[0].observations, vec!["heavy observation"]);
-    assert_eq!(
-        exported.entities[0].body.as_deref(),
-        Some("heavy skill instructions")
-    );
 }
 
 #[test]
-fn purge_is_preview_first_and_rejects_durable_types() {
+fn purge_is_preview_first_and_leaves_durable_knowledge() {
     let (dir, store) = store();
     store
         .create_entities(vec![
@@ -204,8 +196,6 @@ fn purge_is_preview_first_and_rejects_durable_types() {
     drop(conn);
 
     let request = PurgeRequest {
-        entity_types: vec!["session".into(), "task".into()],
-        statuses: vec!["DONE".into()],
         older_than_days: 30,
         apply: false,
     };
@@ -216,6 +206,7 @@ fn purge_is_preview_first_and_rejects_durable_types() {
     assert!(
         store
             .open_nodes(OpenNodes {
+                observation_limit: 0,
                 names: vec!["project:task".into()],
                 ..Default::default()
             })
@@ -236,6 +227,7 @@ fn purge_is_preview_first_and_rejects_durable_types() {
     assert!(
         store
             .open_nodes(OpenNodes {
+                observation_limit: 0,
                 names: vec!["project:task".into()],
                 ..Default::default()
             })
@@ -243,8 +235,11 @@ fn purge_is_preview_first_and_rejects_durable_types() {
             .entities
             .is_empty()
     );
+    // The purged entity leaves the index with its observations. Asserting the
+    // whole result is empty would be wrong now that a multi-word query widens:
+    // "note" still matches the durable concept that survived, correctly.
     assert!(
-        store
+        !store
             .search_nodes(SearchQuery {
                 query: "old task note".into(),
                 limit: 10,
@@ -252,37 +247,19 @@ fn purge_is_preview_first_and_rejects_durable_types() {
             })
             .unwrap()
             .entities
-            .is_empty()
+            .iter()
+            .any(|e| e.name == "project:task")
     );
-    assert_eq!(store.read_graph().unwrap().entities.len(), 1);
-
-    let error = store
-        .purge(PurgeRequest {
-            entity_types: vec!["concept".into()],
-            statuses: vec!["DONE".into()],
-            older_than_days: 30,
-            apply: true,
-        })
-        .unwrap_err();
-    assert!(
-        error
-            .to_string()
-            .contains("restricted to operational entity types")
-    );
-
-    let error = store
-        .purge(PurgeRequest {
-            entity_types: vec!["task".into()],
-            statuses: vec!["IN_PROGRESS".into()],
-            older_than_days: 30,
-            apply: false,
-        })
-        .unwrap_err();
-    assert!(error.to_string().contains("only accepts terminal statuses"));
+    // The durable concept survives, and there is no request that could have
+    // reached it: the policy is a constant now rather than validated flags, so
+    // "purge refuses durable knowledge" is structural instead of enforced.
+    let survivors = store.read_graph().unwrap();
+    assert_eq!(survivors.entities.len(), 1);
+    assert_eq!(survivors.entities[0].name, "project:concept");
 }
 
 #[test]
-fn snapshot_and_physical_backup_are_supported() {
+fn physical_backup_is_supported() {
     let (dir, live_store) = store();
     live_store
         .create_entities(vec![EntityInput {
@@ -291,10 +268,6 @@ fn snapshot_and_physical_backup_are_supported() {
             observations: vec!["portable graph state".into()],
         }])
         .unwrap();
-    let snapshot = live_store.export_snapshot(&[], false).unwrap();
-    assert_eq!(snapshot.source_backend, "sqlite");
-    assert_eq!(snapshot.graph.entities.len(), 1);
-
     let backup = dir.path().join("backup.db");
     let receipt = live_store
         .backup(BackupRequest {
@@ -433,7 +406,7 @@ fn opening_a_pre_v5_database_drops_superseded_tables_and_enables_incremental_vac
     let user_version: i64 = conn
         .query_row("PRAGMA user_version", [], |r| r.get(0))
         .unwrap();
-    assert_eq!(user_version, 5);
+    assert_eq!(user_version, 8);
     let auto_vacuum: i64 = conn
         .query_row("PRAGMA auto_vacuum", [], |r| r.get(0))
         .unwrap();
@@ -474,8 +447,6 @@ fn applied_purge_reclaims_space_via_incremental_vacuum() {
 
     let report = store
         .purge(PurgeRequest {
-            entity_types: vec!["task".into()],
-            statuses: vec!["DONE".into()],
             older_than_days: 30,
             apply: true,
         })
@@ -489,4 +460,226 @@ fn applied_purge_reclaims_space_via_incremental_vacuum() {
         .query_row("PRAGMA auto_vacuum", [], |r| r.get(0))
         .unwrap();
     assert_eq!(auto_vacuum, 2);
+}
+
+/// `show` is the only eager read, and it was unbounded: loading a session at
+/// the 200-observation cap cost tens of thousands of tokens to answer "where
+/// was I". Context is the scarce resource, so it returns the current end of the
+/// trail by default — while still reporting the true total, since a caller that
+/// cannot tell what it is missing is worse off than one reading everything.
+#[test]
+fn show_returns_recent_observations_and_the_true_total() {
+    let (_dir, store) = store();
+    store
+        .create_entities(vec![EntityInput {
+            name: "proj:session".into(),
+            entity_type: "session".into(),
+            observations: vec![],
+        }])
+        .unwrap();
+    for i in 0..50 {
+        store
+            .add_observations(
+                vec![asobi::model::ObservationInput {
+                    entity_name: "proj:session".into(),
+                    contents: vec![format!("note {i}")],
+                }],
+                200,
+            )
+            .unwrap();
+    }
+
+    let limited = store
+        .open_nodes(OpenNodes {
+            names: vec!["proj:session".into()],
+            observation_limit: 10,
+            ..Default::default()
+        })
+        .unwrap();
+    let entity = &limited.entities[0];
+    assert_eq!(entity.observations.len(), 10, "should return the limit");
+    assert_eq!(entity.observation_count, 50, "count is the true total");
+    // Newest kept, and still in written order so a truncated trail reads forward.
+    assert_eq!(entity.observations.first().unwrap(), "note 40");
+    assert_eq!(entity.observations.last().unwrap(), "note 49");
+
+    // 0 means the whole trail, which is what export relies on.
+    let full = store
+        .open_nodes(OpenNodes {
+            names: vec!["proj:session".into()],
+            observation_limit: 0,
+            ..Default::default()
+        })
+        .unwrap();
+    assert_eq!(full.entities[0].observations.len(), 50);
+    assert_eq!(
+        store.read_graph_full().unwrap().entities[0]
+            .observations
+            .len(),
+        50
+    );
+}
+
+/// Retention has to happen without being asked. The previous design was a
+/// manual purge that was correct in every respect except that it never ran:
+/// six weeks of daily use left a graph that was 96% finished work.
+///
+/// It fires on the first *write* rather than at open, so a pure read never
+/// mutates the graph — `asobi show` must not delete anything.
+#[test]
+fn finished_work_is_swept_on_the_first_write_not_on_reads() {
+    let (dir, store) = store();
+    store
+        .create_entities(vec![
+            EntityInput {
+                name: "project:task".into(),
+                entity_type: "task".into(),
+                observations: vec![],
+            },
+            EntityInput {
+                name: "project:concept".into(),
+                entity_type: "concept".into(),
+                observations: vec![],
+            },
+        ])
+        .unwrap();
+    store
+        .truth_upsert("project:task", "status", "DONE")
+        .unwrap();
+
+    let db = dir.path().join("contract.db");
+    let conn = Connection::open(&db).unwrap();
+    conn.execute_batch(
+        "UPDATE asobi_entities SET created_at = datetime('now', '-30 days');
+         UPDATE asobi_truths SET updated_at = datetime('now', '-30 days');",
+    )
+    .unwrap();
+    drop(conn);
+
+    // A fresh handle, as a new process would have.
+    let reopened = SqliteStore::open_at(&db).unwrap();
+    assert_eq!(
+        reopened.read_graph().unwrap().entities.len(),
+        2,
+        "a read must not sweep"
+    );
+
+    reopened
+        .truth_upsert("project:concept", "note", "anything")
+        .unwrap();
+    let after = reopened.read_graph().unwrap();
+    assert_eq!(after.entities.len(), 1, "the finished task is gone");
+    assert_eq!(after.entities[0].name, "project:concept");
+}
+
+/// Truth values are searchable. The convention is to store a pitfall's
+/// human-readable warning in a `title` truth so session start can surface it
+/// cheaply — which made the one sentence explaining a dead end the one thing
+/// recall could not reach.
+#[test]
+fn search_reaches_truth_values_not_just_observations() {
+    let (_dir, store) = store();
+    store
+        .create_entities(vec![EntityInput {
+            name: "proj:pitfall:cache".into(),
+            entity_type: "concept".into(),
+            observations: vec!["tried: redeploying the server image".into()],
+        }])
+        .unwrap();
+    store
+        .truth_upsert(
+            "proj:pitfall:cache",
+            "title",
+            "bump the Valkey generation manually",
+        )
+        .unwrap();
+
+    let hits = |q: &str| {
+        store
+            .search_nodes(SearchQuery {
+                query: q.into(),
+                limit: 10,
+                filters: vec![],
+            })
+            .unwrap()
+            .entities
+            .len()
+    };
+    assert_eq!(
+        hits("Valkey"),
+        1,
+        "a token only in a truth must be findable"
+    );
+    assert_eq!(hits("redeploying"), 1, "observations still match");
+}
+
+/// A multi-word question must not fail closed. FTS5 ANDs bare terms, so a
+/// natural-language query whose words are spread across an observation, a truth
+/// and a name matched nothing — and an empty result is indistinguishable from
+/// "nothing was ever recorded", which is the wrong way for a pitfall lookup to
+/// fail.
+#[test]
+fn search_widens_rather_than_returning_a_silent_zero() {
+    let (_dir, store) = store();
+    store
+        .create_entities(vec![EntityInput {
+            name: "proj:pitfall:cache".into(),
+            entity_type: "concept".into(),
+            observations: vec!["tried: deploying a new image".into()],
+        }])
+        .unwrap();
+    store
+        .truth_upsert("proj:pitfall:cache", "title", "bump the cache generation")
+        .unwrap();
+
+    // No entity contains all four words, so the strict AND finds nothing.
+    let widened = store
+        .search_nodes(SearchQuery {
+            query: "deploying without cache bump".into(),
+            limit: 10,
+            filters: vec![],
+        })
+        .unwrap();
+    assert_eq!(
+        widened.entities.len(),
+        1,
+        "should widen rather than return nothing"
+    );
+    assert_eq!(widened.entities[0].name, "proj:pitfall:cache");
+}
+
+/// Ranking survives to the caller. The entity fetch used `ORDER BY name`, which
+/// re-sorted results alphabetically and silently discarded whatever ranking
+/// search had computed — so relevance never reached the caller at all.
+#[test]
+fn search_returns_results_in_ranked_order_not_alphabetical() {
+    let (_dir, store) = store();
+    store
+        .create_entities(vec![
+            EntityInput {
+                name: "aaa-unrelated".into(),
+                entity_type: "concept".into(),
+                observations: vec!["mentions widget once".into()],
+            },
+            EntityInput {
+                name: "zzz-the-match".into(),
+                entity_type: "concept".into(),
+                observations: vec!["widget widget widget, entirely about the widget".into()],
+            },
+        ])
+        .unwrap();
+    store
+        .truth_upsert("zzz-the-match", "title", "the widget explained")
+        .unwrap();
+
+    let ranked = store
+        .search_nodes(SearchQuery {
+            query: "widget".into(),
+            limit: 10,
+            filters: vec![],
+        })
+        .unwrap();
+    // Alphabetically `aaa-unrelated` wins; by relevance it does not, and it is
+    // matched by only one path where the other is matched by two.
+    assert_eq!(ranked.entities[0].name, "zzz-the-match");
 }

@@ -8,6 +8,7 @@ pub struct AsobiConfig {
     pub config_dir: Option<PathBuf>,
     pub topics_dir: Option<PathBuf>,
     pub observation_limit: Option<usize>,
+    pub retention_days: Option<u32>,
 }
 
 pub struct AsobiPaths {
@@ -16,6 +17,8 @@ pub struct AsobiPaths {
     pub topics_dir: PathBuf,
     pub cache_dir: PathBuf,
     pub observation_limit: Option<usize>,
+    /// Days a finished session or task survives before the automatic sweep.
+    pub retention_days: Option<u32>,
     /// The directory the workspace was discovered from: the `asobi.toml`'s
     /// directory, the `.asobi/` parent, or the starting directory under XDG.
     /// Relative paths that describe project content — as opposed to state —
@@ -91,6 +94,7 @@ impl AsobiPaths {
                 config_dir: root.clone(),
                 topics_dir: root.clone(),
                 observation_limit: None,
+                retention_days: None,
                 root,
                 config_file: None,
             };
@@ -113,6 +117,7 @@ impl AsobiPaths {
                 topics_dir: local_root.join("topics"),
                 cache_dir: local_root.join("caches"),
                 observation_limit: None,
+                retention_days: None,
                 root: local_root
                     .parent()
                     .map(Path::to_path_buf)
@@ -128,6 +133,7 @@ impl AsobiPaths {
                 topics_dir: x.topics_dir,
                 cache_dir: x.cache_dir,
                 observation_limit: None,
+                retention_days: None,
                 root: start.to_path_buf(),
                 config_file: None,
             },
@@ -137,6 +143,7 @@ impl AsobiPaths {
                 topics_dir: PathBuf::from(".asobi/topics"),
                 cache_dir: PathBuf::from(".asobi/caches"),
                 observation_limit: None,
+                retention_days: None,
                 root: start.to_path_buf(),
                 config_file: None,
             },
@@ -163,6 +170,7 @@ impl AsobiPaths {
             data_dir,
             cache_dir,
             observation_limit: conf.observation_limit,
+            retention_days: conf.retention_days,
             root: anchor.to_path_buf(),
             config_file: None,
         }

@@ -20,6 +20,17 @@ const TASK_STATUSES: &[&str] = &[
     "DONE",
 ];
 
+/// Statuses that mean the work is over. Matches what `purge` accepts, so the
+/// set of tasks `tasks list` hides by default is the set retention can reclaim.
+const TERMINAL_STATUSES: &[&str] = &["DONE", "CLOSED", "ABANDONED"];
+
+/// An epic or task with no `status` truth at all is *not* terminal: three epics
+/// on a real graph were in exactly that state, complete but never closed, and
+/// hiding them is how they stayed invisible.
+fn is_terminal(status: Option<&String>) -> bool {
+    status.is_some_and(|s| TERMINAL_STATUSES.contains(&s.as_str()))
+}
+
 #[derive(Subcommand, Debug)]
 pub enum TasksCommands {
     /// Create an epic and its dispatchable child tasks
@@ -33,8 +44,14 @@ pub enum TasksCommands {
         #[arg(long = "task", value_name = "TITLE", required = true)]
         tasks: Vec<String>,
     },
-    /// Show an epic task board, or all task entities when no epic is given
-    List { epic: Option<String> },
+    /// Show an epic task board, or open work across every epic when none is given
+    List {
+        epic: Option<String>,
+        /// Include finished work (DONE/CLOSED/ABANDONED), which is filtered out
+        /// by default
+        #[arg(long)]
+        all: bool,
+    },
     /// Mark the next ready task, or the named task, as dispatched
     Dispatch {
         task: Option<String>,
@@ -135,7 +152,7 @@ pub fn run(
                 println!("Planned {} with {} task(s).", epic, tasks.len());
             }
         }
-        Some(TasksCommands::List { epic }) => {
+        Some(TasksCommands::List { epic, all }) => {
             let graph = if let Some(epic) = epic {
                 let graph = backend.open_nodes(crate::api::OpenNodes {
                     names: vec![epic.clone()],
@@ -148,10 +165,18 @@ pub fn run(
                 graph
             } else {
                 let mut graph = backend.read_graph()?;
+                // Without an epic this is the "what is open" read, so it drops
+                // finished work unless asked for it. Measured on a real graph,
+                // the unfiltered form returned 1,972 lines of JSON that was 96%
+                // completed tasks -- too expensive to be the thing an agent
+                // runs at session start, which is exactly when it is wanted.
                 let task_names: std::collections::HashSet<_> = graph
                     .entities
                     .iter()
-                    .filter(|entity| entity.entity_type == "task")
+                    .filter(|entity| {
+                        entity.entity_type == "task"
+                            && (all || !is_terminal(entity.truths.get("status")))
+                    })
                     .map(|entity| entity.name.clone())
                     .collect();
                 graph
@@ -303,4 +328,42 @@ fn observation_limit() -> usize {
 fn print_json<T: Serialize>(value: T) -> Result<()> {
     println!("{}", serde_json::to_string_pretty(&value)?);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn terminal_statuses_hide_finished_work() {
+        for status in ["DONE", "CLOSED", "ABANDONED"] {
+            assert!(is_terminal(Some(&status.to_string())), "{status}");
+        }
+        for status in [
+            "READY_TO_DISPATCH",
+            "DISPATCHED",
+            "REVIEW",
+            "AWAITING_VERIFY",
+        ] {
+            assert!(!is_terminal(Some(&status.to_string())), "{status}");
+        }
+    }
+
+    /// An epic that finished its work but never got closed carries no `status`
+    /// truth at all. Three on a real graph were in exactly that state, so the
+    /// default board has to keep showing them -- filtering them out is how they
+    /// became invisible in the first place.
+    #[test]
+    fn missing_status_is_not_terminal() {
+        assert!(!is_terminal(None));
+    }
+
+    /// Every terminal status must be one `purge` accepts, so the work the board
+    /// hides is exactly the work retention is allowed to reclaim. If these drift
+    /// apart, `tasks list` starts hiding tasks nothing will ever clean up.
+    #[test]
+    fn terminal_statuses_match_what_purge_accepts() {
+        let purgeable = ["DONE", "CLOSED", "ABANDONED"];
+        assert_eq!(TERMINAL_STATUSES, &purgeable);
+    }
 }

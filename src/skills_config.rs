@@ -46,6 +46,16 @@ pub struct SkillSource {
     /// entirely instead of asking the install step to arbitrate between them.
     #[serde(default)]
     pub subdir: Option<PathBuf>,
+    /// Pin the source to a commit, tag, or branch instead of following its
+    /// default branch.
+    ///
+    /// Without this, a re-sync silently adopts whatever the source has moved to
+    /// since — and a skill is natural-language instruction loaded straight into
+    /// an agent's context, so that is an unreviewed behaviour change rather than
+    /// a dependency bump. The resolved commit is recorded either way; pinning is
+    /// what makes adopting a new one a decision.
+    #[serde(default)]
+    pub rev: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -171,6 +181,7 @@ subdir = "skills"
             all: true,
             select: vec!["a".into()],
             subdir: None,
+            rev: None,
         };
         assert!(both.selection().is_err());
 
@@ -179,6 +190,7 @@ subdir = "skills"
             all: false,
             select: vec![],
             subdir: None,
+            rev: None,
         };
         assert!(neither.selection().is_err());
     }

@@ -12,7 +12,6 @@ fn every_top_level_and_nested_subcommand_has_help() {
         "obs",
         "truth",
         "rm-truth",
-        "history",
         "rm",
         "rm-obs",
         "update-obs",

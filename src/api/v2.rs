@@ -6,7 +6,6 @@
 use crate::model::{EntityInput, Graph, ObservationDeletion, ObservationInput, RelationInput};
 
 pub const API_VERSION: u32 = 2;
-pub const SNAPSHOT_FORMAT_VERSION: u32 = 1;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ApiError {
@@ -31,6 +30,14 @@ pub struct OpenNodes {
     pub names: Vec<String>,
     pub with_ids: bool,
     pub expand: Vec<String>,
+    /// How many of the most recent observations to return per entity; 0 for all.
+    ///
+    /// `show` is the only eager read, and it was unbounded — loading a session
+    /// entity at the 200-observation cap cost tens of thousands of tokens to
+    /// answer "where was I". Context is the scarce resource, so the default is
+    /// the current end of the trail, with `observationCount` still reporting
+    /// the true total.
+    pub observation_limit: usize,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -38,25 +45,6 @@ pub struct SearchQuery {
     pub query: String,
     pub limit: usize,
     pub filters: Vec<(String, String)>,
-}
-
-#[derive(Debug, Clone, schemars::JsonSchema, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct TruthVersion {
-    pub key: String,
-    pub value: String,
-    pub valid_from: String,
-    pub valid_until: String,
-}
-
-#[derive(Debug, Clone, schemars::JsonSchema, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SkillRecord {
-    pub entity_name: String,
-    pub body: String,
-    pub source: String,
-    pub version: String,
-    pub description: String,
 }
 
 #[derive(Debug, Clone, Default, schemars::JsonSchema, serde::Serialize, serde::Deserialize)]
@@ -70,9 +58,9 @@ pub struct Stats {
 #[derive(Debug, Clone, schemars::JsonSchema, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PurgeRequest {
-    pub entity_types: Vec<String>,
-    pub statuses: Vec<String>,
+    /// How many days a finished session or task survives.
     pub older_than_days: u32,
+    /// Delete rather than preview.
     pub apply: bool,
 }
 
@@ -137,26 +125,6 @@ pub struct BackendInfo {
     pub capabilities: BackendCapabilities,
 }
 
-#[derive(Debug, Clone, Default, schemars::JsonSchema, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ImportReport {
-    pub entities_created: usize,
-    pub entities_updated: usize,
-    pub observations_added: usize,
-    pub relations_added: usize,
-    pub truths_updated: usize,
-}
-
-#[derive(Debug, Clone, schemars::JsonSchema, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Snapshot {
-    pub api_version: u32,
-    pub format_version: u32,
-    pub source_backend: String,
-    pub source_schema_version: u32,
-    pub graph: Graph,
-}
-
 #[derive(Debug, Clone, schemars::JsonSchema, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BackupRequest {
@@ -193,7 +161,6 @@ pub trait GraphStore {
     fn delete_relations(&self, relations: Vec<RelationInput>) -> ApiResult<()>;
     fn truth_upsert(&self, entity: &str, key: &str, value: &str) -> ApiResult<()>;
     fn truth_delete(&self, entity: &str, key: &str) -> ApiResult<()>;
-    fn truth_history(&self, entity: &str, key: Option<&str>) -> ApiResult<Vec<TruthVersion>>;
     fn read_graph(&self) -> ApiResult<Graph>;
     fn read_graph_full(&self) -> ApiResult<Graph>;
     fn read_graph_scoped(&self, scope: &[String], rationale: bool) -> ApiResult<Graph>;
@@ -202,18 +169,6 @@ pub trait GraphStore {
 
 pub trait SearchStore {
     fn search_nodes(&self, query: SearchQuery) -> ApiResult<Graph>;
-}
-
-pub trait SkillStore {
-    fn list_skills(&self) -> ApiResult<Vec<SkillRecord>>;
-    fn skill_body(&self, entity_name: &str) -> ApiResult<Option<String>>;
-    fn upsert_skill(&self, skill: SkillRecord) -> ApiResult<()>;
-    fn remove_skills(&self, entity_names: Vec<String>) -> ApiResult<()>;
-}
-
-pub trait SnapshotStore {
-    fn export_snapshot(&self, scope: &[String], rationale: bool) -> ApiResult<Snapshot>;
-    fn import_snapshot(&self, snapshot: Snapshot) -> ApiResult<ImportReport>;
 }
 
 pub trait BackupStore {

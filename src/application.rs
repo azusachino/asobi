@@ -5,9 +5,7 @@
 //! through [`AsobiRuntime`] and never needs to name a provider or its state
 //! file.
 
-use crate::api::{
-    ApiResult, BackendCapabilities, ImportReport, MaintenanceStore, Snapshot, SnapshotStore,
-};
+use crate::api::{ApiResult, BackendCapabilities, MaintenanceStore};
 use crate::storage::Storage;
 
 /// Tighten handoff-file permissions without coupling the application layer to
@@ -51,13 +49,5 @@ impl AsobiRuntime {
 
     pub fn capabilities(&self) -> ApiResult<BackendCapabilities> {
         self.storage.capabilities()
-    }
-
-    pub fn export_snapshot(&self, scope: &[String], rationale: bool) -> ApiResult<Snapshot> {
-        self.storage.export_snapshot(scope, rationale)
-    }
-
-    pub fn import_snapshot(&self, snapshot: Snapshot) -> ApiResult<ImportReport> {
-        self.storage.import_snapshot(snapshot)
     }
 }

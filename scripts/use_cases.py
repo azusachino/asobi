@@ -148,8 +148,8 @@ def main() -> None:
 
         # Create a mock local skill
         skills_src_dir = Path(tmp_dir) / "mock-skills"
-        skills_src_dir.mkdir()
-        skill_file = skills_src_dir / "test-skill.md"
+        (skills_src_dir / "test-skill").mkdir(parents=True)
+        skill_file = skills_src_dir / "test-skill" / "SKILL.md"
         skill_file.write_text(
             "---\n"
             "name: test-skill\n"

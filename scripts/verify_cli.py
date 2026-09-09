@@ -99,7 +99,6 @@ def json_data(args: list[str], env: dict[str, str]) -> dict:
         "capabilities",
         "export",
         "graph",
-        "history",
         "link",
         "new",
         "obs",
@@ -601,13 +600,15 @@ def skills_checks() -> None:
         env["ASOBI_HOME"] = str(root / "home")
         env["ASOBI_DATABASE_URL"] = str(root / "asobi.db")
 
-        # Local skill source dir: one full skill + one name-fallback skill.
+        # A skill is a directory holding SKILL.md -- the only shape supported.
         src = root / "src-skills"
+        (src / "alpha").mkdir(parents=True)
         (src / "nested").mkdir(parents=True)
-        (src / "alpha.md").write_text(
+        (src / "alpha" / "SKILL.md").write_text(
             "---\nname: alpha\ndescription: Alpha skill\n---\nAlpha body here\n"
         )
-        # Only a description: name falls back to the parent dir ("nested").
+        # Only a description: the name falls back to the directory ("nested"),
+        # which is what the spec says a skill's directory is named for anyway.
         (src / "nested" / "SKILL.md").write_text(
             "---\ndescription: Nested skill\n---\nNested body\n"
         )
@@ -616,7 +617,7 @@ def skills_checks() -> None:
         run(["skills", "install", str(src), "--all"], env)
 
         listed = run(["skills"], env).stdout
-        assert "Installed Skills:" in listed
+        assert "Installed Skills (" in listed
         assert "alpha" in listed
         assert "nested" in listed
         assert "Alpha skill" in listed
@@ -627,7 +628,7 @@ def skills_checks() -> None:
 
         # Remove by source string clears every skill from that source.
         run(["skills", "remove", str(src)], env)
-        assert "No skills installed." in run(["skills"], env).stdout
+        assert "No skills installed" in run(["skills"], env).stdout
 
         # --select installs only the named skill, not the rest.
         run(["skills", "install", str(src), "--select", "alpha"], env)
@@ -683,7 +684,8 @@ def skills_sync_checks() -> None:
         src = root / "src-skills"
         src.mkdir()
         for name in ("alpha", "beta"):
-            (src / f"{name}.md").write_text(
+            (src / name).mkdir()
+            (src / name / "SKILL.md").write_text(
                 f"---\nname: {name}\ndescription: {name} skill\n---\n{name} body\n"
             )
 

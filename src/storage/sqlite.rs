@@ -1,8 +1,7 @@
 use crate::api::v2::{
     ApiError, ApiResult, BackendCapabilities, BackendHealth, BackupReceipt, BackupRequest,
-    BackupStore, GraphStore, ImportReport, MaintenanceStore, OpenNodes, PurgeCandidate,
-    PurgeReport, PurgeRequest, SearchQuery, SearchStore, SkillRecord, SkillStore, Snapshot,
-    SnapshotStore, Stats, StorageLocation, TaskStore, TruthVersion,
+    BackupStore, GraphStore, MaintenanceStore, OpenNodes, PurgeCandidate, PurgeReport,
+    PurgeRequest, SearchQuery, SearchStore, Stats, StorageLocation, TaskStore,
 };
 use crate::model::{
     EntityInput, EntityOutput, Graph, ObservationDeletion, ObservationInput, RelationInput,
@@ -16,7 +15,7 @@ use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-const SCHEMA_VERSION: i64 = 5;
+const SCHEMA_VERSION: i64 = 8;
 const DEFAULT_DATABASE_FILENAME: &str = "asobi.db";
 const DEFAULT_BUSY_TIMEOUT_MS: u64 = 15_000;
 const DEFAULT_OBSERVATION_LIMIT: usize = 200;
@@ -31,46 +30,14 @@ fn normalize(value: &str) -> String {
     crate::normalize::normalize_key(value)
 }
 
-fn validate_purge_request(request: &PurgeRequest) -> ApiResult<()> {
-    if request.entity_types.is_empty() {
-        return Err(ApiError::Invalid(
-            "purge requires at least one entity type".into(),
-        ));
-    }
-    if let Some(entity_type) = request
-        .entity_types
-        .iter()
-        .find(|entity_type| !PURGEABLE_ENTITY_TYPES.contains(&entity_type.as_str()))
-    {
-        return Err(ApiError::Invalid(format!(
-            "purge is restricted to operational entity types: session, task (got {entity_type})"
-        )));
-    }
-    if request.statuses.is_empty() {
-        return Err(ApiError::Invalid(
-            "purge requires at least one terminal status".into(),
-        ));
-    }
-    if let Some(status) = request
-        .statuses
-        .iter()
-        .find(|status| !PURGEABLE_STATUSES.contains(&status.as_str()))
-    {
-        return Err(ApiError::Invalid(format!(
-            "purge only accepts terminal statuses: DONE, CLOSED, ABANDONED (got {status})"
-        )));
-    }
-    Ok(())
-}
-
 fn collect_purge_candidates(
     conn: &Connection,
     request: &PurgeRequest,
 ) -> rusqlite::Result<Vec<PurgeCandidate>> {
-    let type_placeholders = std::iter::repeat_n("?", request.entity_types.len())
+    let type_placeholders = std::iter::repeat_n("?", PURGEABLE_ENTITY_TYPES.len())
         .collect::<Vec<_>>()
         .join(",");
-    let status_placeholders = std::iter::repeat_n("?", request.statuses.len())
+    let status_placeholders = std::iter::repeat_n("?", PURGEABLE_STATUSES.len())
         .collect::<Vec<_>>()
         .join(",");
     let sql = format!(
@@ -110,8 +77,8 @@ fn collect_purge_candidates(
     );
     let cutoff = format!("-{} days", request.older_than_days);
     let mut values: Vec<&dyn ToSql> = Vec::new();
-    values.extend(request.entity_types.iter().map(|value| value as &dyn ToSql));
-    values.extend(request.statuses.iter().map(|value| value as &dyn ToSql));
+    values.extend(PURGEABLE_ENTITY_TYPES.iter().map(|v| v as &dyn ToSql));
+    values.extend(PURGEABLE_STATUSES.iter().map(|v| v as &dyn ToSql));
     values.push(&cutoff);
 
     let mut stmt = conn.prepare(&sql)?;
@@ -128,10 +95,121 @@ fn collect_purge_candidates(
     .collect()
 }
 
+/// Entities matching `term`, across every path Asobi indexes: observation
+/// text, truth values, and the entity's own name or type.
+///
+/// Truth values were unsearchable before 0.7, which mattered because the
+/// convention is to store a pitfall's human-readable warning in a `title`
+/// truth -- so the one sentence explaining a dead end was the one thing recall
+/// could not reach.
+/// How many candidates each path contributes to the fusion, before the caller
+/// truncates to its own limit.
+///
+/// Fixed rather than derived from `--limit`, so ranking does not shift when the
+/// caller asks for more: capping each path at the requested limit meant a wider
+/// request pulled in weaker candidates that diluted the fused order, and the
+/// same entity moved position depending on how many results were asked for.
+const CANDIDATE_POOL: i64 = 100;
+
+fn matching_names(conn: &Connection, term: &str, limit: i64) -> rusqlite::Result<Vec<String>> {
+    // A negative limit means "unbounded" (a filtered search post-filters), and
+    // the pool has to be at least as generous as the caller's request.
+    let pool = if limit < 0 {
+        -1
+    } else {
+        limit.max(CANDIDATE_POOL)
+    };
+    let ranked = |sql: &str, params: &[&dyn ToSql]| -> rusqlite::Result<Vec<String>> {
+        let mut stmt = conn.prepare(sql)?;
+        let rows = stmt.query_map(params_from_iter(params.iter().copied()), |r| {
+            r.get::<_, String>(0)
+        });
+        // A malformed FTS5 query is a user error, not a failure: the other
+        // paths still answer, and the LIKE fallback usually does.
+        Ok(match rows {
+            Ok(rows) => rows.flatten().collect(),
+            Err(_) => Vec::new(),
+        })
+    };
+
+    let like = format!("%{term}%");
+    let paths = [
+        ranked(
+            "SELECT DISTINCT o.entity_name FROM asobi_obs_fts
+             JOIN asobi_observations o ON asobi_obs_fts.rowid = o.rowid
+             WHERE asobi_obs_fts MATCH ? ORDER BY bm25(asobi_obs_fts) LIMIT ?",
+            &[&term, &pool],
+        )?,
+        ranked(
+            "SELECT DISTINCT t.entity_name FROM asobi_truth_fts
+             JOIN asobi_truths t ON asobi_truth_fts.rowid = t.rowid
+             WHERE asobi_truth_fts MATCH ? ORDER BY bm25(asobi_truth_fts) LIMIT ?",
+            &[&term, &pool],
+        )?,
+        ranked(
+            "SELECT name FROM asobi_entities
+             WHERE name LIKE ? OR entity_type LIKE ? ORDER BY name LIMIT ?",
+            &[&like, &like, &pool],
+        )?,
+    ];
+
+    // Reciprocal rank fusion across the three paths.
+    //
+    // Concatenating them meant every observation match outranked every truth
+    // match, so an entity found only by its `title` landed last however good
+    // the match was -- and the ordering shifted with `--limit`, since each path
+    // was capped before the merge. Fusing by rank instead lets a strong match
+    // in one path compete with a strong match in another, and rewards an entity
+    // that several paths agree on. The constant 60 is the conventional RRF
+    // damping value: large enough that the top few ranks are not runaway
+    // favourites, small enough that rank still dominates.
+    const RRF_DAMPING: f64 = 60.0;
+    let mut scored: BTreeMap<String, f64> = BTreeMap::new();
+    for path in &paths {
+        for (rank, name) in path.iter().enumerate() {
+            *scored.entry(name.clone()).or_insert(0.0) += 1.0 / (RRF_DAMPING + rank as f64 + 1.0);
+        }
+    }
+    let mut fused: Vec<(String, f64)> = scored.into_iter().collect();
+    // Name as the tiebreak, so equal scores order deterministically.
+    fused.sort_by(|a, b| b.1.total_cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    Ok(fused.into_iter().map(|(name, _)| name).collect())
+}
+
+/// Rewrite a multi-word query as `a OR b OR c`, or `None` when there is nothing
+/// to widen -- a single term, or one already carrying FTS5 operators, where
+/// rewriting would either change nothing or corrupt the caller's intent.
+fn widen_query(term: &str) -> Option<String> {
+    let words: Vec<&str> = term.split_whitespace().collect();
+    if words.len() < 2 {
+        return None;
+    }
+    if words
+        .iter()
+        .any(|w| matches!(*w, "AND" | "OR" | "NOT") || w.contains('"'))
+    {
+        return None;
+    }
+    Some(words.join(" OR "))
+}
+
 pub struct SqliteStore {
     conn: Mutex<Connection>,
     db_path: PathBuf,
+    /// Whether this process has already run the retention sweep.
+    retention_swept: std::sync::atomic::AtomicBool,
 }
+
+/// How long a finished session or task survives before the automatic sweep
+/// removes it.
+///
+/// Operational state is relevant for hours, occasionally days: a task that has
+/// been `DONE` for a week is not context, it is archaeology. The previous
+/// design left this to a manual `purge` that was correct in every respect
+/// except that it never ran -- six weeks of daily use left a graph that was 96%
+/// finished work. A default that has to be invoked is a default that does not
+/// happen.
+pub const DEFAULT_RETENTION_DAYS: u32 = 7;
 
 impl SqliteStore {
     pub fn open_default() -> crate::Result<Self> {
@@ -171,12 +249,24 @@ impl SqliteStore {
         Ok(Self {
             conn: Mutex::new(conn),
             db_path: path.to_path_buf(),
+            retention_swept: std::sync::atomic::AtomicBool::new(false),
         })
     }
 
     fn init_schema(conn: &Connection, previous_version: i64) -> rusqlite::Result<()> {
-        if previous_version > 0 && previous_version < SCHEMA_VERSION {
+        if previous_version > 0 && previous_version < 5 {
             Self::upgrade_to_v5(conn)?;
+        }
+        if previous_version > 0 && previous_version < 6 {
+            Self::upgrade_to_v6(conn)?;
+        }
+        if previous_version > 0 && previous_version < 7 {
+            Self::upgrade_to_v7(conn)?;
+        }
+        if previous_version > 0 && previous_version < 8 {
+            // The truth index is created by the schema batch below; an existing
+            // database needs it populated from rows that predate the triggers.
+            conn.execute_batch("DROP TABLE IF EXISTS asobi_truth_fts;")?;
         }
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS asobi_entities (
@@ -208,21 +298,20 @@ impl SqliteStore {
                 PRIMARY KEY (entity_name, key)
             );
             CREATE INDEX IF NOT EXISTS idx_truths_lookup ON asobi_truths(key, value, entity_name);
-            CREATE TABLE IF NOT EXISTS asobi_truth_history (
-                entity_name TEXT NOT NULL REFERENCES asobi_entities(name) ON DELETE CASCADE,
-                key TEXT NOT NULL,
-                value TEXT NOT NULL,
-                valid_from TEXT NOT NULL,
-                valid_until TEXT NOT NULL
+            CREATE VIRTUAL TABLE IF NOT EXISTS asobi_truth_fts USING fts5(
+                value, content='asobi_truths', content_rowid='rowid',
+                tokenize='porter unicode61'
             );
-            CREATE INDEX IF NOT EXISTS idx_truth_history ON asobi_truth_history(entity_name, key, valid_until);
-            CREATE TABLE IF NOT EXISTS asobi_skills (
-                entity_name TEXT PRIMARY KEY REFERENCES asobi_entities(name) ON DELETE CASCADE,
-                body TEXT NOT NULL,
-                source TEXT NOT NULL,
-                version TEXT NOT NULL,
-                installed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-            );
+            CREATE TRIGGER IF NOT EXISTS asobi_truth_ai AFTER INSERT ON asobi_truths BEGIN
+                INSERT INTO asobi_truth_fts(rowid, value) VALUES (new.rowid, new.value);
+            END;
+            CREATE TRIGGER IF NOT EXISTS asobi_truth_ad AFTER DELETE ON asobi_truths BEGIN
+                INSERT INTO asobi_truth_fts(asobi_truth_fts, rowid, value) VALUES ('delete', old.rowid, old.value);
+            END;
+            CREATE TRIGGER IF NOT EXISTS asobi_truth_au AFTER UPDATE ON asobi_truths BEGIN
+                INSERT INTO asobi_truth_fts(asobi_truth_fts, rowid, value) VALUES ('delete', old.rowid, old.value);
+                INSERT INTO asobi_truth_fts(rowid, value) VALUES (new.rowid, new.value);
+            END;
             CREATE VIRTUAL TABLE IF NOT EXISTS asobi_obs_fts USING fts5(
                 content, content='asobi_observations', content_rowid='rowid',
                 tokenize='porter unicode61'
@@ -237,13 +326,20 @@ impl SqliteStore {
                 INSERT INTO asobi_obs_fts(asobi_obs_fts, rowid, content) VALUES ('delete', old.rowid, old.content);
                 INSERT INTO asobi_obs_fts(rowid, content) VALUES (new.rowid, new.content);
             END;
-            PRAGMA user_version = 5;",
+            PRAGMA user_version = 8;",
         )?;
         let count: i64 =
             conn.query_row("SELECT count(*) FROM asobi_observations", [], |r| r.get(0))?;
         if count > 0 && previous_version < SCHEMA_VERSION {
             let _ = conn.execute(
                 "INSERT INTO asobi_obs_fts(asobi_obs_fts) VALUES ('rebuild')",
+                [],
+            );
+        }
+        let truths: i64 = conn.query_row("SELECT count(*) FROM asobi_truths", [], |r| r.get(0))?;
+        if truths > 0 && previous_version < SCHEMA_VERSION {
+            let _ = conn.execute(
+                "INSERT INTO asobi_truth_fts(asobi_truth_fts) VALUES ('rebuild')",
                 [],
             );
         }
@@ -287,10 +383,90 @@ impl SqliteStore {
         Ok(())
     }
 
+    /// 0.7 moved skills out of the graph and onto the filesystem, where the
+    /// Agent Skills ecosystem already expects them and where `rg` can reach
+    /// them. The graph copy was never the one agents read: it held a body, a
+    /// source and a version, and in practice accumulated nothing else — no
+    /// observations, and only a `description` truth.
+    ///
+    /// So drop the table and the entities it hung off. The skill entities go
+    /// too rather than being left as empty husks, since a `skill`-typed entity
+    /// with no body is not a thing any reader wants back; cascades take their
+    /// truths, observations and relations with them. Whatever was installed is
+    /// already on disk under the skills directory, and `skills sync` rewrites
+    /// that from `asobi.toml` regardless, so nothing here is the only copy.
+    /// Runs before `init_schema`'s `CREATE TABLE IF NOT EXISTS` batch, so on a
+    /// database old enough to predate the current generation entirely there is
+    /// nothing here to clean up yet — hence the existence check rather than an
+    /// unconditional `DELETE`.
+    fn upgrade_to_v6(conn: &Connection) -> rusqlite::Result<()> {
+        let has_entities: bool = conn.query_row(
+            "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='asobi_entities'",
+            [],
+            |r| r.get::<_, i64>(0).map(|n| n > 0),
+        )?;
+        if has_entities {
+            conn.execute("DELETE FROM asobi_entities WHERE entity_type = 'skill'", [])?;
+        }
+        conn.execute_batch("DROP TABLE IF EXISTS asobi_skills;")?;
+        conn.execute_batch("PRAGMA incremental_vacuum;")?;
+        Ok(())
+    }
+
+    /// 0.7 dropped superseded truth versions. The table recorded every value a
+    /// truth had ever held, unbounded and cascading only on entity delete --
+    /// the one store in Asobi with no limit of its own, growing fastest on
+    /// whatever was written most often. On a real six-week-old graph that was
+    /// 616 rows, 496 of them sessions whose `next` had been rewritten 139 times.
+    ///
+    /// It had no reader. `asobi history` appeared in no workflow, and where a
+    /// trail genuinely mattered the observations already carried it in better
+    /// form: a task's history held one row saying `status=DISPATCHED`, next to
+    /// an observation saying "dispatched to codex". A bi-temporal store answers
+    /// questions about how state changed over time; nothing here asked one.
+    fn upgrade_to_v7(conn: &Connection) -> rusqlite::Result<()> {
+        conn.execute_batch("DROP TABLE IF EXISTS asobi_truth_history;")?;
+        conn.execute_batch("PRAGMA incremental_vacuum;")?;
+        Ok(())
+    }
+
+    /// Drop finished operational entities once per process, before the first
+    /// write.
+    ///
+    /// On a write rather than at open, so a pure read never mutates the graph --
+    /// `asobi show` must not delete anything. Once per process rather than per
+    /// call, since a single command should not pay for the sweep repeatedly.
+    /// Failures are ignored: retention is hygiene, and a command must not fail
+    /// because housekeeping did.
+    fn sweep_expired_once(&self) {
+        use std::sync::atomic::Ordering;
+        if self.retention_swept.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        // Resolved the same way as `observation_limit`, the other bound in
+        // this tool: environment first, then `asobi.toml`, then the default.
+        let days = std::env::var("ASOBI_RETENTION_DAYS")
+            .ok()
+            .and_then(|v| v.parse::<u32>().ok())
+            .unwrap_or_else(|| {
+                crate::paths::AsobiPaths::resolve()
+                    .retention_days
+                    .unwrap_or(DEFAULT_RETENTION_DAYS)
+            });
+        if days == 0 {
+            return;
+        }
+        let _ = self.purge(PurgeRequest {
+            older_than_days: days,
+            apply: true,
+        });
+    }
+
     fn write<T>(
         &self,
         operation: impl FnOnce(&Transaction<'_>) -> rusqlite::Result<T>,
     ) -> ApiResult<T> {
+        self.sweep_expired_once();
         let mut conn = self
             .conn
             .lock()
@@ -315,13 +491,19 @@ impl SqliteStore {
         operation(&conn).map_err(backend_error)
     }
 
+    /// `observation_limit` of 0 means every observation; anything else returns
+    /// the most recent N. `observationCount` stays the true total either way,
+    /// so a caller can always tell what it is not being shown.
     fn graph(
         &self,
         names: Option<&[String]>,
         expand: &[String],
         include_content: bool,
+        observation_limit: usize,
     ) -> ApiResult<Graph> {
-        self.read(|conn| graph_from_connection(conn, names, expand, include_content))
+        self.read(|conn| {
+            graph_from_connection(conn, names, expand, include_content, observation_limit)
+        })
     }
 }
 
@@ -330,6 +512,7 @@ fn graph_from_connection(
     names: Option<&[String]>,
     expand: &[String],
     include_content: bool,
+    observation_limit: usize,
 ) -> rusqlite::Result<Graph> {
     let mut selected = names.map(|values| values.iter().map(|v| normalize(v)).collect::<Vec<_>>());
     if let Some(values) = selected.as_mut()
@@ -370,7 +553,7 @@ fn graph_from_connection(
             "SELECT name, entity_type FROM asobi_entities WHERE 0".to_string()
         }
         Some(values) => format!(
-            "SELECT name, entity_type FROM asobi_entities WHERE name IN ({}) ORDER BY name",
+            "SELECT name, entity_type FROM asobi_entities WHERE name IN ({})",
             (0..values.len()).map(|_| "?").collect::<Vec<_>>().join(",")
         ),
         None => "SELECT name, entity_type FROM asobi_entities ORDER BY name".to_string(),
@@ -378,10 +561,23 @@ fn graph_from_connection(
     let values = selected.unwrap_or_default();
     let entity_rows: Vec<(String, String)> = if entity_sql.contains("IN (") {
         let mut stmt = conn.prepare(&entity_sql)?;
-        stmt.query_map(rusqlite::params_from_iter(values.iter()), |r| {
-            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
-        })?
-        .collect::<rusqlite::Result<Vec<_>>>()?
+        let mut rows = stmt
+            .query_map(rusqlite::params_from_iter(values.iter()), |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        // `IN (...)` returns rows in whatever order SQLite likes, so restore
+        // the caller's. That order is meaningful: for `search` it is the fused
+        // relevance ranking, and for `show` it is the order the names were
+        // asked for. Sorting by name here -- which is what this did -- silently
+        // discarded every ranking the search had just computed.
+        let position: std::collections::HashMap<&str, usize> = values
+            .iter()
+            .enumerate()
+            .map(|(index, name)| (name.as_str(), index))
+            .collect();
+        rows.sort_by_key(|(name, _)| position.get(name.as_str()).copied().unwrap_or(usize::MAX));
+        rows
     } else {
         let mut stmt = conn.prepare(&entity_sql)?;
         stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?
@@ -389,27 +585,37 @@ fn graph_from_connection(
     };
     let mut entities = Vec::new();
     let mut obs_stmt = if include_content {
+        // Newest-first inside the limit, then re-ordered oldest-first so a
+        // truncated trail still reads in the direction it was written.
         Some(conn.prepare(
-            "SELECT id, content FROM asobi_observations WHERE entity_name = ? ORDER BY id",
+            "SELECT id, content FROM (
+                 SELECT id, content FROM asobi_observations
+                 WHERE entity_name = ? ORDER BY id DESC LIMIT ?
+             ) ORDER BY id",
         )?)
     } else {
         None
     };
-    let mut obs_count_stmt = if include_content {
-        None
-    } else {
-        Some(conn.prepare("SELECT COUNT(*) FROM asobi_observations WHERE entity_name = ?")?)
-    };
+    // Prepared unconditionally: the true total is what tells a caller how much
+    // a limited read left behind.
+    let mut obs_count_stmt =
+        conn.prepare("SELECT COUNT(*) FROM asobi_observations WHERE entity_name = ?")?;
     let mut truth_stmt =
         conn.prepare("SELECT key, value FROM asobi_truths WHERE entity_name = ? ORDER BY key")?;
     for (name, entity_type) in entity_rows {
-        let (observations, observations_detailed, observation_count) = if include_content {
+        let observation_count = obs_count_stmt.query_row([&name], |r| r.get::<_, i64>(0))? as usize;
+        let (observations, observations_detailed) = if include_content {
+            let cap = if observation_limit == 0 {
+                i64::MAX
+            } else {
+                observation_limit as i64
+            };
             let mut observations = Vec::new();
             let mut detailed = Vec::new();
             for obs in obs_stmt
                 .as_mut()
                 .expect("content query must be prepared")
-                .query_map([&name], |r| {
+                .query_map(params![&name, cap], |r| {
                     Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?))
                 })?
             {
@@ -417,14 +623,9 @@ fn graph_from_connection(
                 observations.push(content.clone());
                 detailed.push(crate::model::DetailedObservation { id, content });
             }
-            let observation_count = detailed.len();
-            (observations, Some(detailed), observation_count)
+            (observations, Some(detailed))
         } else {
-            let count = obs_count_stmt
-                .as_mut()
-                .expect("count query must be prepared")
-                .query_row([&name], |r| r.get::<_, i64>(0))? as usize;
-            (Vec::new(), None, count)
+            (Vec::new(), None)
         };
         let mut truths = BTreeMap::new();
         for truth in truth_stmt.query_map([&name], |r| {
@@ -433,23 +634,12 @@ fn graph_from_connection(
             let (key, value) = truth?;
             truths.insert(key, value);
         }
-        let body = if include_content {
-            conn.query_row(
-                "SELECT body FROM asobi_skills WHERE entity_name = ?",
-                [&name],
-                |r| r.get(0),
-            )
-            .optional()?
-        } else {
-            None
-        };
         entities.push(EntityOutput {
             name,
             entity_type,
             observations,
             truths,
             observation_count,
-            body,
             observations_detailed,
         });
     }
@@ -639,7 +829,7 @@ impl GraphStore for SqliteStore {
         self.write(|tx| { for rel in relations { tx.execute("DELETE FROM asobi_relations WHERE from_entity = ? AND to_entity = ? AND relation_type = ?", params![normalize(&rel.from), normalize(&rel.to), rel.relation_type])?; } Ok(()) })
     }
     fn truth_upsert(&self, entity: &str, key: &str, value: &str) -> ApiResult<()> {
-        self.write(|tx| { let entity = normalize(entity); tx.execute("INSERT INTO asobi_truth_history(entity_name,key,value,valid_from,valid_until) SELECT entity_name,key,value,updated_at,CURRENT_TIMESTAMP FROM asobi_truths WHERE entity_name=? AND key=? AND value<>?", params![entity, key, value])?; tx.execute("INSERT INTO asobi_truths(entity_name,key,value) VALUES (?,?,?) ON CONFLICT(entity_name,key) DO UPDATE SET value=excluded.value, updated_at=CURRENT_TIMESTAMP", params![entity, key, value])?; Ok(()) })
+        self.write(|tx| { let entity = normalize(entity); tx.execute("INSERT INTO asobi_truths(entity_name,key,value) VALUES (?,?,?) ON CONFLICT(entity_name,key) DO UPDATE SET value=excluded.value, updated_at=CURRENT_TIMESTAMP", params![entity, key, value])?; Ok(()) })
     }
     fn truth_delete(&self, entity: &str, key: &str) -> ApiResult<()> {
         self.write(|tx| {
@@ -650,20 +840,17 @@ impl GraphStore for SqliteStore {
             Ok(())
         })
     }
-    fn truth_history(&self, entity: &str, key: Option<&str>) -> ApiResult<Vec<TruthVersion>> {
-        self.read(|conn| { let mut out = Vec::new(); if let Some(key) = key { let mut stmt = conn.prepare("SELECT key,value,valid_from,valid_until FROM asobi_truth_history WHERE entity_name=? AND key=? ORDER BY valid_until DESC")?; for row in stmt.query_map(params![normalize(entity), key], |r| Ok(TruthVersion { key:r.get(0)?, value:r.get(1)?, valid_from:r.get(2)?, valid_until:r.get(3)? }))? { out.push(row?); } } else { let mut stmt = conn.prepare("SELECT key,value,valid_from,valid_until FROM asobi_truth_history WHERE entity_name=? ORDER BY valid_until DESC,key")?; for row in stmt.query_map([normalize(entity)], |r| Ok(TruthVersion { key:r.get(0)?, value:r.get(1)?, valid_from:r.get(2)?, valid_until:r.get(3)? }))? { out.push(row?); } } Ok(out) })
-    }
     fn read_graph(&self) -> ApiResult<Graph> {
-        self.graph(None, &[], false)
+        self.graph(None, &[], false, 0)
     }
     fn read_graph_full(&self) -> ApiResult<Graph> {
-        self.graph(None, &[], true)
+        self.graph(None, &[], true, 0)
     }
     fn read_graph_scoped(&self, scope: &[String], rationale: bool) -> ApiResult<Graph> {
         self.read(|conn| {
             let names = scoped_names(conn, scope, rationale)?;
             let included: HashSet<_> = names.iter().cloned().collect();
-            let mut graph = graph_from_connection(conn, Some(&names), &[], true)?;
+            let mut graph = graph_from_connection(conn, Some(&names), &[], true, 0)?;
             graph
                 .relations
                 .retain(|rel| included.contains(&rel.from) && included.contains(&rel.to));
@@ -671,7 +858,7 @@ impl GraphStore for SqliteStore {
         })
     }
     fn open_nodes(&self, req: OpenNodes) -> ApiResult<Graph> {
-        self.graph(Some(&req.names), &req.expand, true)
+        self.graph(Some(&req.names), &req.expand, true, req.observation_limit)
     }
 }
 
@@ -681,21 +868,27 @@ impl SearchStore for SqliteStore {
         let limit = if query.limit == 0 { 100 } else { query.limit };
         self.read(|conn| {
             let mut names = Vec::new();
+            let mut widened = false;
             if !term.is_empty() {
                 let search_limit = if query.filters.is_empty() {
                     limit as i64
                 } else {
                     -1
                 };
-                let mut stmt = conn.prepare("SELECT DISTINCT o.entity_name FROM asobi_obs_fts JOIN asobi_observations o ON asobi_obs_fts.rowid=o.rowid WHERE asobi_obs_fts MATCH ? ORDER BY bm25(asobi_obs_fts) LIMIT ?")?;
-                if let Ok(rows) = stmt.query_map(params![term, search_limit], |r| r.get::<_, String>(0)) {
-                    for row in rows.flatten() {
-                        names.push(row);
-                    }
+                names = matching_names(conn, &term, search_limit)?;
+
+                // FTS5 ANDs bare terms, and each index is searched separately,
+                // so a question whose words are spread across an observation,
+                // a truth and a name matches nothing at all -- and an empty
+                // result is indistinguishable from "nothing was ever recorded".
+                // That is the wrong way for a pitfall lookup to fail, so widen
+                // to OR and let the caller know the query was loosened.
+                if names.is_empty()
+                    && let Some(widened_term) = widen_query(&term)
+                {
+                    names = matching_names(conn, &widened_term, search_limit)?;
+                    widened = !names.is_empty();
                 }
-                let like = format!("%{}%", term);
-                let mut stmt = conn.prepare("SELECT name FROM asobi_entities WHERE name LIKE ? OR entity_type LIKE ? ORDER BY name LIMIT ?")?;
-                for row in stmt.query_map(params![like, format!("%{}%", term), search_limit], |r| r.get::<_, String>(0))? { let name = row?; if !names.contains(&name) { names.push(name); } }
             }
             if !query.filters.is_empty() {
                 let mut sql = String::from("SELECT e.name FROM asobi_entities e");
@@ -717,55 +910,16 @@ impl SearchStore for SqliteStore {
                 }
             }
             names.truncate(limit);
-            graph_from_connection(conn, Some(&names), &[], false)
+            if widened {
+                tracing::warn!(
+                    "no exact match for {:?}; widened to any-term and found {}. \
+                     Narrow with fewer words, or quote an exact phrase.",
+                    term,
+                    names.len()
+                );
+            }
+            graph_from_connection(conn, Some(&names), &[], false, 0)
         })
-    }
-}
-
-impl SkillStore for SqliteStore {
-    fn list_skills(&self) -> ApiResult<Vec<SkillRecord>> {
-        self.read(|conn| { let mut stmt = conn.prepare("SELECT s.entity_name,s.body,s.source,s.version,COALESCE(t.value,'') FROM asobi_skills s LEFT JOIN asobi_truths t ON t.entity_name=s.entity_name AND t.key='description' ORDER BY s.source,s.entity_name")?; let mut out = Vec::new(); for row in stmt.query_map([], |r| Ok(SkillRecord { entity_name:r.get(0)?, body:r.get(1)?, source:r.get(2)?, version:r.get(3)?, description:r.get(4)? }))? { out.push(row?); } Ok(out) })
-    }
-    fn skill_body(&self, entity_name: &str) -> ApiResult<Option<String>> {
-        self.read(|conn| {
-            conn.query_row(
-                "SELECT body FROM asobi_skills WHERE entity_name=?",
-                [normalize(entity_name)],
-                |r| r.get(0),
-            )
-            .optional()
-        })
-    }
-    fn upsert_skill(&self, skill: SkillRecord) -> ApiResult<()> {
-        self.write(|tx| { let name = normalize(&skill.entity_name); tx.execute("INSERT OR IGNORE INTO asobi_entities(name,entity_type) VALUES (?, 'skill')", [&name])?; tx.execute("INSERT INTO asobi_skills(entity_name,body,source,version) VALUES (?,?,?,?) ON CONFLICT(entity_name) DO UPDATE SET body=excluded.body,source=excluded.source,version=excluded.version,installed_at=CURRENT_TIMESTAMP", params![name,skill.body,skill.source,skill.version])?; tx.execute("INSERT INTO asobi_truths(entity_name,key,value) VALUES (?,'description',?) ON CONFLICT(entity_name,key) DO UPDATE SET value=excluded.value,updated_at=CURRENT_TIMESTAMP", params![normalize(&skill.entity_name),skill.description])?; Ok(()) })
-    }
-    fn remove_skills(&self, entity_names: Vec<String>) -> ApiResult<()> {
-        self.delete_entities(entity_names)
-    }
-}
-
-impl SnapshotStore for SqliteStore {
-    fn export_snapshot(&self, scope: &[String], rationale: bool) -> ApiResult<Snapshot> {
-        let graph = if scope.is_empty() {
-            self.read_graph_full()?
-        } else {
-            self.read_graph_scoped(scope, rationale)?
-        };
-        Ok(Snapshot {
-            api_version: crate::api::v2::API_VERSION,
-            format_version: crate::api::v2::SNAPSHOT_FORMAT_VERSION,
-            source_backend: "sqlite".into(),
-            source_schema_version: SCHEMA_VERSION as u32,
-            graph,
-        })
-    }
-    fn import_snapshot(&self, snapshot: Snapshot) -> ApiResult<ImportReport> {
-        if snapshot.api_version != crate::api::v2::API_VERSION
-            || snapshot.format_version != crate::api::v2::SNAPSHOT_FORMAT_VERSION
-        {
-            return Err(ApiError::Invalid("unsupported snapshot version".into()));
-        }
-        self.write(|tx| { let mut report = ImportReport::default(); for entity in snapshot.graph.entities { let name=normalize(&entity.name); let inserted=tx.execute("INSERT OR IGNORE INTO asobi_entities(name,entity_type) VALUES (?,?)", params![name,entity.entity_type])?; if inserted==1 {report.entities_created+=1;} for obs in entity.observations { tx.execute("INSERT INTO asobi_observations(entity_name,content) VALUES (?,?)", params![normalize(&entity.name),obs])?; report.observations_added+=1; } for (key,value) in entity.truths { tx.execute("INSERT INTO asobi_truths(entity_name,key,value) VALUES (?,?,?) ON CONFLICT(entity_name,key) DO UPDATE SET value=excluded.value,updated_at=CURRENT_TIMESTAMP", params![normalize(&entity.name),key,value])?; report.truths_updated+=1; } } for rel in snapshot.graph.relations { tx.execute("INSERT OR REPLACE INTO asobi_relations(from_entity,to_entity,relation_type) VALUES (?,?,?)", params![normalize(&rel.from),normalize(&rel.to),rel.relation_type])?; report.relations_added+=1; } Ok(report) })
     }
 }
 
@@ -936,7 +1090,6 @@ impl MaintenanceStore for SqliteStore {
         self.read(|conn| { let mut stmt=conn.prepare("SELECT e.name,count(o.id) FROM asobi_entities e LEFT JOIN asobi_observations o ON o.entity_name=e.name GROUP BY e.name ORDER BY e.name")?; let mut out=Vec::new(); for row in stmt.query_map([],|r|Ok((r.get(0)?,r.get::<_,i64>(1)? as usize)))?{out.push(row?);} Ok(out) })
     }
     fn purge(&self, request: PurgeRequest) -> ApiResult<PurgeReport> {
-        validate_purge_request(&request)?;
         let report = self.write(|tx| {
             let candidates = collect_purge_candidates(tx, &request)?;
             let deleted = if request.apply {
@@ -970,7 +1123,7 @@ impl MaintenanceStore for SqliteStore {
         Ok(report)
     }
     fn reset(&self) -> ApiResult<()> {
-        self.write(|tx| { tx.execute_batch("DELETE FROM asobi_relations; DELETE FROM asobi_truth_history; DELETE FROM asobi_truths; DELETE FROM asobi_observations; DELETE FROM asobi_skills; DELETE FROM asobi_entities;")?; Ok(()) })?;
+        self.write(|tx| { tx.execute_batch("DELETE FROM asobi_relations; DELETE FROM asobi_truths; DELETE FROM asobi_observations; DELETE FROM asobi_entities;")?; Ok(()) })?;
         self.read(|conn| conn.execute_batch("PRAGMA incremental_vacuum;"))?;
         Ok(())
     }

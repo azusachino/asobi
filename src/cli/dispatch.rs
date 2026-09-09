@@ -49,18 +49,10 @@ pub(crate) fn run_cli(cli: Cli) -> Result<()> {
             let synced = crate::compact::sync_graph_to_markdown(backend)?;
             info!("Done. Synced {} entities to Markdown.", synced);
         }
-        Commands::Purge {
-            entity_types,
-            statuses,
-            older_than,
-            apply,
-            dry_run,
-        } => {
+        Commands::Purge { older_than, apply } => {
             let report = backend.purge(PurgeRequest {
-                entity_types,
-                statuses,
                 older_than_days: older_than,
-                apply: apply && !dry_run,
+                apply,
             })?;
             if json {
                 print_json(report)?;
@@ -98,7 +90,7 @@ pub(crate) fn run_cli(cli: Cli) -> Result<()> {
             }
         }
         Commands::Tasks { subcommand } => crate::tasks::run(backend, subcommand, json)?,
-        Commands::Skills { subcommand } => super::skills::run(backend, &paths, subcommand)?,
+        Commands::Skills { subcommand } => super::skills::run(&paths, subcommand)?,
         command => super::graph::run(backend, command, json)?,
     }
 
