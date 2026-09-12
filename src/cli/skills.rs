@@ -3,7 +3,7 @@ use super::runtime::*;
 use crate::paths::AsobiPaths;
 use anyhow::Result;
 use std::io::IsTerminal;
-use tracing::info;
+use tracing::{info, warn};
 
 /// A source resolved to something installable.
 struct Checkout {
@@ -203,8 +203,8 @@ pub(crate) fn run(paths: &AsobiPaths, subcommand: Option<SkillsCommands>) -> Res
             let mut desired: Vec<_> = crate::skills::read_skills_for_mutation(&tree)?
                 .into_iter()
                 .filter(|s| crate::skills::derive_source_slug(&s.source) != slug)
-                .map(|s| reload(&dir, &s))
-                .collect::<Result<_>>()?;
+                .filter_map(|s| reload(&dir, &s))
+                .collect();
             desired.extend(fresh);
             let written = sync_sources(&tree, desired)?;
             info!(
@@ -301,15 +301,25 @@ pub(crate) fn run(paths: &AsobiPaths, subcommand: Option<SkillsCommands>) -> Res
             // over untouched so a scoped update never prunes a sibling source.
             let mut desired = Vec::new();
             for s in &installed {
-                if !sources.contains(&s.source) {
-                    desired.push(reload(&dir, s)?);
+                if !sources.contains(&s.source)
+                    && let Some(kept) = reload(&dir, s)
+                {
+                    desired.push(kept);
                 }
             }
             for src in sources {
                 info!("Updating skills from {}...", src);
-                let policies: Vec<_> = installed
+                let matching: Vec<_> = installed.iter().filter(|s| s.source == src).collect();
+                if matching.iter().any(|s| s.source_config.is_some())
+                    && matching.iter().any(|s| s.source_config.is_none())
+                {
+                    anyhow::bail!(
+                        "{src} has skills installed without a recorded source config; \
+                         run `skills sync` to re-establish one before updating"
+                    );
+                }
+                let policies: Vec<_> = matching
                     .iter()
-                    .filter(|s| s.source == src)
                     .filter_map(|s| s.source_config.as_ref())
                     .collect();
                 let fallback = crate::skills_config::SkillSource {
@@ -324,7 +334,18 @@ pub(crate) fn run(paths: &AsobiPaths, subcommand: Option<SkillsCommands>) -> Res
                 if policies.iter().any(|other| *other != policy) {
                     anyhow::bail!("inconsistent source policy for {src}; run skills sync");
                 }
-                let checkout = checkout_source(&src, &paths.caches_dir(), policy.rev.as_deref())?;
+                let checkout =
+                    match checkout_source(&src, &paths.caches_dir(), policy.rev.as_deref()) {
+                        Ok(checkout) => checkout,
+                        Err(e) => {
+                            let (_, is_git) = classify_skill_source(&src);
+                            if !is_git && !std::path::Path::new(&src).exists() {
+                                warn!("Local path {} does not exist, skipping update", src);
+                                continue;
+                            }
+                            return Err(e);
+                        }
+                    };
                 let walk_dir = scoped_dir(&checkout.path, policy.subdir.as_deref())?;
                 let mut fresh = crate::skills::collect_skills_from_dir(
                     &walk_dir,
@@ -359,10 +380,7 @@ pub(crate) fn run(paths: &AsobiPaths, subcommand: Option<SkillsCommands>) -> Res
                     dir.display()
                 );
             }
-            let desired: Vec<_> = kept
-                .iter()
-                .map(|s| reload(&dir, s))
-                .collect::<Result<_>>()?;
+            let desired: Vec<_> = kept.iter().filter_map(|s| reload(&dir, s)).collect();
             let written = sync_sources(&tree, desired)?;
             info!(
                 "Removed {} skill(s) from {}",
@@ -402,9 +420,15 @@ pub(crate) fn run(paths: &AsobiPaths, subcommand: Option<SkillsCommands>) -> Res
 fn reload(
     dir: &std::path::Path,
     installed: &crate::skills::InstalledSkill,
-) -> Result<crate::skills::CollectedSkill> {
-    let body = std::fs::read_to_string(dir.join(&installed.dir).join("SKILL.md"))?;
-    Ok(crate::skills::CollectedSkill {
+) -> Option<crate::skills::CollectedSkill> {
+    let body = std::fs::read_to_string(dir.join(&installed.dir).join("SKILL.md"))
+        .inspect_err(|e| warn!("dropping {}: {e}", installed.dir))
+        .ok()?;
+    let shared_markdown =
+        crate::skill_resources::reload(dir, &installed.source, installed.source_config.as_ref())
+            .inspect_err(|e| warn!("dropping {}: {e}", installed.dir))
+            .ok()?;
+    Some(crate::skills::CollectedSkill {
         dir_name: installed.dir.clone(),
         name: installed.name.clone(),
         source: installed.source.clone(),
@@ -415,11 +439,7 @@ fn reload(
         // and is skipped, which keeps this path from churning mtimes.
         bundle_dir: dir.join(&installed.dir),
         source_config: installed.source_config.clone(),
-        shared_markdown: crate::skill_resources::reload(
-            dir,
-            &installed.source,
-            installed.source_config.as_ref(),
-        )?,
+        shared_markdown,
         bundle_rewrites: Default::default(),
     })
 }

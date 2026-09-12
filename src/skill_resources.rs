@@ -53,9 +53,10 @@ pub fn validate_resource_path(path: &Path) -> Result<()> {
 /// Check every existing component; canonicalizing alone would accept symlinks
 /// inside the root, and a missing final file must not hide a linked parent.
 pub fn guard_path(path: &Path) -> Result<()> {
-    // macOS exposes its temporary directories through these OS-owned aliases.
-    // Resolve only that prefix; source/destination symlinks below it still fail.
-    #[cfg(target_os = "macos")]
+    // Some platforms expose their temporary directories through OS-owned
+    // aliases (macOS routes /tmp through /private/tmp; some Linux setups do
+    // the same). Resolve only that known prefix; source/destination symlinks
+    // below it still fail.
     let expanded = ["/var", "/tmp"].iter().find_map(|prefix| {
         path.strip_prefix(prefix).ok().and_then(|rest| {
             std::fs::canonicalize(prefix)
@@ -63,7 +64,6 @@ pub fn guard_path(path: &Path) -> Result<()> {
                 .map(|root| root.join(rest))
         })
     });
-    #[cfg(target_os = "macos")]
     let path = expanded.as_deref().unwrap_or(path);
     let mut current = PathBuf::new();
     let components: Vec<_> = path.components().collect();
@@ -143,19 +143,27 @@ fn rewrite(
     let mut spans = Vec::new();
     let bytes = body.as_bytes();
     let mut cursor = 0;
-    let mut fenced = false;
+    // Marker type and length, mirroring skill_references.rs's references():
+    // matching only a same-or-longer closing fence of the same character
+    // keeps a shorter nested fence from prematurely closing an outer one.
+    let mut fenced: Option<(u8, usize)> = None;
     for line in body.split_inclusive('\n') {
         let trimmed = line.trim_start();
-        if trimmed.starts_with("```") || trimmed.starts_with("~~~") {
-            fenced = !fenced;
+        let marker = trimmed.as_bytes().first().copied();
+        let length = trimmed.bytes().take_while(|b| Some(*b) == marker).count();
+        if let Some((opening, minimum)) = fenced {
+            if marker == Some(opening) && length >= minimum && trimmed[length..].trim().is_empty() {
+                fenced = None;
+            }
+            cursor += line.len();
+            continue;
+        }
+        if matches!(marker, Some(b'`' | b'~')) && length >= 3 {
+            fenced = marker.map(|m| (m, length));
             cursor += line.len();
             continue;
         }
         let end = cursor + line.len();
-        if fenced {
-            cursor = end;
-            continue;
-        }
         while cursor < end {
             let (start, close) = if bytes[cursor] == b'`' {
                 (cursor + 1, b'`')
@@ -211,11 +219,14 @@ fn rewrite(
     for source in mapping.keys() {
         let spelling = relative(parent, source);
         for (offset, _) in body.match_indices(&spelling) {
-            // A filename suffix inside an unrelated URL or a longer path is
-            // not a reference to this declared source document.
-            if offset > 0 && body.as_bytes()[offset - 1].is_ascii_alphanumeric()
-                || offset > 0 && matches!(body.as_bytes()[offset - 1], b'/' | b'_' | b'-' | b'.')
-            {
+            // A filename affixed inside an unrelated URL or a longer path
+            // (either side) is not a reference to this declared source
+            // document, e.g. `x.md` inside `x.md.bak` or `long-x.md`.
+            let is_boundary_char =
+                |b: u8| b.is_ascii_alphanumeric() || matches!(b, b'/' | b'_' | b'-' | b'.');
+            let before = offset.checked_sub(1).map(|i| body.as_bytes()[i]);
+            let after = body.as_bytes().get(offset + spelling.len()).copied();
+            if before.is_some_and(is_boundary_char) || after.is_some_and(is_boundary_char) {
                 continue;
             }
             if !spans

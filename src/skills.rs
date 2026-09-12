@@ -167,8 +167,7 @@ pub fn collect_skills_from_dir(
     // Paths identify candidates during selection; display names remain the
     // existing installed-directory convention. Never key discovery by a name
     // that two different source directories may legitimately share.
-    for entry in WalkDir::new(dir_path) {
-        let entry = entry?;
+    for entry in WalkDir::new(dir_path).into_iter().filter_map(|e| e.ok()) {
         if !entry.file_type().is_file() || !entry.file_name().eq_ignore_ascii_case("SKILL.md") {
             continue;
         }
@@ -585,8 +584,10 @@ pub fn materialize_skills(
             bail!("skill entry point is a directory: {}", body_path.display());
         }
         crate::skill_resources::guard_path(&skill.bundle_dir)?;
-        for entry in WalkDir::new(&skill.bundle_dir) {
-            let entry = entry?;
+        for entry in WalkDir::new(&skill.bundle_dir)
+            .into_iter()
+            .filter_map(|e| e.ok())
+        {
             if !entry.file_type().is_file() || !is_markdown(entry.path()) {
                 continue;
             }
