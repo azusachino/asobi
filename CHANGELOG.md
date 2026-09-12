@@ -1,5 +1,17 @@
 # Changelog
 
+## v0.7.3 — Shared Markdown, and skills selected by path
+
+### Added
+
+- **`[[skills.source]]` accepts `shared_markdown`, a list of source-relative files installed once per source under `.shared/<source-slug>/` and shared by every skill from that source, rather than duplicated into each skill's bundle.** Ownership and revision are tracked through `sync`, a scoped `update`, and `remove`, so a shared file is written, relocated, or deleted in step with the skills that declare it. References to a declared file inside `SKILL.md` or a bundled document — a single-backtick path or a simple Markdown link — are relocated automatically; any other spelling of a reference to a declared file fails before install rather than landing a broken pointer. Invalid paths, symlinked ancestors, conflicting destinations, and a manifest with incomplete ownership state all fail before any content changes. Non-Markdown files are still excluded, and existing skills are not retroactively refreshed by this change.
+- **Skill selection accepts an exact source-relative path, a unique path suffix, or an unambiguous frontmatter name — precedence in that order, with a repeated match resolving once.** Previously, selection was keyed by display name alone, so two skills with distinct names that normalize the same way (`A B` and `A-B`) could silently overwrite the same installed directory, and a renamed display name could silently select the wrong skill. `update` now preserves the exact selector a caller passed at install time, and every materialization path rejects a normalized destination collision rather than one silently overwriting the other.
+- **`skills sync`/`install`/`update` warn when a reference in `SKILL.md` cannot resolve from the planned installation** — a bundled or shared Markdown path, a selected skill from another source, or a retained local skill. This is advisory only: diagnostics never select, fetch, or execute what they report on.
+
+### Changed
+
+- **`.pymarkdown.json` is gone.** `rumdl` already annotates and enforces fenced-code languages through `make check`; the two tools disagreed on unfenced blocks, so one of them had to go.
+
 ## v0.7.2 — State goes in the state directory
 
 ### Changed
