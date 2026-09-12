@@ -67,12 +67,14 @@ bench-storage:
 
 fmt:
 	cargo fmt
-	bun x prettier --write "**/*.{json,yaml,yml,md}"
+	bun x prettier --write "**/*.{json,yaml,yml}"
+	rumdl fmt .
 	ruff format .
 
 fmt-check:
 	cargo fmt --check
-	bun x prettier --check "**/*.{json,yaml,yml,md}"
+	bun x prettier --check "**/*.{json,yaml,yml}"
+	rumdl fmt --check .
 	ruff format --check .
 
 lint:

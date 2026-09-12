@@ -10,6 +10,7 @@ rust = { version = "1.98.0", components = "rustfmt,clippy" }
 uv = "0.12.5"
 bun = "1.4.0"
 ruff = "0.16.4"
+rumdl = "0.2.64"
 
 [env]
 # Keep uv's managed interpreters inside the workspace cache.
