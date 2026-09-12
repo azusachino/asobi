@@ -155,7 +155,7 @@ pub(crate) fn run(paths: &AsobiPaths, subcommand: Option<SkillsCommands>) -> Res
             let walk_dir = scoped_dir(&checkout.path, subdir.as_deref())?;
             let mode = if all {
                 crate::skills::SelectionMode::All
-            } else if let Some(sel) = select {
+            } else if let Some(sel) = select.clone() {
                 crate::skills::SelectionMode::Select(sel)
             } else {
                 crate::skills::SelectionMode::Interactive
@@ -173,7 +173,22 @@ pub(crate) fn run(paths: &AsobiPaths, subcommand: Option<SkillsCommands>) -> Res
                 select: if all {
                     vec![]
                 } else {
-                    fresh.iter().map(|s| s.name.clone()).collect()
+                    select.unwrap_or_else(|| {
+                        fresh
+                            .iter()
+                            .map(|s| {
+                                let relative = s
+                                    .bundle_dir
+                                    .strip_prefix(&walk_dir)
+                                    .expect("collected skill belongs to its source scope");
+                                if relative.as_os_str().is_empty() {
+                                    ".".into()
+                                } else {
+                                    relative.to_string_lossy().replace('\\', "/")
+                                }
+                            })
+                            .collect()
+                    })
                 },
                 subdir,
                 rev,

@@ -35,7 +35,8 @@ pub struct SkillSource {
     /// Take every skill the source offers.
     #[serde(default)]
     pub all: bool,
-    /// Take only these skills, by name.
+    /// Take skills by exact path relative to the discovery scope, or by an
+    /// unambiguous directory suffix or frontmatter name.
     #[serde(default)]
     pub select: Vec<String>,
     /// Scope the install walk to this subdirectory of the checkout, relative

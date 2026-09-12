@@ -108,7 +108,7 @@ fn relative(from: &Path, to: &Path) -> String {
     result.to_string_lossy().replace('\\', "/")
 }
 
-fn normalize_reference(parent: &Path, token: &str) -> Option<PathBuf> {
+pub(crate) fn normalize_reference(parent: &Path, token: &str) -> Option<PathBuf> {
     let path = Path::new(token);
     if path.is_absolute() || token.contains([':', '\\']) {
         return None;

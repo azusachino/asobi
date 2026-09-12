@@ -161,105 +161,122 @@ pub fn collect_skills_from_dir(
     mode: SelectionMode,
     is_tty: bool,
 ) -> Result<Vec<CollectedSkill>> {
-    let mut parsed_skills = Vec::new();
-    let mut skill_contents: HashMap<String, (String, std::path::PathBuf)> = HashMap::new();
-    // Every file path that claimed each name. Real-world skill repos sometimes
-    // mirror the same skill under two tool-specific directories (e.g.
-    // `.opencode/skills/x/` and `skills/x/`) and those mirrors can genuinely
-    // diverge in content (different description, different frontmatter), so a
-    // `HashMap<String, String>` silently keeping whichever file was walked
-    // last -- and resolve_selection still returning the name twice, so the
-    // second `.remove()` further down hit an already-emptied slot -- is not
-    // safe. Collected here rather than checked eagerly, so a repo-wide name
-    // collision only blocks installing *that* name: a narrow `--select` of an
-    // unrelated, unambiguous skill in the same source still succeeds.
-    let mut skill_paths: HashMap<String, Vec<std::path::PathBuf>> = HashMap::new();
-    // A skill is a directory containing `SKILL.md`, which is what the Agent
-    // Skills specification defines and the only shape supported here. Loose
-    // `<name>.md` files were once accepted too, which bought a name-fallback
-    // rule, an optional bundle, and a class of skill whose relative references
-    // could never resolve -- three kinds of complexity for a shape the spec
-    // does not have.
-    for entry in WalkDir::new(dir_path)
-        .into_iter()
-        .filter_map(|e| e.ok())
-        .filter(|e| e.file_type().is_file())
-        .filter(|e| {
-            e.path()
-                .file_name()
-                .and_then(|n| n.to_str())
-                .is_some_and(|n| n.eq_ignore_ascii_case("SKILL.md"))
-        })
-    {
-        let Some(bundle_dir) = entry.path().parent().map(Path::to_path_buf) else {
+    let mut choices = Vec::new();
+    let mut candidates = HashMap::new();
+    let slug = crate::normalize::slugify(&derive_source_slug(source));
+    // Paths identify candidates during selection; display names remain the
+    // existing installed-directory convention. Never key discovery by a name
+    // that two different source directories may legitimately share.
+    for entry in WalkDir::new(dir_path) {
+        let entry = entry?;
+        if !entry.file_type().is_file() || !entry.file_name().eq_ignore_ascii_case("SKILL.md") {
+            continue;
+        }
+        let bundle_dir = entry.path().parent().unwrap().to_path_buf();
+        let body = std::fs::read_to_string(entry.path())?.replace("\r\n", "\n");
+        let Some((parsed_name, description)) = parse_frontmatter(&body) else {
             continue;
         };
-        let content = std::fs::read_to_string(entry.path())?.replace("\r\n", "\n");
-        if let Some((parsed_name, parsed_desc)) = parse_frontmatter(&content) {
-            // The spec requires a skill's directory to be named for it, so the
-            // directory is the right answer when frontmatter omits the name.
-            let name = parsed_name.unwrap_or_else(|| {
-                bundle_dir
-                    .file_name()
-                    .and_then(|n| n.to_str())
-                    .unwrap_or("skill")
-                    .to_string()
-            });
-            skill_paths
-                .entry(name.clone())
-                .or_default()
-                .push(entry.path().to_path_buf());
-            parsed_skills.push((name.clone(), parsed_desc.unwrap_or_default()));
-            skill_contents.insert(name, (content, bundle_dir));
-        }
-    }
-    if parsed_skills.is_empty() {
-        bail!(
-            "No skills found in {source}: a skill is a directory containing SKILL.md \
-             (see https://agentskills.io/specification)"
-        );
-    }
-    let selected_names = resolve_selection(&parsed_skills, mode, is_tty)?;
-    if let Some(name) = selected_names
-        .iter()
-        .find(|n| skill_paths.get(*n).is_some_and(|paths| paths.len() > 1))
-    {
-        let paths = skill_paths[name]
-            .iter()
-            .map(|p| p.display().to_string())
-            .collect::<Vec<_>>()
-            .join(", ");
-        bail!(
-            "skill name '{}' is declared in more than one file in {}: {} -- \
-             rename one so names stay unique",
+        let name = parsed_name.unwrap_or_else(|| {
+            bundle_dir
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("skill")
+                .to_owned()
+        });
+        let relative = bundle_dir.strip_prefix(dir_path)?;
+        let key = if relative.as_os_str().is_empty() {
+            ".".to_owned()
+        } else {
+            relative.to_string_lossy().replace('\\', "/")
+        };
+        choices.push((
+            key.clone(),
+            format!("{} - {}", name, description.unwrap_or_default()),
+        ));
+        let candidate = CollectedSkill {
+            dir_name: format!("{}@{}", slug, crate::normalize::slugify(&name)),
             name,
-            source,
-            paths
-        );
-    }
-    let slug = derive_source_slug(source);
-    let mut collected = Vec::new();
-    for name in selected_names {
-        let (body, bundle_dir) = skill_contents
-            .remove(&name)
-            .ok_or_else(|| anyhow!("Content missing for skill {}", name))?;
-        collected.push(CollectedSkill {
-            dir_name: format!(
-                "{}@{}",
-                crate::normalize::slugify(&slug),
-                crate::normalize::slugify(&name)
-            ),
-            name,
-            source: source.to_string(),
-            version: version.to_string(),
+            source: source.to_owned(),
+            version: version.to_owned(),
             body,
             bundle_dir,
             source_config: None,
             shared_markdown: Default::default(),
             bundle_rewrites: Default::default(),
-        });
+        };
+        if candidates.insert(key.clone(), candidate).is_some() {
+            bail!("more than one SKILL.md entry point in source directory {key}");
+        }
     }
+    if choices.is_empty() {
+        bail!(
+            "No skills found in {source}: a skill is a directory containing SKILL.md \
+             (see https://agentskills.io/specification)"
+        );
+    }
+    choices.sort_by(|a, b| a.0.cmp(&b.0));
+    let mode = match mode {
+        SelectionMode::Select(selectors) => {
+            let mut paths = Vec::new();
+            for selector in selectors {
+                if candidates.contains_key(&selector) {
+                    paths.push(selector);
+                    continue;
+                }
+                let matches: Vec<_> = choices
+                    .iter()
+                    .filter(|(path, _)| {
+                        !selector.is_empty()
+                            && (candidates[path].name == selector
+                                || Path::new(path).ends_with(Path::new(&selector)))
+                    })
+                    .map(|(path, _)| path.clone())
+                    .collect();
+                match matches.as_slice() {
+                    [one] => paths.push(one.clone()),
+                    [] => bail!("Skill '{}' not found in source", selector),
+                    _ => bail!(
+                        "ambiguous skill selector '{}'; matches: {} -- select an exact source-relative path",
+                        selector,
+                        matches.join(", ")
+                    ),
+                }
+            }
+            SelectionMode::Select(paths)
+        }
+        other => other,
+    };
+    let mut selected = std::collections::HashSet::new();
+    let mut collected = Vec::new();
+    for path in resolve_selection(&choices, mode, is_tty)? {
+        if selected.insert(path.clone()) {
+            collected.push(
+                candidates
+                    .remove(&path)
+                    .ok_or_else(|| anyhow!("Content missing for skill {path}"))?,
+            );
+        }
+    }
+    ensure_unique_destinations(&collected)?;
     Ok(collected)
+}
+
+fn ensure_unique_destinations(desired: &[CollectedSkill]) -> Result<()> {
+    let mut destinations: HashMap<&str, &CollectedSkill> = HashMap::new();
+    for skill in desired {
+        if let Some(previous) = destinations.insert(&skill.dir_name, skill) {
+            bail!(
+                "installed skill directory collision at '{}': '{}' ({}) and '{}' ({}) -- select one or rename the source skills",
+                skill.dir_name,
+                previous.name,
+                previous.bundle_dir.display(),
+                skill.name,
+                skill.bundle_dir.display()
+            );
+        }
+    }
+    Ok(())
 }
 
 /// A skill as recorded on disk, for `skills` and `skills show`.
@@ -538,6 +555,7 @@ pub fn materialize_skills(
     tree: &SkillsTree,
     desired: &[CollectedSkill],
 ) -> Result<MaterializeOutcome> {
+    ensure_unique_destinations(desired)?;
     let dir = tree.dir.as_path();
     crate::skill_resources::guard_path(dir)?;
     let mut outcome = MaterializeOutcome::default();
@@ -587,6 +605,7 @@ pub fn materialize_skills(
     let wanted: std::collections::HashSet<&str> =
         desired.iter().map(|s| s.dir_name.as_str()).collect();
 
+    crate::skill_references::warn_unresolved(tree, desired, resources.keys());
     std::fs::create_dir_all(dir)?;
 
     for skill in desired {

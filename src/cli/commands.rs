@@ -195,7 +195,7 @@ pub(crate) enum SkillsCommands {
         /// Install all skills found
         #[arg(long)]
         all: bool,
-        /// Install specific skills by name
+        /// Install skills by source-relative directory path, unique suffix, or name
         #[arg(long, num_args = 1..)]
         select: Option<Vec<String>>,
         /// Only walk this subdirectory of the checkout (e.g. a source that
