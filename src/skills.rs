@@ -35,6 +35,9 @@ pub struct CollectedSkill {
     /// a skill *is* a directory containing `SKILL.md`. Its Markdown is copied
     /// alongside the body so on-demand references resolve after install.
     pub bundle_dir: std::path::PathBuf,
+    pub source_config: Option<crate::skills_config::SkillSource>,
+    pub shared_markdown: std::collections::BTreeMap<PathBuf, String>,
+    pub bundle_rewrites: std::collections::BTreeMap<PathBuf, String>,
 }
 
 /// What one sync changed on disk.
@@ -180,7 +183,7 @@ pub fn collect_skills_from_dir(
     for entry in WalkDir::new(dir_path)
         .into_iter()
         .filter_map(|e| e.ok())
-        .filter(|e| e.path().is_file())
+        .filter(|e| e.file_type().is_file())
         .filter(|e| {
             e.path()
                 .file_name()
@@ -251,6 +254,9 @@ pub fn collect_skills_from_dir(
             version: version.to_string(),
             body,
             bundle_dir,
+            source_config: None,
+            shared_markdown: Default::default(),
+            bundle_rewrites: Default::default(),
         });
     }
     Ok(collected)
@@ -279,6 +285,8 @@ pub struct InstalledSkill {
     /// was missing and this entry was recovered by scanning.
     #[serde(default)]
     pub version: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_config: Option<crate::skills_config::SkillSource>,
 }
 
 /// The two paths a skills tree spans: the directory agents read, and the
@@ -329,6 +337,8 @@ struct Manifest {
     #[serde(default)]
     dir: String,
     skills: Vec<InstalledSkill>,
+    #[serde(default)]
+    resources: Vec<crate::skill_resources::InstalledResource>,
 }
 
 /// Read the installed-skill manifest for `tree`.
@@ -378,10 +388,58 @@ pub fn read_installed_skills(tree: &SkillsTree) -> Result<Vec<InstalledSkill>> {
             dir: dir_name,
             source: String::new(),
             version: String::new(),
+            source_config: None,
         });
     }
     found.sort_by(|a, b| a.dir.cmp(&b.dir));
     Ok(found)
+}
+
+/// A listing may tolerate a missing entry; a mutation must not interpret it as
+/// permission to prune that entry's source-owned companions.
+pub fn read_skills_for_mutation(tree: &SkillsTree) -> Result<Vec<InstalledSkill>> {
+    crate::skill_resources::guard_path(&tree.dir)?;
+    crate::skill_resources::guard_path(&tree.dir.join(".shared"))?;
+    crate::skill_resources::guard_path(&tree.manifest)?;
+    let has_shared = WalkDir::new(tree.dir.join(".shared"))
+        .into_iter()
+        .any(|entry| entry.is_ok_and(|e| !e.file_type().is_dir()));
+    let manifest = match std::fs::read_to_string(&tree.manifest) {
+        Ok(raw) => Some(serde_json::from_str::<Manifest>(&raw)?),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => return Err(error.into()),
+    };
+    if let Some(manifest) = manifest.filter(|m| Path::new(&m.dir) == tree.dir) {
+        for skill in &manifest.skills {
+            crate::skill_resources::validate_relative(Path::new(&skill.dir))?;
+            let file = tree.dir.join(&skill.dir).join("SKILL.md");
+            crate::skill_resources::guard_path(&file)?;
+            if !file.is_file() {
+                bail!(
+                    "installed skill is missing; restore it before mutating this tree: {}",
+                    file.display()
+                );
+            }
+        }
+        for resource in &manifest.resources {
+            crate::skill_resources::validate_relative(&resource.path)?;
+            let file = tree.dir.join(&resource.path);
+            crate::skill_resources::guard_path(&file)?;
+            if !file.is_file() {
+                bail!(
+                    "installed shared resource is missing; restore it before mutating this tree: {}",
+                    file.display()
+                );
+            }
+        }
+        return Ok(manifest.skills);
+    }
+    if has_shared {
+        bail!(
+            "shared Markdown ownership manifest is missing or belongs to another tree; restore it before mutating this tree"
+        );
+    }
+    read_installed_skills(tree)
 }
 
 /// Copy a skill's bundled resources — `references/`, `scripts/`, `assets/`, and
@@ -421,16 +479,22 @@ fn copy_bundle(skill: &CollectedSkill, to: &Path) -> Result<()> {
             continue;
         }
         let target = to.join(relative);
+        crate::skill_resources::guard_path(&target)?;
         if let Some(parent) = target.parent() {
             std::fs::create_dir_all(parent)?;
         }
         // Same mtime reasoning as the body: skip a byte-identical file.
-        let unchanged = std::fs::read(entry.path())
-            .ok()
+        let content = skill
+            .bundle_rewrites
+            .get(relative)
+            .map(|s| s.as_bytes().to_vec())
+            .map(Ok)
+            .unwrap_or_else(|| std::fs::read(entry.path()))?;
+        let unchanged = Some(content.clone())
             .zip(std::fs::read(&target).ok())
             .is_some_and(|(src, dst)| src == dst);
         if !unchanged {
-            std::fs::copy(entry.path(), &target)?;
+            std::fs::write(&target, content)?;
         }
     }
 
@@ -456,7 +520,7 @@ fn copy_bundle(skill: &CollectedSkill, to: &Path) -> Result<()> {
 /// body and not the artifacts beside it. Writing an upstream script to disk on
 /// the strength of a `select` line is a bigger promise than a skill installer
 /// should make; a human who wants one can fetch it deliberately.
-fn is_markdown(path: &Path) -> bool {
+pub(crate) fn is_markdown(path: &Path) -> bool {
     path.extension()
         .and_then(|e| e.to_str())
         .is_some_and(|e| e.eq_ignore_ascii_case("md") || e.eq_ignore_ascii_case("markdown"))
@@ -475,7 +539,51 @@ pub fn materialize_skills(
     desired: &[CollectedSkill],
 ) -> Result<MaterializeOutcome> {
     let dir = tree.dir.as_path();
+    crate::skill_resources::guard_path(dir)?;
     let mut outcome = MaterializeOutcome::default();
+    read_skills_for_mutation(tree)?;
+    let previous_resources = match std::fs::read_to_string(&tree.manifest) {
+        Ok(raw) => {
+            let manifest: Manifest = serde_json::from_str(&raw)?;
+            if Path::new(&manifest.dir) == dir {
+                manifest.resources
+            } else {
+                vec![]
+            }
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => vec![],
+        Err(e) => return Err(e.into()),
+    };
+    let resources = crate::skill_resources::plan(dir, desired, &previous_resources)?;
+    for skill in desired {
+        crate::skill_resources::validate_relative(Path::new(&skill.dir_name))?;
+        if Path::new(&skill.dir_name).components().count() != 1 || skill.dir_name == ".shared" {
+            bail!("invalid installed skill directory: {}", skill.dir_name);
+        }
+        let skill_dir = dir.join(&skill.dir_name);
+        let body_path = skill_dir.join("SKILL.md");
+        crate::skill_resources::guard_path(&body_path)?;
+        if body_path.is_dir() {
+            bail!("skill entry point is a directory: {}", body_path.display());
+        }
+        crate::skill_resources::guard_path(&skill.bundle_dir)?;
+        for entry in WalkDir::new(&skill.bundle_dir) {
+            let entry = entry?;
+            if !entry.file_type().is_file() || !is_markdown(entry.path()) {
+                continue;
+            }
+            crate::skill_resources::guard_path(entry.path())?;
+            let target = skill_dir.join(entry.path().strip_prefix(&skill.bundle_dir)?);
+            crate::skill_resources::guard_path(&target)?;
+            if target.is_dir() {
+                bail!(
+                    "bundled Markdown destination is a directory: {}",
+                    target.display()
+                );
+            }
+        }
+    }
+    crate::skill_resources::guard_path(&tree.manifest)?;
     let wanted: std::collections::HashSet<&str> =
         desired.iter().map(|s| s.dir_name.as_str()).collect();
 
@@ -522,8 +630,10 @@ pub fn materialize_skills(
                 name: s.name.clone(),
                 source: s.source.clone(),
                 version: s.version.clone(),
+                source_config: s.source_config.clone(),
             })
             .collect(),
+        resources: crate::skill_resources::write(dir, resources, &previous_resources)?,
     };
     if let Some(parent) = tree.manifest.parent() {
         std::fs::create_dir_all(parent)?;

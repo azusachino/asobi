@@ -9,6 +9,7 @@ pub mod init;
 pub mod model;
 pub mod normalize;
 pub mod paths;
+pub mod skill_resources;
 pub mod skills;
 pub mod skills_config;
 pub mod storage;

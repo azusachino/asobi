@@ -3,7 +3,7 @@ use super::runtime::*;
 use crate::paths::AsobiPaths;
 use anyhow::Result;
 use std::io::IsTerminal;
-use tracing::{info, warn};
+use tracing::info;
 
 /// A source resolved to something installable.
 struct Checkout {
@@ -47,9 +47,12 @@ fn scoped_dir(
     subdir: Option<&std::path::Path>,
 ) -> Result<std::path::PathBuf> {
     let Some(subdir) = subdir else {
+        crate::skill_resources::guard_path(checkout_path)?;
         return Ok(checkout_path.to_path_buf());
     };
+    crate::skill_resources::validate_relative(subdir)?;
     let scoped = checkout_path.join(subdir);
+    crate::skill_resources::guard_path(&scoped)?;
     if !scoped.is_dir() {
         anyhow::bail!(
             "subdir '{}' does not exist under {}",
@@ -157,23 +160,36 @@ pub(crate) fn run(paths: &AsobiPaths, subcommand: Option<SkillsCommands>) -> Res
             } else {
                 crate::skills::SelectionMode::Interactive
             };
-            let fresh = crate::skills::collect_skills_from_dir(
+            let mut fresh = crate::skills::collect_skills_from_dir(
                 &walk_dir,
                 &checkout.url,
                 &checkout.version,
                 mode,
                 std::io::stdin().is_terminal(),
             )?;
+            let config = crate::skills_config::SkillSource {
+                url: checkout.url.clone(),
+                all,
+                select: if all {
+                    vec![]
+                } else {
+                    fresh.iter().map(|s| s.name.clone()).collect()
+                },
+                subdir,
+                rev,
+                shared_markdown: vec![],
+            };
+            crate::skill_resources::prepare(&mut fresh, &checkout.path, &config)?;
 
             // Installing is additive across sources: keep what other sources
             // put here, replace only this source's own skills. `--all` is a
             // full sync of *this* source, so anything it dropped upstream goes.
             let slug = crate::skills::derive_source_slug(&checkout.url);
-            let mut desired: Vec<_> = crate::skills::read_installed_skills(&tree)?
+            let mut desired: Vec<_> = crate::skills::read_skills_for_mutation(&tree)?
                 .into_iter()
                 .filter(|s| crate::skills::derive_source_slug(&s.source) != slug)
-                .filter_map(|s| reload(&dir, &s))
-                .collect();
+                .map(|s| reload(&dir, &s))
+                .collect::<Result<_>>()?;
             desired.extend(fresh);
             let written = sync_sources(&tree, desired)?;
             info!(
@@ -214,13 +230,14 @@ pub(crate) fn run(paths: &AsobiPaths, subcommand: Option<SkillsCommands>) -> Res
                 let checkout =
                     checkout_source(&declared.url, &paths.caches_dir(), declared.rev.as_deref())?;
                 let walk_dir = scoped_dir(&checkout.path, declared.subdir.as_deref())?;
-                let collected = crate::skills::collect_skills_from_dir(
+                let mut collected = crate::skills::collect_skills_from_dir(
                     &walk_dir,
                     &checkout.url,
                     &checkout.version,
                     mode,
                     false,
                 )?;
+                crate::skill_resources::prepare(&mut collected, &checkout.path, declared)?;
                 info!("{}: {} selected", declared.url, collected.len());
                 desired.extend(collected);
             }
@@ -237,7 +254,7 @@ pub(crate) fn run(paths: &AsobiPaths, subcommand: Option<SkillsCommands>) -> Res
             );
         }
         Some(SkillsCommands::Update { source }) => {
-            let installed = crate::skills::read_installed_skills(&tree)?;
+            let installed = crate::skills::read_skills_for_mutation(&tree)?;
             let sources: std::collections::BTreeSet<String> = installed
                 .iter()
                 .filter(|s| !s.source.is_empty())
@@ -269,32 +286,40 @@ pub(crate) fn run(paths: &AsobiPaths, subcommand: Option<SkillsCommands>) -> Res
             // over untouched so a scoped update never prunes a sibling source.
             let mut desired = Vec::new();
             for s in &installed {
-                if !sources.contains(&s.source)
-                    && let Some(kept) = reload(&dir, s)
-                {
-                    desired.push(kept);
+                if !sources.contains(&s.source) {
+                    desired.push(reload(&dir, s)?);
                 }
             }
             for src in sources {
                 info!("Updating skills from {}...", src);
-                let (git_url, is_git) = classify_skill_source(&src);
-                let (target_path, version) = if is_git {
-                    get_or_update_cached_repo(&git_url, &paths.caches_dir(), None)?
-                } else {
-                    let local_path = std::path::Path::new(&src);
-                    if !local_path.exists() {
-                        warn!("Local path {} does not exist, skipping update", src);
-                        continue;
-                    }
-                    (local_path.to_path_buf(), "local".to_string())
+                let policies: Vec<_> = installed
+                    .iter()
+                    .filter(|s| s.source == src)
+                    .filter_map(|s| s.source_config.as_ref())
+                    .collect();
+                let fallback = crate::skills_config::SkillSource {
+                    url: src.clone(),
+                    all: true,
+                    select: vec![],
+                    subdir: None,
+                    rev: None,
+                    shared_markdown: vec![],
                 };
-                desired.extend(crate::skills::collect_skills_from_dir(
-                    &target_path,
-                    &git_url,
-                    &version,
-                    crate::skills::SelectionMode::All,
+                let policy = policies.first().copied().unwrap_or(&fallback);
+                if policies.iter().any(|other| *other != policy) {
+                    anyhow::bail!("inconsistent source policy for {src}; run skills sync");
+                }
+                let checkout = checkout_source(&src, &paths.caches_dir(), policy.rev.as_deref())?;
+                let walk_dir = scoped_dir(&checkout.path, policy.subdir.as_deref())?;
+                let mut fresh = crate::skills::collect_skills_from_dir(
+                    &walk_dir,
+                    &checkout.url,
+                    &checkout.version,
+                    policy.selection()?,
                     false,
-                )?);
+                )?;
+                crate::skill_resources::prepare(&mut fresh, &checkout.path, policy)?;
+                desired.extend(fresh);
             }
             let written = sync_sources(&tree, desired)?;
             info!(
@@ -305,7 +330,7 @@ pub(crate) fn run(paths: &AsobiPaths, subcommand: Option<SkillsCommands>) -> Res
             );
         }
         Some(SkillsCommands::Remove { target }) => {
-            let installed = crate::skills::read_installed_skills(&tree)?;
+            let installed = crate::skills::read_skills_for_mutation(&tree)?;
             let (dropped, kept): (Vec<_>, Vec<_>) = installed.into_iter().partition(|s| {
                 s.name == target
                     || s.dir == target
@@ -319,7 +344,10 @@ pub(crate) fn run(paths: &AsobiPaths, subcommand: Option<SkillsCommands>) -> Res
                     dir.display()
                 );
             }
-            let desired: Vec<_> = kept.iter().filter_map(|s| reload(&dir, s)).collect();
+            let desired: Vec<_> = kept
+                .iter()
+                .map(|s| reload(&dir, s))
+                .collect::<Result<_>>()?;
             let written = sync_sources(&tree, desired)?;
             info!(
                 "Removed {} skill(s) from {}",
@@ -359,9 +387,9 @@ pub(crate) fn run(paths: &AsobiPaths, subcommand: Option<SkillsCommands>) -> Res
 fn reload(
     dir: &std::path::Path,
     installed: &crate::skills::InstalledSkill,
-) -> Option<crate::skills::CollectedSkill> {
-    let body = std::fs::read_to_string(dir.join(&installed.dir).join("SKILL.md")).ok()?;
-    Some(crate::skills::CollectedSkill {
+) -> Result<crate::skills::CollectedSkill> {
+    let body = std::fs::read_to_string(dir.join(&installed.dir).join("SKILL.md"))?;
+    Ok(crate::skills::CollectedSkill {
         dir_name: installed.dir.clone(),
         name: installed.name.clone(),
         source: installed.source.clone(),
@@ -371,5 +399,12 @@ fn reload(
         // Copying it onto itself is a no-op: every file compares byte-identical
         // and is skipped, which keeps this path from churning mtimes.
         bundle_dir: dir.join(&installed.dir),
+        source_config: installed.source_config.clone(),
+        shared_markdown: crate::skill_resources::reload(
+            dir,
+            &installed.source,
+            installed.source_config.as_ref(),
+        )?,
+        bundle_rewrites: Default::default(),
     })
 }
