@@ -66,10 +66,13 @@ When an agent or user requests detailed entity views via `asobi show --with-ids`
 ### 2.3 CLI commands
 
 - **Delete by ID**:
+
   ```bash
   asobi rm-obs my-entity 1 --id
   ```
+
 - **Update by ID**:
+
   ```bash
   asobi update-obs my-entity 2 "next: code tests" --id
   ```
@@ -88,10 +91,12 @@ To support seamless upgrades of existing databases without data loss or manual s
    - Renames `asobi_observations` to `asobi_observations_old`.
    - Creates the new `asobi_observations` table using the `INTEGER PRIMARY KEY AUTOINCREMENT` schema.
    - Copies existing rows, ordering by `created_at` and the original `rowid` to preserve exact insertion sequence:
+
      ```sql
      INSERT INTO asobi_observations (entity_name, content, created_at)
      SELECT entity_name, content, created_at FROM asobi_observations_old ORDER BY created_at, rowid;
      ```
+
    - Drops the `asobi_observations_old` table.
    - Restores `PRAGMA foreign_keys = ON` and rebuilds the FTS5 virtual index.
 

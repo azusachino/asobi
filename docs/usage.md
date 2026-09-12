@@ -275,19 +275,19 @@ Every command is a single CLI invocation. No server to start, no authentication;
 
 ### Create
 
-```
+```text
 asobi new <NAME> <TYPE> [<NAME> <TYPE> ...] [--obs <OBSERVATION> ...]
 ```
 
 Creates one or more entities from repeated `NAME TYPE` pairs — `new A task B concept` creates two — so the positional count must be a multiple of 2. Names that already exist are silently skipped (`INSERT OR IGNORE`), which makes the command safe to re-run. Repeatable `--obs` seeds observations at creation; with several entities in one call, each seeded observation is added to all of them. Prefer one batched call to many invocations.
 
-```
+```text
 asobi obs <NAME> <CONTENT> [<CONTENT> ...]
 ```
 
 Appends observations to an entity that must already exist. Observations are capped per entity — 200 by default, oldest evicted — configurable through `ASOBI_OBSERVATION_LIMIT` or `observation_limit` in `asobi.toml`.
 
-```
+```text
 asobi link <FROM> <TO> <TYPE> [<FROM> <TO> <TYPE> ...]
 ```
 
@@ -295,13 +295,13 @@ Creates directed relations from repeated `FROM TO TYPE` triples, so the position
 
 ### Read
 
-```
+```text
 asobi graph
 ```
 
 Returns the whole graph as `{ "entities": [...], "relations": [...] }`. Entities carry their truths and observation counts; observation bodies stay lazy.
 
-```
+```text
 asobi search [QUERY] [--limit <N>] [--where KEY=VALUE ...]
 ```
 
@@ -315,14 +315,14 @@ The three are combined with reciprocal rank fusion rather than concatenated, so 
 
 FTS5 operators `AND`, `OR`, `NOT` and the `*` prefix wildcard all apply. Bare terms are ANDed, so a multi-word question can match nothing even when every word appears somewhere. Rather than return a silent zero — indistinguishable from "nothing was ever recorded" — `search` retries the query with `OR` and says so on stderr:
 
-```
+```text
 WARN no exact match for "deploy without cache bump"; widened to any-term and
      found 10. Narrow with fewer words, or quote an exact phrase.
 ```
 
 `--where KEY=VALUE` filters the results by entity truths and is repeatable; multiple filters intersect (AND). A query term and `--where` filters likewise intersect. `--limit` defaults to **10** matched nodes — raise it explicitly for a larger ranked read. Use `graph` when the whole graph is genuinely wanted; widening `search` until it returns everything is not the same thing.
 
-```
+```text
 asobi show <NAME> [<NAME> ...] [--expand <RELATION_TYPE> ...] [--with-ids]
 ```
 
@@ -336,7 +336,7 @@ Fetch heavy content with `show` for the specific entities needed rather than thr
 
 ### Truths
 
-```
+```text
 asobi truth <NAME> <KEY> <VALUE>
 asobi rm-truth <NAME> <KEY>
 ```
@@ -345,7 +345,7 @@ asobi rm-truth <NAME> <KEY>
 
 ### Delete
 
-```
+```text
 asobi rm <NAME> [<NAME> ...]
 asobi update-obs <NAME> <OLD_CONTENT> <NEW_CONTENT> [--id]
 asobi rm-obs <NAME> <CONTENT> [--id]
@@ -356,7 +356,7 @@ asobi unlink <FROM> <TO> <RELATION_TYPE>
 
 ### Workspace
 
-```
+```text
 asobi init            # XDG (default) — user-level directories under $HOME
 asobi init --local    # project-local — ./.asobi/ plus ./asobi.toml
 asobi stats           # entity, relation, and observation counts
@@ -369,7 +369,7 @@ Both `init` modes are idempotent. `completions` is generated from the running bi
 
 ### Maintenance
 
-```
+```text
 asobi compact
 asobi purge [--older-than <DAYS>] [--apply]
 asobi reset [--force]
@@ -383,7 +383,7 @@ asobi reset [--force]
 
 ### Skills
 
-```
+```text
 asobi skills                                                    # list, grouped by source
 asobi skills install <SOURCE> [--all | --select <NAME>...] [--subdir <PATH>] [--rev <REV>]
 asobi skills sync
@@ -402,7 +402,7 @@ Nothing else is copied. `scripts/`, `assets/` and tool-specific config are fetch
 
 ### Tasks
 
-```
+```text
 asobi tasks plan <EPIC> --objective <TEXT> --task <TITLE>...
 asobi tasks list [EPIC] [--all]
 asobi tasks dispatch [TASK] [--agent <NAME>]
