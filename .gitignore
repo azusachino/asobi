@@ -11,6 +11,7 @@ asobi.db
 .fastembed_cache/
 
 # ── Dev artifacts ─────────────────────────────────────────────────────────────
+.rumdl_cache/
 .DS_Store
 memory_export.json
 tools_list.json

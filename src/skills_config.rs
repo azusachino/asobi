@@ -5,7 +5,7 @@
 //! declares is installed, and whatever it does not declare is removed.
 
 use anyhow::{Result, bail};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
 /// Where synced skills are written when `[skills].path` is absent.
@@ -27,7 +27,7 @@ pub struct SkillsConfig {
 
 /// One declared source: a git URL or local path, plus which of its skills to
 /// take.
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct SkillSource {
     /// Git URL or local directory path.
@@ -35,7 +35,8 @@ pub struct SkillSource {
     /// Take every skill the source offers.
     #[serde(default)]
     pub all: bool,
-    /// Take only these skills, by name.
+    /// Take skills by exact path relative to the discovery scope, or by an
+    /// unambiguous directory suffix or frontmatter name.
     #[serde(default)]
     pub select: Vec<String>,
     /// Scope the install walk to this subdirectory of the checkout, relative
@@ -56,6 +57,9 @@ pub struct SkillSource {
     /// what makes adopting a new one a decision.
     #[serde(default)]
     pub rev: Option<String>,
+    /// Explicit checkout-relative Markdown files shared by selected skills.
+    #[serde(default)]
+    pub shared_markdown: Vec<PathBuf>,
 }
 
 #[derive(Deserialize)]
@@ -68,6 +72,9 @@ impl SkillSource {
     /// exclusive, and one of them is required — an unqualified source would
     /// otherwise mean "prompt", which a declarative sync cannot honour.
     pub fn selection(&self) -> Result<crate::skills::SelectionMode> {
+        for path in &self.shared_markdown {
+            crate::skill_resources::validate_resource_path(path)?;
+        }
         match (self.all, self.select.is_empty()) {
             (true, false) => bail!(
                 "source '{}' declares both `all` and `select`; pick one",
@@ -182,6 +189,7 @@ subdir = "skills"
             select: vec!["a".into()],
             subdir: None,
             rev: None,
+            shared_markdown: vec![],
         };
         assert!(both.selection().is_err());
 
@@ -191,6 +199,7 @@ subdir = "skills"
             select: vec![],
             subdir: None,
             rev: None,
+            shared_markdown: vec![],
         };
         assert!(neither.selection().is_err());
     }

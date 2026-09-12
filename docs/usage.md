@@ -238,9 +238,84 @@ asobi skills sync
 
 `sync` treats the config as the whole truth: it installs what is declared, prunes what is not, and writes each selected skill to `<path>/<source-slug>@<skill-name>/SKILL.md`. Directories without `@` in the name — vendored checkouts, hand-written skills — are left alone. Declare exactly one of `all = true` or `select = [...]` per source.
 
+Selectors accept a skill's directory path relative to the source walk root
+(`subdir` when set), a unique component suffix of that path, or its frontmatter
+name. Exact paths take precedence over suffix and name matches. For example,
+`select = ["testing/test-driven-development"]` selects that
+directory even when its display name is `Test-Driven Development (TDD)`.
+Ambiguous selectors fail with the matching paths; repeated selections install
+the skill once. Select by path when a declaration should survive a display-name
+change. Installed directory names retain the existing `<source-slug>@<skill-name>`
+layout, so a name change can still rename the installed directory. Distinct
+selections that normalize to the same destination fail before writing anything.
+
 The skills directory is the store of record: a skill exists on disk and nowhere else, so it does not appear in `graph`, `search`, or `show`, and `rg` over the skills directory is how you search one. `path` defaults to `.agents/skills`, resolved against the `asobi.toml` that declares it, or against the discovered workspace root when no config declares a `[skills]` block — so `skills` and `skills show` work under a plain `asobi init` too.
 
 `sync` also records each skill's directory, name, source and the exact commit it came from, in a `skills.json` manifest under the data directory (`.asobi/data/` project-local, `~/.local/share/asobi/data/` under XDG). `asobi skills` reports that commit, and `update` and `remove` use it to find a source again after the fact. It lives there rather than beside the skills because it is state, not project content. Committing the skill tree is what turns an upstream skill change into a reviewable diff; the manifest is regenerated and does not need committing.
+
+Sources may explicitly declare shared Markdown outside individual skill directories:
+
+```toml
+[[skills.source]]
+url = "https://github.com/addyosmani/agent-skills.git"
+rev = "cda4542ade0f3c532494b9a48837eb01d39925f1"
+subdir = "skills"
+select = ["code-review-and-quality"]
+shared_markdown = [
+  "references/security-checklist.md",
+  "references/performance-checklist.md",
+]
+```
+
+`shared_markdown` defaults to empty. Each entry names one exact `.md` or
+`.markdown` file relative to the checkout root, independently of `subdir`.
+Directories, wildcards, absolute paths, traversal, symlinks, and `SKILL.md`
+entry points are rejected.
+Resources are installed at `<path>/.shared/<source-slug>/<source-path>`; two
+sources can own the same reference filename without sharing its contents.
+Non-Markdown files, scripts, assets, and files merely mentioned by a document
+are never selected by this feature.
+
+Asobi relocates references to the explicitly selected files in single-backtick
+inline code and simple inline Markdown links, preserving `#fragments`. The
+mapping applies to `SKILL.md`, bundled Markdown, and the selected shared
+documents. For example, `../../references/security-checklist.md` becomes
+`../.shared/addyosmani-agent-skills/references/security-checklist.md` in an
+installed skill. A declared reference in unsupported syntax (such as a
+reference-style link or a fenced code block) fails with its document and path;
+Asobi does not guess how to rewrite it. Other text and undeclared references
+remain unchanged. Selecting shared documents does not install another skill
+or guarantee that all of a source's other dependencies are available.
+
+Before writing, Asobi checks each selected `SKILL.md` for simple inline relative
+file links, single-backtick relative file paths, and standalone `/skill-name` or
+`/source-slug@skill-name` invocations. File targets must have a filename
+extension and contain no whitespace.
+It warns when these cannot resolve from the planned installation, including
+bundled and declared shared Markdown, skills from other selected sources, and
+retained local skills. URLs, absolute file paths, fragment-only links and
+code-block examples are excluded. These warnings do not select, fetch, copy or
+execute dependencies.
+They are advisory: companion documents, other Markdown syntax and skills
+provided elsewhere by an agent host are outside this check. Invalid explicit
+shared-file declarations still fail rather than becoming warnings.
+
+The manifest records resource ownership, source paths, and resolved commits,
+plus each skill's source selection, `subdir`, `rev`, and shared-file declaration.
+`update` retains that declaration and pin; `sync` adopts configuration changes.
+Removing a source or omitting a shared file from the next sync prunes only its
+recorded resources. Removing the final skill from a source removes its shared
+files. Files without an ownership record are never overwritten or pruned.
+Old manifests remain readable; sources without a recorded declaration retain
+the historical update behavior of selecting all skills from the source root.
+
+Shared-resource ownership requires the manifest matching this exact skills
+tree. If it is lost or belongs to another tree, mutations refuse to adopt,
+overwrite, or prune existing `.shared` files. Restore the matching manifest,
+or inspect and move the existing shared files to a backup before syncing anew.
+If a manifest-owned skill or resource is missing, restore it before mutating
+the tree; a partial installation must not silently authorize deleting a
+sibling source. Listing retains its ordinary tolerant scan behavior.
 
 The manifest names the skills directory it describes, in a top-level `dir` field. One data directory can be reached from more than one skills directory — under XDG the data directory is global while the skills path follows the working directory — so a manifest that could not say which tree it meant would be indistinguishable from one saying the tree is empty. When it names a different directory, `skills` falls back to scanning the actual one, listing what is there without source or commit rather than reporting another project's skills or none at all.
 
@@ -392,13 +467,16 @@ asobi skills remove <NAME | SOURCE>
 asobi skills show <NAME>
 ```
 
-`install` takes a git URL or a local path; git sources are shallow-cloned into a reused cache under `.asobi/caches/<slug>`. Frontmatter supplies the metadata, with the name falling back to the file or directory name. `--all` is a full sync of that source, pruning skills deleted or renamed upstream; `--select` and the interactive picker are additive. Passing neither flag opens a numbered picker, which needs a TTY and otherwise errors asking for a flag. `--subdir` scopes the walk to one directory of the checkout, for sources that mirror the same skills across several tool-specific directories and would otherwise collide on name. `--rev` pins to a commit, tag, or branch instead of the default branch. Installing one source never disturbs another's skills.
+`install` takes a git URL or a local path; git sources are shallow-cloned into a reused cache under `.asobi/caches/<slug>`. Frontmatter supplies the metadata, with the name falling back to the directory name. `--all` installs the source's full set; `--select` and the interactive picker install the chosen set. Each replaces that source's previously installed selection, leaving other sources' skills intact. Passing neither flag opens a numbered picker, which needs a TTY and otherwise errors asking for a flag. `--subdir` scopes the walk to one directory of the checkout, for sources that mirror the same skills across several tool-specific directories and would otherwise collide on name. `--rev` pins to a commit, tag, or branch instead of the default branch.
 
 A skill is a directory containing `SKILL.md`; a loose `<name>.md` file is not a skill and is not installed. Its Markdown comes across with it — `references/*.md` and any sibling `.md` — so the on-demand references the spec relies on still resolve after install.
 
-Nothing else is copied. `scripts/`, `assets/` and tool-specific config are fetched from a git URL, and that is where published attack research finds payloads hidden, since scanners read the body and not the artifacts beside it. Skipped files are named in a warning; fetch one deliberately from the source if a step genuinely needs it.
+Nothing else is copied. Scripts, assets and tool-specific configuration remain in
+the source checkout. Skipped files are named in a warning; review and fetch one
+deliberately from its owning source if a step needs it. A successful installation
+does not establish that the skill's workflow can run.
 
-`sync` reconciles against the `[skills]` block in the discovered `asobi.toml`, as described under [Common workflows](#common-workflows). `update` refreshes from cache via `git fetch` and `reset --hard`, re-cloning if that fails; it needs `git` on `PATH`, and a scoped `update <source>` leaves other sources alone. `show` prints a skill's `SKILL.md` as raw Markdown, matched on its frontmatter name or its directory name. Never hand-edit an installed skill — the next sync overwrites it; edit the source repository instead.
+`sync` reconciles against the `[skills]` block in the discovered `asobi.toml`, as described under [Common workflows](#common-workflows). `update` refreshes from cache via `git fetch` and `reset --hard`, re-cloning if that fails; it needs `git` on `PATH`, retains recorded source selection and pins, and a scoped `update <source>` leaves other sources alone. `show` prints a skill's `SKILL.md` as raw Markdown, matched on its frontmatter name or its directory name. Never hand-edit an installed skill — the next sync overwrites it; edit the source repository instead.
 
 ### Tasks
 
@@ -436,7 +514,7 @@ The type given to `asobi new` determines what `--where` filters, `compact`, and 
 
 Only the durable types reach Markdown through `compact`, and only `session` and terminal `task` entities are eligible for `purge`, so a decision typed as `session` is both invisible to topics and reachable by retention.
 
-Names are hierarchical and colon-separated — `project-x`, `project-x:session`, `project-x:epic`, `project-x:epic:task-1` — and preserve case and dots, so `CLAUDE.md` and `UserPreferences` are valid names. Installed skills are named `skill:<source-slug>:<name>`. Relations read as verb phrases: `part_of`, `depends_on`, `supersedes`, `extends`, `uses`, `blocks`.
+Names are hierarchical and colon-separated — `project-x`, `project-x:session`, `project-x:epic`, `project-x:epic:task-1` — and preserve case and dots, so `CLAUDE.md` and `UserPreferences` are valid names. Skills are filesystem directories, not graph entities. Relations read as verb phrases: `part_of`, `depends_on`, `supersedes`, `extends`, `uses`, `blocks`.
 
 ## Response contract
 
