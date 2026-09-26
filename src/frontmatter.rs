@@ -1,8 +1,8 @@
-//! Shared YAML-frontmatter handling for Markdown topics and skills.
+//! Shared YAML-frontmatter handling for Markdown topics.
 //!
-//! One place owns the read/write contract so the compact *writer*
-//! ([`quote`]) and the skills *readers* ([`parse`]) can never drift:
-//! quoting added on write is always reversed on read, the closing `---`
+//! One place owns the read/write contract so quoting added by the compact
+//! *writer* ([`quote`]) and reversed by the *reader* ([`parse`]) can never
+//! drift: the closing `---`
 //! must be a whole line (a thematic break in the body never truncates the
 //! document), and CRLF endings are tolerated everywhere.
 //!
@@ -16,8 +16,8 @@
 //! Scope of the supported subset: a leading `---` block of `key: value` lines,
 //! values optionally wrapped in matching single/double quotes; everything after
 //! the closing `---` is the opaque body. No nesting, lists, multi-line scalars,
-//! or comments — callers ([`crate::compact`] and [`crate::skills`]) only ever
-//! emit/consume that shape.
+//! or comments — the caller ([`crate::compact`]) only ever
+//! emits/consumes that shape.
 
 use std::collections::BTreeMap;
 
@@ -122,9 +122,9 @@ mod tests {
 
     #[test]
     fn parse_unquotes_double_and_single() {
-        let raw = "---\nname: \"my-skill\"\ndescription: 'it''s fine'\n---\nbody";
+        let raw = "---\nname: \"my-topic\"\ndescription: 'it''s fine'\n---\nbody";
         let fm = parse(raw).unwrap();
-        assert_eq!(fm.get("name"), Some("my-skill"));
+        assert_eq!(fm.get("name"), Some("my-topic"));
         assert_eq!(fm.get("description"), Some("it's fine"));
     }
 

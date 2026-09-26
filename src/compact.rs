@@ -58,13 +58,10 @@ pub fn sync_graph_to_markdown(graph_store: &impl GraphStore) -> Result<usize> {
 ///   from the graph via `search --where status=…` / `show`. Embedding it only
 ///   churns the graph and pollutes operational reads; full archival
 ///   is not this command's job.
-/// - `skill`: the installer owns skill records. Syncing them here would emit a
-///   second topic under the slug, so a skill stays graph- and installer-owned —
-///   read it via `search`, `show`, or `skills show`.
 ///
 /// Denylist (not allowlist) so new knowledge types persist by default.
 fn should_sync(entity_type: &str) -> bool {
-    !matches!(entity_type, "session" | "task" | "skill")
+    !matches!(entity_type, "session" | "task")
 }
 
 /// Write the YAML frontmatter block. Beyond the `title`/`type`/`slug` identity
@@ -207,7 +204,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_should_sync_skips_volatile_and_skill_types() {
+    fn test_should_sync_skips_volatile_types() {
         // Knowledge -> persisted to the Markdown projection.
         assert!(should_sync("project"));
         assert!(should_sync("concept"));
@@ -217,8 +214,6 @@ mod tests {
         // Volatile operational state stays graph-only.
         assert!(!should_sync("session"));
         assert!(!should_sync("task"));
-        // Skills are already indexed by the installer; syncing would duplicate.
-        assert!(!should_sync("skill"));
     }
 
     fn entity(name: &str, entity_type: &str) -> EntityOutput {

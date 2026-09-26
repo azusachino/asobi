@@ -183,9 +183,9 @@ fn test_cli_agent_features() {
     // 11. Test JSON error formatting when --json is set globally
     let output = Command::new(&bin_path)
         .arg("--json")
-        .arg("skills")
-        .arg("show")
-        .arg("no_such_skill_xyz")
+        .arg("tasks")
+        .arg("close")
+        .arg("no_such_epic_xyz")
         .env("ASOBI_DATABASE_URL", db_path_str)
         .output()
         .expect("failed to execute asobi");

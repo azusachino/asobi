@@ -3,7 +3,6 @@ mod dispatch;
 mod graph;
 mod output;
 mod runtime;
-mod skills;
 
 use clap::Parser;
 use tracing::error;

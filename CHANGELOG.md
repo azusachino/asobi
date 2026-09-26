@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+### Removed
+
+- **Skills management is gone** (see [ADR 0004](docs/decisions/0004-remove-skills.md)). The `skills` command group (`install`, `sync`, `update`, `remove`, `show`), the declarative `[skills]` block, the shared-Markdown relocation, the reference diagnostics, the `data_dir/skills.json` provenance manifest, and the git-cache helpers behind them are all deleted. Asobi is a graph and task CLI again. Install the companion skill — and any other skills — with the maintained [`skills` CLI](https://github.com/vercel-labs/skills) (`npx skills add <source> --skill <name> --agent universal`). Installed skill trees on disk are untouched; nothing Asobi installed is removed by upgrading.
+- **An existing `[skills]` block in `asobi.toml` is silently ignored.** `AsobiConfig` does not deny unknown fields, so the block simply has no reader. No warning, no error, and no migration needed.
+- **A stale `data_dir/skills.json` is left where it is.** Asobi no longer reads or deletes it; removing it is your choice.
+- `asobi init` no longer scaffolds the commented `[skills]` block in its project-local config.
+- `verify-skills-spec` and `scripts/verify_skills_spec.py` are removed; `make check` no longer validates installed skills (there is nothing to validate).
+
 ## v0.7.3 — Shared Markdown, and skills selected by path
 
 ### Added

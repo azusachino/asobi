@@ -1,6 +1,6 @@
 # Asobi architecture
 
-Asobi is a focused, synchronous knowledge-graph CLI. `main.rs` is only the process entry point; command routing, API contracts, storage, tasks, skills, and compaction live in their own modules.
+Asobi is a focused, synchronous knowledge-graph CLI. `main.rs` is only the process entry point; command routing, API contracts, storage, tasks, and compaction live in their own modules.
 
 ```text
 CLI commands
@@ -24,7 +24,7 @@ The API is synchronous because this is a local SQLite CLI: each operation is a s
 
 ## Durable projections
 
-`compact` renders durable graph entities to Markdown topics. It is a deterministic graph-to-Markdown projection; it does not ingest documents or build embeddings. Sessions and tasks remain graph data, available through graph, search, and show. Skills are not graph data: they live on the filesystem under the skills directory, with a `skills.json` manifest in the data directory recording each one's source and commit, plus the skills directory those entries describe.
+`compact` renders durable graph entities to Markdown topics. It is a deterministic graph-to-Markdown projection; it does not ingest documents or build embeddings. Sessions and tasks remain graph data, available through graph, search, and show.
 
 ## Verification
 
