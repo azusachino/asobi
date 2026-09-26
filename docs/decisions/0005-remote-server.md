@@ -4,7 +4,7 @@ title: "0005. Shared graph through asobi serve and a JSON-RPC remote backend"
 date: 2026-09-26
 status: proposed
 tags: [storage, api, server, rpc, v0.8]
-related: [0001-sqlite-only-v2-rewrite.md, 0002-why-rusqlite.md, 0004-remove-skills.md]
+related: [0001-sqlite-only-v2-rewrite.md, 0002-why-rusqlite.md, 0004-remove-skills.md, 0006-tasks-replace-sessions.md]
 ---
 
 ## Context
@@ -31,12 +31,17 @@ One binary, two ways to run:
 
 ```text
 local (default)   asobi ──► SqliteStore ──► data_dir/asobi.db
-remote            asobi ──► RemoteStore ──HTTP──► asobi serve ──► SqliteStore
+remote            asobi ──► RemoteStore ──HTTP──► asobi serve ──► SqliteStore per graph name
 ```
 
-- **`asobi serve --listen <addr:port>`** is a long-lived process that owns one `SqliteStore` and answers JSON-RPC.
+- **`asobi serve --listen <addr:port>`** is a long-lived process that holds **named graphs**, one SQLite file per graph name in its data directory, and answers JSON-RPC.
 - **`RemoteStore`** implements the same `v2` traits (`GraphStore`, `SearchStore`, `MaintenanceStore`, `TaskStore`) by sending one RPC per trait call. Commands keep depending on traits only, so every command, flag, and output is identical in both modes.
-- **Configuration:** `remote = "http://host:port"` in `asobi.toml`, overridable by `ASOBI_REMOTE`. When set, the graph lives on the server and `data_dir` / `ASOBI_DATABASE_URL` are not used for it. `topics_dir` stays local, so `compact` writes its Markdown on the calling device. Local mode stays the default.
+- **Configuration:** two keys in `asobi.toml`, each overridable by its environment variable:
+  - `remote = "https://asobi.h.azusachino.com"` (`ASOBI_REMOTE`) selects remote mode and the server;
+  - `graph = "<name>"` (`ASOBI_GRAPH`) selects the graph on it, defaulting to `asobi`.
+
+  When `remote` is set, the graph lives on the server and `data_dir` / `ASOBI_DATABASE_URL` are not used for it. `topics_dir` stays local, so `compact` writes its Markdown on the calling device. Local mode stays the default.
+- **Graph names** match `[a-z0-9-]+`, because a name becomes a file on the server; anything else is rejected before touching the disk. Naming a graph the server does not hold yet **creates it**: there are only a few graphs, each set once in a config file.
 
 ### Data placement
 
@@ -44,17 +49,19 @@ The graph moves; files stay. In remote mode:
 
 | Data | Lives |
 | --- | --- |
-| The graph: entities, observations, truths, relations, including session and task entities | **Server** |
-| `retention_days` | **Server** config (the server runs the sweep) |
+| The graph: entities, observations, truths, relations, including task entities | **Server** |
+| `retention_days`, `abandon_days` | **Server** config (the server runs the sweeps, see [0006](0006-tasks-replace-sessions.md)) |
 | `observation_limit` | **Client** config, sent with each call |
 | `compact` output under `topics_dir` | **Client**, generated from the remote graph |
 | `asobi.toml` itself | **Client**, per workspace |
 
-The choice is made **per workspace, for the whole graph**: a workspace whose `asobi.toml` sets `remote` uses the server for everything; one that does not stays local. There is no per-entity-type split. Mixing would put relations across two stores, merge search across two backends, and let a task reference a session other devices cannot see. One server holds one graph; workspaces sharing it stay apart by their existing entity-name prefixes (`<project>:*`). A device-private workspace simply does not set `remote`.
+The choice is made **per workspace, for the whole graph**: a workspace whose `asobi.toml` sets `remote` uses the server for everything; one that does not stays local. There is no per-entity-type split. Mixing would put relations across two stores, merge search across two backends, and let an entity reference another that other devices cannot see. Separation between workspaces is by graph name: workspaces naming the same graph share it, and within a graph entities stay apart by their `<project>:*` prefixes. A device-private workspace simply does not set `remote`.
+
+No existing graph is migrated: the server starts empty, and local graphs stay where they are.
 
 ### RPC contract
 
-- **Transport:** HTTP/1.1 `POST /rpc`, `Content-Type: application/json`, one [JSON-RPC 2.0](https://www.jsonrpc.org/specification) request object per HTTP request. No batches, no notifications: every request carries an `id`.
+- **Transport:** HTTP/1.1 `POST <remote>/rpc/<graph>`, `Content-Type: application/json`, one [JSON-RPC 2.0](https://www.jsonrpc.org/specification) request object per HTTP request. No batches, no notifications: every request carries an `id`.
 - **Methods:** one per `v2` trait method, named `<trait>.<method>` in camelCase. Params are a named object whose fields are the trait method's arguments; results are the method's return value, serialized with the existing camelCase serde types (`()` becomes `null`).
 
 | Method | Params | Result |
@@ -99,10 +106,13 @@ The choice is made **per workspace, for the whole graph**: a workspace whose `as
 ### Server behavior
 
 - **Access:** no authentication. The server must only be reachable over the owner's tailnet; exposure is a deployment concern, and binding to a public interface is out of contract.
-- **One request at a time.** SQLite has one writer; serial handling matches it and needs no pool or locking of its own.
-- **`reset` is local-only.** Over RPC it is refused, so an agent on any device cannot wipe the shared graph. Run `asobi reset` on the server host against the file directly when that is intended.
-- **Retention keeps running.** The CLI sweeps once per process before its first write; a server process lives for weeks, so `serve` sweeps before a write when the last sweep is more than a day old. `retention_days` is the server's setting.
-- **No fallback when unreachable.** A remote-mode command whose server cannot be reached fails with `Unavailable`. No local writes, no later merge.
+- **One request at a time.** SQLite has one writer; serial handling matches it and needs no pool or locking of its own. The background sweep takes the same turn as a request.
+- **`reset` is local-only.** Over RPC it is refused, so an agent on any device cannot wipe a shared graph. Run `asobi reset` on the server host against the file directly when that is intended.
+- **Sweeps run in the background.** The CLI sweeps once per process before its first write; a server process lives for weeks, so `serve` runs the same sweeps (retention, and idle-task abandonment from [0006](0006-tasks-replace-sessions.md)) on a background thread, hourly, over every graph it holds.
+
+### When the server is unreachable
+
+A remote-mode command whose server cannot be reached within about two seconds **falls back to the workspace's local graph**, and prints a warning on stderr on every such command, stating that the command is running against the local graph and its writes will not reach the server. Nothing is merged later: writes made during an outage stay in the local graph. This keeps agents working through an outage at the known cost that their memory from that window is invisible to other devices.
 
 ### Libraries
 
@@ -112,13 +122,15 @@ Server and client must stay synchronous, without an async runtime (the constrain
 
 - `tests/backend_api_contract_test.rs` and `tests/concurrency_test.rs` run against `RemoteStore` with an in-process server on `127.0.0.1:0`, in addition to `SqliteStore`. SQLite-specific cases (migrations, `sqlite_master`, incremental vacuum) stay SQLite-only.
 - Error round-trip: each `ApiError` variant survives server → wire → client unchanged.
-- The handshake rejects a mismatched `apiVersion`; `maintenance.reset` over RPC is refused; an unreachable server yields `Unavailable`.
+- The handshake rejects a mismatched `apiVersion`; `maintenance.reset` over RPC is refused; an unknown graph name is created, and an invalid one rejected.
+- An unreachable server falls back to the local graph, with the warning on every command.
 
 ## Consequences
 
 - Commands built from several trait calls (`tasks plan`, `tasks sync`, `tasks close`) are not atomic in remote mode: a failure part-way leaves the earlier calls applied. Accepted for now; a command that needs atomicity later gets a server-side method, not a client-side transaction.
 - Each remote call is one HTTP round trip over the tailnet, so a command costs milliseconds per call instead of a local file access. Acceptable for a CLI.
-- The server becomes a deployable (harus-k3s manifest, PVC, backup), owned by that repository, not this one.
+- The server becomes a deployable, owned by harus-k3s, not this repository: a Deployment with a PVC, a Traefik `IngressRoute` at `asobi.h.azusachino.com` (tailnet-only), and the existing SQLite backup CronJob.
+- An outage splits memory silently apart from the warning: what agents write during it stays on their device.
 
 ## Roadmap: PostgreSQL behind the server
 
