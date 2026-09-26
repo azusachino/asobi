@@ -1,49 +1,67 @@
-use asobi::api::{GraphStore, OpenNodes, SearchQuery, SearchStore};
-use asobi::storage::Storage;
+use asobi::api::{GraphStore, MaintenanceStore, OpenNodes, SearchQuery, SearchStore};
+use asobi::model::EntityInput;
+use asobi::storage::SqliteStore;
 use criterion::{Criterion, criterion_group, criterion_main};
 use std::hint::black_box;
 use tempfile::tempdir;
 
-fn graph_hot_paths(c: &mut Criterion) {
+fn storage_hot_paths(c: &mut Criterion) {
     let dir = tempdir().expect("tempdir");
-    let store = Storage::open_at(&dir.path().join("criterion.db")).expect("open storage");
-    store
-        .create_entities(
-            (0..1_000)
-                .map(|i| asobi::model::EntityInput {
-                    name: format!("entity-{i}"),
-                    entity_type: "bench".into(),
-                    observations: vec![format!("commonterm observation {i}")],
-                })
-                .collect(),
-        )
-        .expect("seed");
-    c.bench_function("search_fts", |b| {
-        b.iter(|| {
-            black_box(
-                store
-                    .search_nodes(SearchQuery {
-                        query: black_box("commonterm").into(),
-                        limit: 20,
-                        filters: vec![],
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("tokio runtime");
+    let store = runtime.block_on(async {
+        let store = SqliteStore::open_at(&dir.path().join("bench.db"))
+            .await
+            .expect("open storage");
+        store
+            .create_entities(
+                (0..1_000)
+                    .map(|i| EntityInput {
+                        name: format!("entity-{i}"),
+                        entity_type: "bench".into(),
+                        observations: vec![format!("commonterm observation {i}")],
                     })
-                    .unwrap(),
+                    .collect(),
             )
+            .await
+            .expect("seed graph");
+        store
+    });
+
+    c.bench_function("sqlite_fts_search", |b| {
+        b.iter(|| {
+            runtime.block_on(async {
+                black_box(
+                    store
+                        .search_nodes(SearchQuery {
+                            query: black_box("commonterm").into(),
+                            limit: 20,
+                            filters: Vec::new(),
+                        })
+                        .await
+                        .expect("search"),
+                )
+            })
         })
     });
-    c.bench_function("open_nodes", |b| {
+    c.bench_function("sqlite_open_nodes", |b| {
         b.iter(|| {
-            black_box(
-                store
-                    .open_nodes(OpenNodes {
-                        names: vec!["entity-10".into()],
-                        ..Default::default()
-                    })
-                    .unwrap(),
-            )
+            runtime.block_on(async {
+                black_box(
+                    store
+                        .open_nodes(OpenNodes {
+                            names: vec!["entity-10".into(), "entity-999".into()],
+                            ..Default::default()
+                        })
+                        .await
+                        .expect("open nodes"),
+                )
+            })
         })
     });
 }
 
-criterion_group!(benches, graph_hot_paths);
+criterion_group!(benches, storage_hot_paths);
 criterion_main!(benches);

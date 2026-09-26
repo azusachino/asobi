@@ -1,7 +1,7 @@
 //! Application composition for the command layer.
 //!
 //! This module is the only place that chooses a concrete storage composite for
-//! an application run. Command code receives the stable `api::v2` capabilities
+//! an application run. Command code receives the stable `api::v3` capabilities
 //! through [`AsobiRuntime`] and never needs to name a provider or its state
 //! file.
 
@@ -29,9 +29,9 @@ pub struct AsobiRuntime {
 impl AsobiRuntime {
     /// Open the configured default provider. Provider selection and state-file
     /// resolution remain entirely inside `storage`.
-    pub fn open_default() -> crate::Result<Self> {
+    pub async fn open_default() -> crate::Result<Self> {
         Ok(Self {
-            storage: Storage::open_default()?,
+            storage: Storage::open_default().await?,
         })
     }
 
@@ -47,7 +47,7 @@ impl AsobiRuntime {
         self.storage
     }
 
-    pub fn capabilities(&self) -> ApiResult<BackendCapabilities> {
-        self.storage.capabilities()
+    pub async fn capabilities(&self) -> ApiResult<BackendCapabilities> {
+        self.storage.capabilities().await
     }
 }

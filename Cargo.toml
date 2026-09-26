@@ -45,9 +45,8 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 # Time
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
-
-# Database
-rusqlite = { version = "0.40", features = ["bundled", "backup"] }
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "sqlite", "migrate", "macros"] }
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "time"] }
 
 
 [dev-dependencies]
@@ -77,10 +76,6 @@ harness = false
 
 [[bench]]
 name = "sql_plans"
-harness = false
-
-[[bench]]
-name = "storage"
 harness = false
 
 

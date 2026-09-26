@@ -5,14 +5,14 @@ use anyhow::Result;
 use std::fmt::Write as _;
 use std::io::Write as _;
 
-pub fn sync_graph_to_markdown(graph_store: &impl GraphStore) -> Result<usize> {
+pub async fn sync_graph_to_markdown(graph_store: &impl GraphStore) -> Result<usize> {
     let paths = crate::paths::AsobiPaths::resolve();
     let topics_dir = paths.topics_dir;
     if !topics_dir.exists() {
         std::fs::create_dir_all(&topics_dir)?;
     }
 
-    let graph = graph_store.read_graph_full()?;
+    let graph = graph_store.read_graph_full().await?;
     let today = chrono::Local::now().format("%Y-%m-%d %H:%M").to_string();
     let mut count = 0;
 

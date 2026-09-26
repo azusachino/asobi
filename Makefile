@@ -58,9 +58,6 @@ bench-sql-plans:
 bench-tasks:
 	cargo bench --bench tasks
 
-bench-storage:
-	cargo bench --bench storage
-
 fmt:
 	cargo fmt
 	bun x prettier --write "**/*.{json,yaml,yml}"

@@ -44,11 +44,13 @@ pub(crate) struct CapabilitiesReceipt {
 /// stdout — the `--json` echo after a mutation, so a caller can confirm the
 /// write without a second `show` round-trip. Names are normalized inside
 /// `open_nodes`, so raw user input matches what was just stored.
-pub(crate) fn emit_nodes(store: &impl GraphStore, names: Vec<String>) -> Result<()> {
-    let graph = store.open_nodes(OpenNodes {
-        names,
-        ..Default::default()
-    })?;
+pub(crate) async fn emit_nodes(store: &impl GraphStore, names: Vec<String>) -> Result<()> {
+    let graph = store
+        .open_nodes(OpenNodes {
+            names,
+            ..Default::default()
+        })
+        .await?;
     print_json(graph)?;
     Ok(())
 }

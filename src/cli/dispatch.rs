@@ -6,7 +6,7 @@ use anyhow::Result;
 use clap::CommandFactory;
 use tracing::info;
 
-pub(crate) fn run_cli(cli: Cli) -> Result<()> {
+pub(crate) async fn run_cli(cli: Cli) -> Result<()> {
     if let Commands::Completions { shell } = cli.command {
         let mut command = Cli::command();
         let shell: clap_complete::Shell = shell.into();
@@ -32,20 +32,22 @@ pub(crate) fn run_cli(cli: Cli) -> Result<()> {
         return Ok(());
     }
 
-    let runtime = AsobiRuntime::open_default()?;
+    let runtime = AsobiRuntime::open_default().await?;
     let backend = runtime.storage();
 
     let json = cli.json;
     match cli.command {
         Commands::Compact {} => {
-            let synced = crate::compact::sync_graph_to_markdown(backend)?;
+            let synced = crate::compact::sync_graph_to_markdown(backend).await?;
             info!("Done. Synced {} entities to Markdown.", synced);
         }
         Commands::Purge { older_than, apply } => {
-            let report = backend.purge(PurgeRequest {
-                older_than_days: older_than,
-                apply,
-            })?;
+            let report = backend
+                .purge(PurgeRequest {
+                    older_than_days: older_than,
+                    apply,
+                })
+                .await?;
             if json {
                 print_json(report)?;
             } else {
@@ -81,8 +83,8 @@ pub(crate) fn run_cli(cli: Cli) -> Result<()> {
                 }
             }
         }
-        Commands::Tasks { subcommand } => crate::tasks::run(backend, subcommand, json)?,
-        command => super::graph::run(backend, command, json)?,
+        Commands::Tasks { subcommand } => crate::tasks::run(backend, subcommand, json).await?,
+        command => super::graph::run(backend, command, json).await?,
     }
 
     Ok(())

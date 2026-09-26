@@ -74,7 +74,7 @@ pub enum TasksCommands {
     },
 }
 
-pub fn run(
+pub async fn run(
     backend: &(impl GraphStore + SearchStore + TaskStore),
     subcommand: Option<TasksCommands>,
     json: bool,
@@ -100,53 +100,65 @@ pub fn run(
                 .enumerate()
                 .map(|(idx, _)| format!("{epic}:task-{}", idx + 1))
                 .collect();
-            let existing = backend.open_nodes(crate::api::OpenNodes {
-                names: std::iter::once(epic.clone())
-                    .chain(child_names.iter().cloned())
-                    .collect(),
-                ..Default::default()
-            })?;
+            let existing = backend
+                .open_nodes(crate::api::OpenNodes {
+                    names: std::iter::once(epic.clone())
+                        .chain(child_names.iter().cloned())
+                        .collect(),
+                    ..Default::default()
+                })
+                .await?;
             if !existing.entities.is_empty() {
                 anyhow::bail!("plan target already exists: {}", existing.entities[0].name);
             }
-            backend.create_entities(vec![crate::model::EntityInput {
-                name: epic.clone(),
-                entity_type: "task".to_string(),
-                observations: vec![format!("scope: {}", objective)],
-            }])?;
+            backend
+                .create_entities(vec![crate::model::EntityInput {
+                    name: epic.clone(),
+                    entity_type: "task".to_string(),
+                    observations: vec![format!("scope: {}", objective)],
+                }])
+                .await?;
 
-            backend.create_entities(
-                child_names
-                    .iter()
-                    .zip(&tasks)
-                    .map(|(name, title)| crate::model::EntityInput {
-                        name: name.clone(),
-                        entity_type: "task".to_string(),
-                        observations: vec![format!("plan: {title}")],
-                    })
-                    .collect(),
-            )?;
-            backend.truth_upsert(&epic, "objective", &objective)?;
+            backend
+                .create_entities(
+                    child_names
+                        .iter()
+                        .zip(&tasks)
+                        .map(|(name, title)| crate::model::EntityInput {
+                            name: name.clone(),
+                            entity_type: "task".to_string(),
+                            observations: vec![format!("plan: {title}")],
+                        })
+                        .collect(),
+                )
+                .await?;
+            backend.truth_upsert(&epic, "objective", &objective).await?;
             for (name, title) in child_names.iter().zip(&tasks) {
-                backend.truth_upsert(name, "title", title)?;
-                backend.truth_upsert(name, "status", "READY_TO_DISPATCH")?;
+                backend.truth_upsert(name, "title", title).await?;
+                backend
+                    .truth_upsert(name, "status", "READY_TO_DISPATCH")
+                    .await?;
             }
-            backend.create_relations(
-                child_names
-                    .iter()
-                    .map(|name| crate::model::RelationInput {
-                        from: name.clone(),
-                        to: epic.clone(),
-                        relation_type: "part_of".to_string(),
-                    })
-                    .collect(),
-            )?;
+            backend
+                .create_relations(
+                    child_names
+                        .iter()
+                        .map(|name| crate::model::RelationInput {
+                            from: name.clone(),
+                            to: epic.clone(),
+                            relation_type: "part_of".to_string(),
+                        })
+                        .collect(),
+                )
+                .await?;
             if json {
-                let graph = backend.open_nodes(crate::api::OpenNodes {
-                    names: vec![epic_name],
-                    expand: vec!["part_of".to_string()],
-                    ..Default::default()
-                })?;
+                let graph = backend
+                    .open_nodes(crate::api::OpenNodes {
+                        names: vec![epic_name],
+                        expand: vec!["part_of".to_string()],
+                        ..Default::default()
+                    })
+                    .await?;
                 print_json(graph)?;
             } else {
                 println!("Planned {} with {} task(s).", epic, tasks.len());
@@ -154,17 +166,19 @@ pub fn run(
         }
         Some(TasksCommands::List { epic, all }) => {
             let graph = if let Some(epic) = epic {
-                let graph = backend.open_nodes(crate::api::OpenNodes {
-                    names: vec![epic.clone()],
-                    expand: vec!["part_of".to_string()],
-                    ..Default::default()
-                })?;
+                let graph = backend
+                    .open_nodes(crate::api::OpenNodes {
+                        names: vec![epic.clone()],
+                        expand: vec!["part_of".to_string()],
+                        ..Default::default()
+                    })
+                    .await?;
                 if graph.entities.is_empty() {
                     anyhow::bail!("epic not found: {epic}");
                 }
                 graph
             } else {
-                let mut graph = backend.read_graph()?;
+                let mut graph = backend.read_graph().await?;
                 // Without an epic this is the "what is open" read, so it drops
                 // finished work unless asked for it. Measured on a real graph,
                 // the unfiltered form returned 1,972 lines of JSON that was 96%
@@ -194,7 +208,8 @@ pub fn run(
                 anyhow::bail!("dispatch agent must be non-empty");
             }
             let task = backend
-                .dispatch(task.as_deref(), &agent, observation_limit())?
+                .dispatch(task.as_deref(), &agent, observation_limit())
+                .await?
                 .ok_or_else(|| {
                     anyhow::anyhow!(
                         "no READY_TO_DISPATCH task found or task was claimed by another agent"
@@ -215,10 +230,12 @@ pub fn run(
             notes,
             status,
         }) => {
-            let graph = backend.open_nodes(crate::api::OpenNodes {
-                names: vec![task.clone()],
-                ..Default::default()
-            })?;
+            let graph = backend
+                .open_nodes(crate::api::OpenNodes {
+                    names: vec![task.clone()],
+                    ..Default::default()
+                })
+                .await?;
             let entity = graph
                 .entities
                 .first()
@@ -233,15 +250,17 @@ pub fn run(
                 anyhow::bail!("task not found: {task}");
             }
             if !notes.is_empty() {
-                backend.add_observations(
-                    vec![crate::model::ObservationInput {
-                        entity_name: task.clone(),
-                        contents: notes,
-                    }],
-                    observation_limit(),
-                )?;
+                backend
+                    .add_observations(
+                        vec![crate::model::ObservationInput {
+                            entity_name: task.clone(),
+                            contents: notes,
+                        }],
+                        observation_limit(),
+                    )
+                    .await?;
             }
-            backend.truth_upsert(&task, "status", &status)?;
+            backend.truth_upsert(&task, "status", &status).await?;
             if json {
                 print_json(TaskReceipt {
                     action: "sync",
@@ -253,11 +272,13 @@ pub fn run(
             }
         }
         Some(TasksCommands::Close { epic, lessons }) => {
-            let graph = backend.open_nodes(crate::api::OpenNodes {
-                names: vec![epic.clone()],
-                expand: vec!["part_of".to_string()],
-                ..Default::default()
-            })?;
+            let graph = backend
+                .open_nodes(crate::api::OpenNodes {
+                    names: vec![epic.clone()],
+                    expand: vec!["part_of".to_string()],
+                    ..Default::default()
+                })
+                .await?;
             let children: Vec<_> = graph
                 .entities
                 .iter()
@@ -277,32 +298,38 @@ pub fn run(
             }
             let project = epic.split(':').next().unwrap_or(&epic).to_string();
             if !lessons.is_empty() && !graph.entities.iter().any(|entity| entity.name == project) {
-                backend.create_entities(vec![crate::model::EntityInput {
-                    name: project.clone(),
-                    entity_type: "project".to_string(),
-                    observations: vec![],
-                }])?;
+                backend
+                    .create_entities(vec![crate::model::EntityInput {
+                        name: project.clone(),
+                        entity_type: "project".to_string(),
+                        observations: vec![],
+                    }])
+                    .await?;
             }
             if !lessons.is_empty() {
-                backend.add_observations(
+                backend
+                    .add_observations(
+                        vec![crate::model::ObservationInput {
+                            entity_name: project,
+                            contents: lessons,
+                        }],
+                        observation_limit(),
+                    )
+                    .await?;
+            }
+            backend.truth_upsert(&epic, "status", "DONE").await?;
+            backend
+                .add_observations(
                     vec![crate::model::ObservationInput {
-                        entity_name: project,
-                        contents: lessons,
+                        entity_name: epic.clone(),
+                        contents: vec![format!(
+                            "outcome: closed {}",
+                            chrono::Local::now().format("%Y-%m-%d")
+                        )],
                     }],
                     observation_limit(),
-                )?;
-            }
-            backend.truth_upsert(&epic, "status", "DONE")?;
-            backend.add_observations(
-                vec![crate::model::ObservationInput {
-                    entity_name: epic.clone(),
-                    contents: vec![format!(
-                        "outcome: closed {}",
-                        chrono::Local::now().format("%Y-%m-%d")
-                    )],
-                }],
-                observation_limit(),
-            )?;
+                )
+                .await?;
             if json {
                 print_json(TaskReceipt {
                     action: "close",

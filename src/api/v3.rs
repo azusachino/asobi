@@ -1,11 +1,13 @@
-//! Version 2 of Asobi's backend-neutral core storage API.
+//! Version 3 of Asobi's backend-neutral core storage API: `v2` made async on
+//! the SQL driver (ADR 0008). Same four capabilities, same types, Send futures.
 //!
-//! v2 is deliberately about the graph and its durable projections. It has no
+//! v2 was deliberately about the graph and its durable projections. It has no
 //! document, embedding, vector, SQL, or filesystem-handle requirements.
 
 use crate::model::{EntityInput, Graph, ObservationDeletion, ObservationInput, RelationInput};
+use std::future::Future;
 
-pub const API_VERSION: u32 = 2;
+pub const API_VERSION: u32 = 3;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ApiError {
@@ -124,52 +126,81 @@ pub struct BackendInfo {
 }
 
 pub trait GraphStore {
-    fn create_entities(&self, entities: Vec<EntityInput>) -> ApiResult<()>;
-    fn add_observations(&self, observations: Vec<ObservationInput>, limit: usize) -> ApiResult<()>;
-    fn create_relations(&self, relations: Vec<RelationInput>) -> ApiResult<()>;
-    fn delete_entities(&self, names: Vec<String>) -> ApiResult<()>;
-    fn delete_observations(&self, deletions: Vec<ObservationDeletion>) -> ApiResult<()>;
-    fn delete_observation_by_id(&self, entity_name: &str, id: i64) -> ApiResult<()>;
+    fn create_entities(
+        &self,
+        entities: Vec<EntityInput>,
+    ) -> impl Future<Output = ApiResult<()>> + Send;
+    fn add_observations(
+        &self,
+        observations: Vec<ObservationInput>,
+        limit: usize,
+    ) -> impl Future<Output = ApiResult<()>> + Send;
+    fn create_relations(
+        &self,
+        relations: Vec<RelationInput>,
+    ) -> impl Future<Output = ApiResult<()>> + Send;
+    fn delete_entities(&self, names: Vec<String>) -> impl Future<Output = ApiResult<()>> + Send;
+    fn delete_observations(
+        &self,
+        deletions: Vec<ObservationDeletion>,
+    ) -> impl Future<Output = ApiResult<()>> + Send;
+    fn delete_observation_by_id(
+        &self,
+        entity_name: &str,
+        id: i64,
+    ) -> impl Future<Output = ApiResult<()>> + Send;
     fn update_observation_by_id(
         &self,
         entity_name: &str,
         id: i64,
         new_content: &str,
-    ) -> ApiResult<()>;
+    ) -> impl Future<Output = ApiResult<()>> + Send;
     fn update_observation(
         &self,
         entity_name: &str,
         old_content: &str,
         new_content: &str,
-    ) -> ApiResult<()>;
-    fn delete_relations(&self, relations: Vec<RelationInput>) -> ApiResult<()>;
-    fn truth_upsert(&self, entity: &str, key: &str, value: &str) -> ApiResult<()>;
-    fn truth_delete(&self, entity: &str, key: &str) -> ApiResult<()>;
-    fn read_graph(&self) -> ApiResult<Graph>;
-    fn read_graph_full(&self) -> ApiResult<Graph>;
-    fn open_nodes(&self, req: OpenNodes) -> ApiResult<Graph>;
+    ) -> impl Future<Output = ApiResult<()>> + Send;
+    fn delete_relations(
+        &self,
+        relations: Vec<RelationInput>,
+    ) -> impl Future<Output = ApiResult<()>> + Send;
+    fn truth_upsert(
+        &self,
+        entity: &str,
+        key: &str,
+        value: &str,
+    ) -> impl Future<Output = ApiResult<()>> + Send;
+    fn truth_delete(&self, entity: &str, key: &str) -> impl Future<Output = ApiResult<()>> + Send;
+    fn read_graph(&self) -> impl Future<Output = ApiResult<Graph>> + Send;
+    fn read_graph_full(&self) -> impl Future<Output = ApiResult<Graph>> + Send;
+    fn open_nodes(&self, req: OpenNodes) -> impl Future<Output = ApiResult<Graph>> + Send;
 }
-
 pub trait SearchStore {
-    fn search_nodes(&self, query: SearchQuery) -> ApiResult<Graph>;
+    fn search_nodes(&self, query: SearchQuery) -> impl Future<Output = ApiResult<Graph>> + Send;
 }
-
 pub trait MaintenanceStore {
-    fn stats(&self) -> ApiResult<Stats>;
-    fn stats_per_entity(&self) -> ApiResult<Vec<(String, usize)>>;
-    fn purge(&self, request: PurgeRequest) -> ApiResult<PurgeReport>;
-    fn reset(&self) -> ApiResult<()>;
-    fn capabilities(&self) -> ApiResult<BackendCapabilities>;
-    fn health(&self) -> ApiResult<BackendHealth>;
-    fn location(&self) -> ApiResult<StorageLocation>;
+    fn stats(&self) -> impl Future<Output = ApiResult<Stats>> + Send;
+    fn stats_per_entity(&self) -> impl Future<Output = ApiResult<Vec<(String, usize)>>> + Send;
+    fn purge(&self, request: PurgeRequest) -> impl Future<Output = ApiResult<PurgeReport>> + Send;
+    fn reset(&self) -> impl Future<Output = ApiResult<()>> + Send;
+    fn capabilities(&self) -> impl Future<Output = ApiResult<BackendCapabilities>> + Send;
+    fn health(&self) -> impl Future<Output = ApiResult<BackendHealth>> + Send;
+    fn location(&self) -> impl Future<Output = ApiResult<StorageLocation>> + Send;
 }
-
 pub trait TaskStore {
     fn dispatch(
         &self,
         task: Option<&str>,
         agent: &str,
         observation_limit: usize,
-    ) -> ApiResult<Option<String>>;
-    fn claim_next(&self, agent: &str) -> ApiResult<Option<String>>;
+    ) -> impl Future<Output = ApiResult<Option<String>>> + Send;
+    fn claim_next(&self, agent: &str) -> impl Future<Output = ApiResult<Option<String>>> + Send;
 }
+
+//
+// Send futures: the axum server (WP4) runs on a multi-threaded tokio runtime,
+// so every future that crosses an `.await` in a handler must be `Send`. The
+// traits declare `-> impl Future<...> + Send` (an RPITIT that captures
+// `&self`), and implementations use `async fn` — the driver's futures are
+// Send, so the bound holds without `async_trait` boxing.
