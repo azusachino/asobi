@@ -39,6 +39,10 @@ _Avoid_: session, checkpoint, todo
 A task that groups child tasks planned together toward one objective.
 _Avoid_: project, milestone
 
+**Activity**:
+Any change to an entity's observations or truths; relations do not count.
+_Avoid_: update, touch
+
 **Abandoned**:
 The terminal status a task receives automatically once it has had no activity for too long.
 _Avoid_: stale, expired
