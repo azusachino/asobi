@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### Changed
+
+- **Clean schema baseline: schema 9, pre-0.8 graph files refused** ([ADR 0007](docs/decisions/0007-clean-schema-baseline.md)). A new database is created directly at schema 9; the upgrade chain (`upgrade_to_v5`–`v7`, the v8 index rebuild, and the legacy MCP-memory/libSQL table knowledge behind them) is deleted. Opening a file whose `user_version` is not 9 fails with an error naming the path, saying it predates 0.8 (or is newer), and telling you to move it aside — the file is not modified, so deciding is safe. **Every existing local graph must be moved aside once, deliberately; nothing is carried into 0.8.**
+- `asobi_entities.updated_at` is now `last_activity`, kept current by triggers on observation and truth insert/update/delete (relations do not count). Retention and abandonment read the column instead of recomputing a `MAX` over three sources per entity, so the definition of activity lives in one place: the schema.
+
 ### Added
 
 - **Idle open tasks are abandoned automatically** ([ADR 0006](docs/decisions/0006-tasks-replace-sessions.md)). A task with no activity for `abandon_days` (default 7; `ASOBI_ABANDON_DAYS` or the `asobi.toml` key, `0` disables) becomes `ABANDONED`, with an observation recording that it was abandoned automatically after that many idle days. A task with no `status` truth counts as open. An epic is never abandoned while any `part_of` child is open. Abandonment runs in the same per-process sweep as retention, before it — an abandoned task is terminal, so retention deletes it `retention_days` later, which with both defaults gives an untouched task one visible week as `ABANDONED` and deletion after two.

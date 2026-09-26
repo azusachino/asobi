@@ -20,7 +20,7 @@ The API is synchronous because this is a local SQLite CLI: each operation is a s
 
 ## SQLite storage
 
-`src/storage/sqlite.rs` owns schema creation, migrations, connection settings, and queries. The database uses foreign keys, WAL, bounded busy timeouts, and an external-content FTS5 index with porter stemming and BM25 ranking. Truth filters are applied in SQL and combine with keyword search through AND semantics.
+`src/storage/sqlite.rs` owns schema creation, connection settings, and queries. There is no upgrade chain: a new database is created directly at schema 9, and a file from any earlier version is refused with a move-aside message (ADR 0007). The database uses foreign keys, WAL, bounded busy timeouts, and an external-content FTS5 index with porter stemming and BM25 ranking. Truth filters are applied in SQL and combine with keyword search through AND semantics.
 
 ## Durable projections
 

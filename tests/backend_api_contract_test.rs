@@ -1,12 +1,32 @@
 use asobi::api::{
     GraphStore, MaintenanceStore, OpenNodes, PurgeRequest, SearchQuery, SearchStore, TaskStore,
 };
-use asobi::model::{EntityInput, RelationInput};
+use asobi::model::{EntityInput, ObservationDeletion, ObservationInput, RelationInput};
 use asobi::storage::SqliteStore;
 use rusqlite::Connection;
 use std::fs;
 use std::path::PathBuf;
 use tempfile::tempdir;
+
+/// Pull one entity's activity anchor into the past so a single write is
+/// observable even though SQLite timestamps have one-second granularity.
+fn age_last_activity(db: &std::path::Path, name: &str) {
+    let conn = Connection::open(db).unwrap();
+    conn.execute_batch(&format!(
+        "UPDATE asobi_entities SET last_activity = datetime('now', '-2 days') WHERE name = '{name}';"
+    ))
+    .unwrap();
+}
+
+fn last_activity_of(db: &std::path::Path, name: &str) -> String {
+    let conn = Connection::open(db).unwrap();
+    conn.query_row(
+        "SELECT last_activity FROM asobi_entities WHERE name = ?",
+        [name],
+        |r| r.get(0),
+    )
+    .unwrap()
+}
 
 fn store() -> (tempfile::TempDir, SqliteStore) {
     let dir = tempdir().unwrap();
@@ -188,7 +208,8 @@ fn purge_is_preview_first_and_leaves_durable_knowledge() {
     conn.execute_batch(
         "UPDATE asobi_entities SET created_at = datetime('now', '-90 days');
          UPDATE asobi_observations SET created_at = datetime('now', '-90 days');
-         UPDATE asobi_truths SET updated_at = datetime('now', '-90 days');",
+         UPDATE asobi_truths SET updated_at = datetime('now', '-90 days');
+         UPDATE asobi_entities SET last_activity = datetime('now', '-90 days');",
     )
     .unwrap();
     drop(conn);
@@ -256,82 +277,94 @@ fn purge_is_preview_first_and_leaves_durable_knowledge() {
     assert_eq!(survivors.entities[0].name, "project:concept");
 }
 
-// storage-boundary: provider-test -- this test names the libSQL/Turso-era
-// schema on purpose, to verify the SQLite provider cleans up after it.
+// storage-boundary: provider-test -- these tests read PRAGMA user_version and
+// raw file bytes, which are SQLite provider detail.
 #[test]
-fn opening_a_pre_v5_database_drops_superseded_tables_and_enables_incremental_vacuum() {
+fn opening_a_pre_0_8_database_is_refunded_untouched_with_a_move_aside_error() {
     let dir = tempdir().unwrap();
     let db_path = dir.path().join("legacy.db");
 
-    // Reproduce a database that has existed since before the 0.6 rusqlite
-    // rewrite: the original `mcp_*` schema plus the libSQL/Turso-era
-    // `chunks`/`topics` vector schema, both superseded and left in place by
-    // every migration that came after them. `idx_chunks_vector` is the real
-    // regression case -- it is an expression index over `libsql_vector_idx`,
-    // a function only the libSQL fork registers. Ordinary `CREATE INDEX`
-    // evaluates the expression up front, so this rusqlite build (no
-    // `functions` feature, no libSQL) can't build that fixture the normal
-    // way; `writable_schema` plants the same catalog row libSQL would have
-    // written without evaluating it, matching what a real such database
-    // looks like to a plain-SQLite reader. The store's own connection below
-    // never registers that function either, so the migration must drop
-    // `chunks` before VACUUM ever has to rebuild the index.
+    // Build a plausible pre-0.8 file: schema 4, with a superseded table no
+    // schema-9 database would ever hold.
+    let conn = Connection::open(&db_path).unwrap();
+    conn.execute_batch(
+        "CREATE TABLE chunks (id INTEGER PRIMARY KEY);
+         CREATE TABLE asobi_entities (name TEXT PRIMARY KEY);
+         PRAGMA user_version = 8;",
+    )
+    .unwrap();
+    conn.execute("INSERT INTO chunks VALUES (1)", []).unwrap();
+    drop(conn);
+
+    let before = std::fs::read(&db_path).unwrap();
+    let err = match SqliteStore::open_at(&db_path) {
+        Err(e) => e.to_string(),
+        Ok(_) => panic!("expected refusal"),
+    };
+    assert!(
+        err.contains(&db_path.display().to_string()),
+        "the error must name the path: {err}"
+    );
+    assert!(err.contains("before 0.8"), "{err}");
+    assert!(err.contains("Move the file aside"), "{err}");
+    let after = std::fs::read(&db_path).unwrap();
+    assert_eq!(before, after, "a refused database must be untouched");
+}
+
+#[test]
+fn opening_a_newer_database_is_refused_with_a_newer_asobi_error() {
+    let dir = tempdir().unwrap();
+    let db_path = dir.path().join("from-the-future.db");
+    let conn = Connection::open(&db_path).unwrap();
+    conn.execute_batch("PRAGMA user_version = 10;").unwrap();
+    drop(conn);
+
+    let before = std::fs::read(&db_path).unwrap();
+    let err = match SqliteStore::open_at(&db_path) {
+        Err(e) => e.to_string(),
+        Ok(_) => panic!("expected refusal"),
+    };
+    assert!(err.contains("newer"), "{err}");
+    assert_eq!(before, std::fs::read(&db_path).unwrap());
+}
+
+#[test]
+fn a_new_database_is_created_directly_at_schema_nine() {
+    let dir = tempdir().unwrap();
+    let db_path = dir.path().join("fresh.db");
     {
-        let legacy = Connection::open(&db_path).unwrap();
-        legacy
-            .execute_batch(
-                "CREATE TABLE mcp_entities (name TEXT PRIMARY KEY);
-                 CREATE TABLE chunks (id INTEGER PRIMARY KEY, embedding BLOB);
-                 CREATE TABLE topics (id INTEGER PRIMARY KEY, title TEXT);
-                 CREATE TABLE sessions (id INTEGER PRIMARY KEY);
-                 INSERT INTO mcp_entities(name) VALUES ('leftover');
-                 PRAGMA user_version = 4;
-                 PRAGMA writable_schema = ON;
-                 INSERT INTO sqlite_master(type, name, tbl_name, rootpage, sql) VALUES (
-                     'index', 'idx_chunks_vector', 'chunks', 0,
-                     'CREATE INDEX idx_chunks_vector ON chunks(libsql_vector_idx(embedding, ''metric=cosine''))'
-                 );
-                 PRAGMA writable_schema = RESET;",
-            )
+        let store = SqliteStore::open_at(&db_path).unwrap();
+        store
+            .create_entities(vec![EntityInput {
+                name: "project:task".into(),
+                entity_type: "task".into(),
+                observations: vec![],
+            }])
             .unwrap();
     }
-    let store = SqliteStore::open_at(&db_path).unwrap();
-    // The current-generation graph works normally post-migration.
-    store
-        .create_entities(vec![EntityInput {
-            name: "post-migration".into(),
-            entity_type: "concept".into(),
-            observations: vec![],
-        }])
-        .unwrap();
-    drop(store);
-
     let conn = Connection::open(&db_path).unwrap();
-    let table_count: i64 = conn
-        .query_row(
-            "SELECT count(*) FROM sqlite_master WHERE type = 'table'
-             AND name IN ('mcp_entities', 'chunks', 'topics', 'sessions')",
-            [],
-            |r| r.get(0),
-        )
-        .unwrap();
-    assert_eq!(table_count, 0, "superseded tables should be dropped");
     let user_version: i64 = conn
         .query_row("PRAGMA user_version", [], |r| r.get(0))
         .unwrap();
-    assert_eq!(user_version, 8);
+    assert_eq!(user_version, 9);
     let auto_vacuum: i64 = conn
         .query_row("PRAGMA auto_vacuum", [], |r| r.get(0))
         .unwrap();
     assert_eq!(
         auto_vacuum, 2,
-        "database should switch to incremental auto-vacuum"
+        "a new database should switch on incremental auto-vacuum"
     );
-
-    // Re-opening an already-migrated database is a no-op: no error, and the
-    // migration path does not run again.
-    let reopened = SqliteStore::open_at(&db_path).unwrap();
-    assert_eq!(reopened.stats().unwrap().entities, 1);
+    let columns: Vec<String> = {
+        let mut stmt = conn
+            .prepare("SELECT name FROM pragma_table_info('asobi_entities')")
+            .unwrap();
+        stmt.query_map([], |r| r.get::<_, String>(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap()
+    };
+    assert!(columns.contains(&"last_activity".to_string()));
+    assert!(!columns.contains(&"updated_at".to_string()));
 }
 
 #[test]
@@ -353,7 +386,8 @@ fn applied_purge_reclaims_space_via_incremental_vacuum() {
     conn.execute_batch(
         "UPDATE asobi_entities SET created_at = datetime('now', '-90 days');
          UPDATE asobi_observations SET created_at = datetime('now', '-90 days');
-         UPDATE asobi_truths SET updated_at = datetime('now', '-90 days');",
+         UPDATE asobi_truths SET updated_at = datetime('now', '-90 days');
+         UPDATE asobi_entities SET last_activity = datetime('now', '-90 days');",
     )
     .unwrap();
     drop(conn);
@@ -464,7 +498,8 @@ fn finished_work_is_swept_on_the_first_write_not_on_reads() {
     let conn = Connection::open(&db).unwrap();
     conn.execute_batch(
         "UPDATE asobi_entities SET created_at = datetime('now', '-30 days');
-         UPDATE asobi_truths SET updated_at = datetime('now', '-30 days');",
+         UPDATE asobi_truths SET updated_at = datetime('now', '-30 days');
+         UPDATE asobi_entities SET last_activity = datetime('now', '-30 days');",
     )
     .unwrap();
     drop(conn);
@@ -595,4 +630,139 @@ fn search_returns_results_in_ranked_order_not_alphabetical() {
     // Alphabetically `aaa-unrelated` wins; by relevance it does not, and it is
     // matched by only one path where the other is matched by two.
     assert_eq!(ranked.entities[0].name, "zzz-the-match");
+}
+
+#[test]
+fn observations_move_last_activity_in_every_direction() {
+    let (dir, store) = store();
+    let db = dir.path().join("contract.db");
+    store
+        .create_entities(vec![EntityInput {
+            name: "project:task".into(),
+            entity_type: "task".into(),
+            observations: vec![],
+        }])
+        .unwrap();
+
+    // Add moves it.
+    age_last_activity(&db, "project:task");
+    let aged = last_activity_of(&db, "project:task");
+    store
+        .add_observations(
+            vec![ObservationInput {
+                entity_name: "project:task".into(),
+                contents: vec!["first note".into()],
+            }],
+            200,
+        )
+        .unwrap();
+    let after_add = last_activity_of(&db, "project:task");
+    assert!(
+        after_add > aged,
+        "an observation add must move last_activity"
+    );
+
+    // Edit moves it.
+    age_last_activity(&db, "project:task");
+    let aged = last_activity_of(&db, "project:task");
+    store
+        .update_observation("project:task", "first note", "edited note")
+        .unwrap();
+    let after_edit = last_activity_of(&db, "project:task");
+    assert!(
+        after_edit > aged,
+        "an observation edit must move last_activity"
+    );
+
+    // Delete moves it.
+    age_last_activity(&db, "project:task");
+    let aged = last_activity_of(&db, "project:task");
+    store
+        .delete_observations(vec![ObservationDeletion {
+            entity_name: "project:task".into(),
+            observations: vec!["edited note".into()],
+        }])
+        .unwrap();
+    let after_delete = last_activity_of(&db, "project:task");
+    assert!(after_delete > aged);
+}
+
+#[test]
+fn truths_move_last_activity_in_every_direction() {
+    let (dir, store) = store();
+    let db = dir.path().join("contract.db");
+    store
+        .create_entities(vec![EntityInput {
+            name: "project:task".into(),
+            entity_type: "task".into(),
+            observations: vec![],
+        }])
+        .unwrap();
+
+    // Upsert (insert) moves it.
+    age_last_activity(&db, "project:task");
+    let aged = last_activity_of(&db, "project:task");
+    store
+        .truth_upsert("project:task", "status", "IN_PROGRESS")
+        .unwrap();
+    assert!(
+        last_activity_of(&db, "project:task") > aged,
+        "a truth insert must move last_activity"
+    );
+
+    // Upsert (update) moves it.
+    age_last_activity(&db, "project:task");
+    let aged = last_activity_of(&db, "project:task");
+    store
+        .truth_upsert("project:task", "status", "DONE")
+        .unwrap();
+    assert!(
+        last_activity_of(&db, "project:task") > aged,
+        "a truth update must move last_activity"
+    );
+
+    // Delete moves it.
+    age_last_activity(&db, "project:task");
+    let aged = last_activity_of(&db, "project:task");
+    store.truth_delete("project:task", "status").unwrap();
+    assert!(
+        last_activity_of(&db, "project:task") > aged,
+        "a truth delete must move last_activity"
+    );
+}
+
+#[test]
+fn relations_do_not_move_last_activity() {
+    let (dir, store) = store();
+    let db = dir.path().join("contract.db");
+    store
+        .create_entities(vec![
+            EntityInput {
+                name: "project:task".into(),
+                entity_type: "task".into(),
+                observations: vec![],
+            },
+            EntityInput {
+                name: "project:epic".into(),
+                entity_type: "task".into(),
+                observations: vec![],
+            },
+        ])
+        .unwrap();
+    let before = last_activity_of(&db, "project:epic");
+
+    let relation = RelationInput {
+        from: "project:task".into(),
+        to: "project:epic".into(),
+        relation_type: "part_of".into(),
+    };
+    store.create_relations(vec![relation.clone()]).unwrap();
+    assert_eq!(
+        last_activity_of(&db, "project:epic"),
+        before,
+        "relations are not activity"
+    );
+
+    store.delete_relations(vec![relation]).unwrap();
+    assert_eq!(last_activity_of(&db, "project:epic"), before);
 }
