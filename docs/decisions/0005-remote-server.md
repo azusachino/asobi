@@ -1,6 +1,6 @@
 ---
 id: 0005
-title: "0005. Shared graph through asobi serve and a JSON-RPC remote backend"
+title: "0005. Shared graph through asobi serve and an HTTP remote backend"
 date: 2026-09-26
 status: proposed
 tags: [storage, api, server, rpc, v0.8]
@@ -34,7 +34,7 @@ local (default)   asobi ──► SqliteStore ──► data_dir/asobi.db
 remote            asobi ──► RemoteStore ──HTTP──► asobi serve ──► SqliteStore per graph name
 ```
 
-- **`asobi serve --listen <addr:port>`** is a long-lived process that holds **named graphs**, one SQLite file per graph name in its data directory, and answers JSON-RPC.
+- **`asobi serve --listen <addr:port>`** is a long-lived process that holds **named graphs**, one SQLite file per graph name in its data directory, and answers the RPC contract below over HTTP.
 - **`RemoteStore`** implements the same `v2` traits (`GraphStore`, `SearchStore`, `MaintenanceStore`, `TaskStore`) by sending one RPC per trait call. Commands keep depending on traits only, so every command, flag, and output is identical in both modes.
 - **Configuration:** two keys in `asobi.toml`, each overridable by its environment variable:
   - `remote = "https://asobi.h.azusachino.com"` (`ASOBI_REMOTE`) selects remote mode and the server;
@@ -61,8 +61,8 @@ No existing graph is migrated: the server starts empty, and local graphs stay wh
 
 ### RPC contract
 
-- **Transport:** HTTP/1.1 `POST <remote>/rpc/<graph>`, `Content-Type: application/json`, one [JSON-RPC 2.0](https://www.jsonrpc.org/specification) request object per HTTP request. No batches, no notifications: every request carries an `id`.
-- **Methods:** one per `v2` trait method, named `<trait>.<method>` in camelCase. Params are a named object whose fields are the trait method's arguments; results are the method's return value, serialized with the existing camelCase serde types (`()` becomes `null`).
+- **Transport:** plain JSON over HTTP/1.1. One call is `POST <remote>/rpc/<graph>/<method>` with `Content-Type: application/json`; the body is the params object, and a success is HTTP 200 whose body is the result. There is no envelope: HTTP already pairs each response with its request, and nothing here batches, streams, or sends notifications.
+- **Methods:** one per `v2` trait method, named `<trait>.<method>` in camelCase. Params are a named object whose fields are the trait method's arguments; results are the method's return value, serialized with the existing camelCase serde types (`()` becomes a `null` body, still 200).
 
 | Method | Params | Result |
 | --- | --- | --- |
@@ -90,16 +90,21 @@ No existing graph is migrated: the server starts empty, and local graphs stay wh
 
 `ObservationInput`, `ObservationDeletion`, `OpenNodes` and `SearchQuery` gain `Serialize` (and `OpenNodes`/`SearchQuery` `Deserialize`) with the same camelCase convention; `asobi schema` publishes them.
 
-- **Errors:** JSON-RPC's reserved codes for protocol failures (`-32700` parse, `-32600` invalid request, `-32601` unknown method, `-32602` invalid params). Each `ApiError` variant has a fixed code and a `data.kind`, so `RemoteStore` rebuilds the same variant and the CLI prints the same message as in local mode:
+- **Errors:** a failure is a non-2xx status with the body `{"kind": "<kind>", "message": "<text>"}`. Each `ApiError` variant has a fixed status and `kind`, so `RemoteStore` rebuilds the same variant from `kind` and the CLI prints the same message as in local mode; the status makes failures visible to anything that only reads HTTP (logs, probes, `curl`).
 
-| `ApiError` | code | `data.kind` |
+| Case | Status | `kind` |
 | --- | --- | --- |
-| `NotFound` | `-32001` | `notFound` |
-| `Conflict` | `-32002` | `conflict` |
-| `Unsupported` | `-32003` | `unsupported` |
-| `Unavailable` | `-32004` | `unavailable` |
-| `Invalid` | `-32005` | `invalid` |
-| `Backend` | `-32006` | `backend` |
+| `ApiError::NotFound` | 404 | `notFound` |
+| `ApiError::Conflict` | 409 | `conflict` |
+| `ApiError::Invalid` (including an invalid graph name) | 422 | `invalid` |
+| `ApiError::Unsupported` | 501 | `unsupported` |
+| `ApiError::Unavailable` | 503 | `unavailable` |
+| `ApiError::Backend` | 500 | `backend` |
+| Unknown method | 404 | `unknownMethod` |
+| Body is not JSON, or params do not match the method | 400 | `badRequest` |
+| Any method other than `POST` | 405 | `badRequest` |
+
+JSON-RPC 2.0 was considered and not used: its `id`, batches and notifications serve nothing here, and it answers HTTP 200 for failures, hiding them from everything that reads HTTP.
 
 - **Handshake:** before its first call, `RemoteStore` calls `server.hello` once per process and refuses to continue unless `apiVersion` equals its own `API_VERSION`. Only the server touches the schema, so schema version skew between devices cannot happen.
 
