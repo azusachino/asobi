@@ -38,6 +38,20 @@ remote            asobi ──► RemoteStore ──HTTP──► asobi serve �
 - **`RemoteStore`** implements the same `v2` traits (`GraphStore`, `SearchStore`, `MaintenanceStore`, `TaskStore`) by sending one RPC per trait call. Commands keep depending on traits only, so every command, flag, and output is identical in both modes.
 - **Configuration:** `remote = "http://host:port"` in `asobi.toml`, overridable by `ASOBI_REMOTE`. When set, the graph lives on the server and `data_dir` / `ASOBI_DATABASE_URL` are not used for it. `topics_dir` stays local, so `compact` writes its Markdown on the calling device. Local mode stays the default.
 
+### Data placement
+
+The graph moves; files stay. In remote mode:
+
+| Data | Lives |
+| --- | --- |
+| The graph: entities, observations, truths, relations, including session and task entities | **Server** |
+| `retention_days` | **Server** config (the server runs the sweep) |
+| `observation_limit` | **Client** config, sent with each call |
+| `compact` output under `topics_dir` | **Client**, generated from the remote graph |
+| `asobi.toml` itself | **Client**, per workspace |
+
+The choice is made **per workspace, for the whole graph**: a workspace whose `asobi.toml` sets `remote` uses the server for everything; one that does not stays local. There is no per-entity-type split. Mixing would put relations across two stores, merge search across two backends, and let a task reference a session other devices cannot see. One server holds one graph; workspaces sharing it stay apart by their existing entity-name prefixes (`<project>:*`). A device-private workspace simply does not set `remote`.
+
 ### RPC contract
 
 - **Transport:** HTTP/1.1 `POST /rpc`, `Content-Type: application/json`, one [JSON-RPC 2.0](https://www.jsonrpc.org/specification) request object per HTTP request. No batches, no notifications: every request carries an `id`.
