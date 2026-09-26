@@ -280,11 +280,11 @@ fn purge_is_preview_first_and_leaves_durable_knowledge() {
 // storage-boundary: provider-test -- these tests read PRAGMA user_version and
 // raw file bytes, which are SQLite provider detail.
 #[test]
-fn opening_a_pre_0_8_database_is_refunded_untouched_with_a_move_aside_error() {
+fn opening_a_pre_0_8_database_is_refused_untouched_with_a_move_aside_error() {
     let dir = tempdir().unwrap();
     let db_path = dir.path().join("legacy.db");
 
-    // Build a plausible pre-0.8 file: schema 4, with a superseded table no
+    // Build a plausible pre-0.8 file: schema 8, with a superseded table no
     // schema-9 database would ever hold.
     let conn = Connection::open(&db_path).unwrap();
     conn.execute_batch(

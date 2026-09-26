@@ -937,8 +937,8 @@ impl MaintenanceStore for SqliteStore {
         })?;
         if report.deleted > 0 {
             // A no-op unless this database is in incremental auto-vacuum
-            // mode, which every database is as of schema v5 -- see
-            // incremental auto-vacuum. Bounded to a few thousand pages so a large
+            // mode, which every database is: `open_at` sets it when it creates
+            // the file. Bounded to a few thousand pages so a large
             // backlog reclaims gradually across purges instead of stalling
             // this one; VACUUM (unbounded, exclusive-locking) stays a
             // manual `backup`-adjacent maintenance step, not something a
