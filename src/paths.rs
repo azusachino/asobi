@@ -9,6 +9,7 @@ pub struct AsobiConfig {
     pub topics_dir: Option<PathBuf>,
     pub observation_limit: Option<usize>,
     pub retention_days: Option<u32>,
+    pub abandon_days: Option<u32>,
 }
 
 pub struct AsobiPaths {
@@ -18,6 +19,7 @@ pub struct AsobiPaths {
     pub observation_limit: Option<usize>,
     /// Days a finished session or task survives before the automatic sweep.
     pub retention_days: Option<u32>,
+    pub abandon_days: Option<u32>,
     /// The directory the workspace was discovered from: the `asobi.toml`'s
     /// directory, the `.asobi/` parent, or the starting directory under XDG.
     /// Relative paths that describe project content — as opposed to state —
@@ -91,6 +93,7 @@ impl AsobiPaths {
                 topics_dir: root.clone(),
                 observation_limit: None,
                 retention_days: None,
+                abandon_days: None,
                 root,
                 config_file: None,
             };
@@ -113,6 +116,7 @@ impl AsobiPaths {
                 topics_dir: local_root.join("topics"),
                 observation_limit: None,
                 retention_days: None,
+                abandon_days: None,
                 root: local_root
                     .parent()
                     .map(Path::to_path_buf)
@@ -128,6 +132,7 @@ impl AsobiPaths {
                 topics_dir: x.topics_dir,
                 observation_limit: None,
                 retention_days: None,
+                abandon_days: None,
                 root: start.to_path_buf(),
                 config_file: None,
             },
@@ -137,6 +142,7 @@ impl AsobiPaths {
                 topics_dir: PathBuf::from(".asobi/topics"),
                 observation_limit: None,
                 retention_days: None,
+                abandon_days: None,
                 root: start.to_path_buf(),
                 config_file: None,
             },
@@ -159,6 +165,7 @@ impl AsobiPaths {
             data_dir,
             observation_limit: conf.observation_limit,
             retention_days: conf.retention_days,
+            abandon_days: conf.abandon_days,
             root: anchor.to_path_buf(),
             config_file: None,
         }
@@ -185,6 +192,27 @@ fn find_upwards(start: &Path, name: &str, is_dir: bool) -> Option<PathBuf> {
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    #[test]
+    fn abandon_days_reads_from_config_and_resolves_with_retention() {
+        let dir = tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("asobi.toml"),
+            "abandon_days = 0\nretention_days = 14\n",
+        )
+        .unwrap();
+
+        let paths = AsobiPaths::resolve_from(dir.path());
+        assert_eq!(paths.abandon_days, Some(0));
+        assert_eq!(paths.retention_days, Some(14));
+
+        // Without a config key the field is None and the provider's default
+        // (DEFAULT_ABANDON_DAYS) applies.
+        let plain = tempdir().unwrap();
+        std::fs::write(plain.path().join("asobi.toml"), "\n").unwrap();
+        let paths = AsobiPaths::resolve_from(plain.path());
+        assert_eq!(paths.abandon_days, None);
+    }
 
     #[test]
     fn skills_config_block_is_silently_ignored() {

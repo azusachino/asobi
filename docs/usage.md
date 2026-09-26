@@ -134,7 +134,8 @@ A truth is the right home for anything read back as _current_ state, because wri
 Two rules, and no others:
 
 1. **Durable entities live forever** — `project`, `concept`, `reference`, `preference`, `standard`. Each keeps its most recent 200 observations; older ones are evicted as new ones arrive.
-2. **Finished operational entities are deleted after 7 days** — a `session` or `task` whose status is `DONE`, `CLOSED` or `ABANDONED`. This happens automatically, once per process, before the first write.
+2. **An open task idle for 7 days is abandoned** — its status becomes `ABANDONED`, with an observation recording that it happened automatically. A task with no `status` truth counts as open. An epic is protected while any `part_of` child is still open: an epic's own entity goes quiet while its children are worked.
+3. **Finished tasks are deleted after 7 more days** — a `task` whose status is `DONE`, `CLOSED` or `ABANDONED`. Abandonment is step one and deletion is step two: an untouched task is visible as `ABANDONED` for a week and gone after two, and setting its status back revives it within that week. Both steps happen automatically, once per process, before the first write.
 
 That is the whole of it. Nothing else accumulates: a truth is a current value with no archive behind it, and relations disappear with the entities they connect.
 
@@ -143,16 +144,17 @@ The sweep runs on a _write_ rather than at startup, so a read never mutates the 
 | What | Config key | Environment | Default |
 | --- | --- | --- | --- |
 | Observations kept per entity | `observation_limit` | `ASOBI_OBSERVATION_LIMIT` | 200 |
+| Idle days before an open task is abandoned | `abandon_days` | `ASOBI_ABANDON_DAYS` | 7 |
 | Days a finished task survives | `retention_days` | `ASOBI_RETENTION_DAYS` | 7 |
 
-Set `retention_days = 0` to disable the sweep and keep finished work indefinitely.
+Set `abandon_days = 0` to disable abandonment, or `retention_days = 0` to keep finished work indefinitely.
 
 The reason for the second rule is that operational state is relevant for hours, occasionally days. A task that has been `DONE` for a week is not context, it is archaeology — and context is the scarce resource. An earlier design left this to a manual command that was correct in every respect except that it never ran: six weeks of daily use produced a graph that was 96% finished work.
 
 **Preview and purge stale operational state:**
 
 ```bash
-# Preview only (the default): terminal sessions/tasks inactive for 30 days
+# Preview only (the default): finished tasks inactive for 30 days
 asobi purge
 
 # Narrow the policy to completed tasks older than 90 days
@@ -162,9 +164,9 @@ asobi purge --older-than 30
 asobi purge --older-than 30 --apply
 ```
 
-This normally runs by itself — see [Lifecycle](#lifecycle). Reach for it to preview what would go, or to sweep a narrower window than the configured one. It only ever considers finished `session` and `task` entities; durable knowledge is not something a request can name. Use `--json` for a machine-readable candidate report. An applied purge also runs `PRAGMA incremental_vacuum`, so the database file shrinks with the graph rather than retaining a free list.
+This normally runs by itself — see [Lifecycle](#lifecycle). Reach for it to preview what would go, or to sweep a narrower window than the configured one. It only ever considers finished `task` entities; durable knowledge is not something a request can name, and `session` entities are ordinary entities now — nothing purges them. Use `--json` for a machine-readable candidate report. An applied purge also runs `PRAGMA incremental_vacuum`, so the database file shrinks with the graph rather than retaining a free list.
 
-`compact` syncs only durable _knowledge_ entities (project, decisions, references, preferences) to Markdown. Volatile state (`session`, `task`) stays graph-only — query it with `search` / `show`.
+`compact` projects every durable entity to Markdown. `task` entities (epics included) stay graph-only — query them with `search` / `show`.
 
 **Inspect the full graph:**
 
@@ -324,9 +326,9 @@ asobi purge [--older-than <DAYS>] [--apply]
 asobi reset [--force]
 ```
 
-`compact` projects **durable knowledge** entities — `project`, `concept`, `reference`, `preference`, `standard` — and their truths into Markdown under `.asobi/topics/`. Volatile `session` and `task` entities are skipped by design; read those with `search`/`show`.
+`compact` projects **durable knowledge** entities — `project`, `concept`, `reference`, `preference`, `standard`, and `session` since 0.8 removed the type's special status — into Markdown under `.asobi/topics/`. `task` entities are skipped by design; read those with `search`/`show`.
 
-`purge` is a dry run unless given `--apply`, and accepts only `session` entities plus terminal task statuses (`DONE`, `CLOSED`, `ABANDONED`) — durable knowledge is refused. It defaults to entities inactive for 30 days. It never runs implicitly during `graph`, `search`, `compact`, or startup. An applied purge also runs `PRAGMA incremental_vacuum`, so the database file shrinks with the graph rather than retaining a free list.
+`purge` is a dry run unless given `--apply`, and accepts only `task` entities in a terminal status (`DONE`, `CLOSED`, `ABANDONED`) — durable knowledge is refused. It defaults to entities inactive for 30 days. It never runs implicitly during `graph`, `search`, `compact`, or startup. An applied purge also runs `PRAGMA incremental_vacuum`, so the database file shrinks with the graph rather than retaining a free list.
 
 `reset` deletes every entity, relation, and observation; it prompts unless given `--force`.
 
@@ -357,14 +359,14 @@ The type given to `asobi new` determines what `--where` filters, `compact`, and 
 | Type         | Use for                                             |
 | ------------ | --------------------------------------------------- |
 | `project`    | Stable per-project facts and architecture decisions |
-| `session`    | Volatile session state                              |
+| `session`    | Legacy session state; an ordinary entity since 0.8  |
 | `task`       | Epics and their dispatchable child tasks            |
 | `concept`    | Decisions, pitfalls, technical definitions          |
 | `preference` | Cross-project user or tool preferences              |
 | `standard`   | Conventions that apply everywhere                   |
 | `reference`  | Pointers to external resources and URLs             |
 
-Only the durable types reach Markdown through `compact`, and only `session` and terminal `task` entities are eligible for `purge`, so a decision typed as `session` is both invisible to topics and reachable by retention.
+Only `task` entities stay out of the Markdown projection, and only finished `task` entities are eligible for `purge`; every other type — `session` included, since 0.8 — is durable knowledge both places.
 
 Names are hierarchical and colon-separated — `project-x`, `project-x:session`, `project-x:epic`, `project-x:epic:task-1` — and preserve case and dots, so `CLAUDE.md` and `UserPreferences` are valid names. Relations read as verb phrases: `part_of`, `depends_on`, `supersedes`, `extends`, `uses`, `blocks`.
 

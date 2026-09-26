@@ -53,7 +53,7 @@ pub fn sync_graph_to_markdown(graph_store: &impl GraphStore) -> Result<usize> {
 /// Markdown topics hold durable
 /// *knowledge*, not volatile *state* or self-indexing content. We skip:
 ///
-/// - `session` / `task` (epics are `task` too, so they skip with their tasks):
+/// - `task` (epics are `task` too, so they skip with their tasks):
 ///   operational state that flips constantly and is already cheaply queryable
 ///   from the graph via `search --where status=…` / `show`. Embedding it only
 ///   churns the graph and pollutes operational reads; full archival
@@ -61,7 +61,7 @@ pub fn sync_graph_to_markdown(graph_store: &impl GraphStore) -> Result<usize> {
 ///
 /// Denylist (not allowlist) so new knowledge types persist by default.
 fn should_sync(entity_type: &str) -> bool {
-    !matches!(entity_type, "session" | "task")
+    entity_type != "task"
 }
 
 /// Write the YAML frontmatter block. Beyond the `title`/`type`/`slug` identity
@@ -211,8 +211,10 @@ mod tests {
         assert!(should_sync("reference"));
         assert!(should_sync("preference"));
         assert!(should_sync("standard"));
+        // Sessions are no longer special: with sessions gone (ADR 0006) a
+        // legacy session entity projects like any other knowledge entity.
+        assert!(should_sync("session"));
         // Volatile operational state stays graph-only.
-        assert!(!should_sync("session"));
         assert!(!should_sync("task"));
     }
 

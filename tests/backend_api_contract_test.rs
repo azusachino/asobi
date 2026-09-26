@@ -160,14 +160,14 @@ fn purge_is_preview_first_and_leaves_durable_knowledge() {
     store
         .create_entities(vec![
             EntityInput {
-                name: "project:session".into(),
-                entity_type: "session".into(),
-                observations: vec!["old session note".into()],
+                name: "project:task-done".into(),
+                entity_type: "task".into(),
+                observations: vec!["old finished task".into()],
             },
             EntityInput {
-                name: "project:task".into(),
+                name: "project:task-closed".into(),
                 entity_type: "task".into(),
-                observations: vec!["old task note".into()],
+                observations: vec!["old closed task".into()],
             },
             EntityInput {
                 name: "project:concept".into(),
@@ -177,10 +177,10 @@ fn purge_is_preview_first_and_leaves_durable_knowledge() {
         ])
         .unwrap();
     store
-        .truth_upsert("project:session", "status", "DONE")
+        .truth_upsert("project:task-done", "status", "DONE")
         .unwrap();
     store
-        .truth_upsert("project:task", "status", "DONE")
+        .truth_upsert("project:task-closed", "status", "CLOSED")
         .unwrap();
 
     let db = dir.path().join("contract.db");
@@ -205,7 +205,7 @@ fn purge_is_preview_first_and_leaves_durable_knowledge() {
         store
             .open_nodes(OpenNodes {
                 observation_limit: 0,
-                names: vec!["project:task".into()],
+                names: vec!["project:task-done".into()],
                 ..Default::default()
             })
             .unwrap()
@@ -226,7 +226,7 @@ fn purge_is_preview_first_and_leaves_durable_knowledge() {
         store
             .open_nodes(OpenNodes {
                 observation_limit: 0,
-                names: vec!["project:task".into()],
+                names: vec!["project:task-done".into()],
                 ..Default::default()
             })
             .unwrap()
@@ -239,7 +239,7 @@ fn purge_is_preview_first_and_leaves_durable_knowledge() {
     assert!(
         !store
             .search_nodes(SearchQuery {
-                query: "old task note".into(),
+                query: "old finished task".into(),
                 limit: 10,
                 filters: vec![],
             })

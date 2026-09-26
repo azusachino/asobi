@@ -18,8 +18,12 @@ const SCHEMA_VERSION: i64 = 8;
 const DEFAULT_DATABASE_FILENAME: &str = "asobi.db";
 const DEFAULT_BUSY_TIMEOUT_MS: u64 = 15_000;
 const DEFAULT_OBSERVATION_LIMIT: usize = 200;
-const PURGEABLE_ENTITY_TYPES: &[&str] = &["session", "task"];
+const PURGEABLE_ENTITY_TYPES: &[&str] = &["task"];
 const PURGEABLE_STATUSES: &[&str] = &["DONE", "CLOSED", "ABANDONED"];
+
+/// The statuses an abandonment sweep never touches; anything else — including
+/// no `status` truth at all — counts as open.
+const TERMINAL_STATUSES: &[&str] = &["DONE", "CLOSED", "ABANDONED"];
 
 fn backend_error(error: impl std::fmt::Display) -> ApiError {
     ApiError::Backend(error.to_string())
@@ -27,6 +31,17 @@ fn backend_error(error: impl std::fmt::Display) -> ApiError {
 
 fn normalize(value: &str) -> String {
     crate::normalize::normalize_key(value)
+}
+
+/// Resolve a sweep window: environment variable first, then `asobi.toml`,
+/// then the built-in default. The same order as `observation_limit`, the other
+/// bound in this tool. `0` disables the window's behaviour at the call site.
+fn resolve_window(env_key: &str, config: Option<u32>, default: u32) -> u32 {
+    std::env::var(env_key)
+        .ok()
+        .and_then(|v| v.parse::<u32>().ok())
+        .or(config)
+        .unwrap_or(default)
 }
 
 fn collect_purge_candidates(
@@ -199,8 +214,7 @@ pub struct SqliteStore {
     retention_swept: std::sync::atomic::AtomicBool,
 }
 
-/// How long a finished session or task survives before the automatic sweep
-/// removes it.
+/// How long a finished task survives before the automatic sweep removes it.
 ///
 /// Operational state is relevant for hours, occasionally days: a task that has
 /// been `DONE` for a week is not context, it is archaeology. The previous
@@ -209,6 +223,25 @@ pub struct SqliteStore {
 /// finished work. A default that has to be invoked is a default that does not
 /// happen.
 pub const DEFAULT_RETENTION_DAYS: u32 = 7;
+
+/// How long an open task stays untouched before the sweep abandons it.
+///
+/// An abandoned task is terminal, so retention removes it `retention_days`
+/// later: with both defaults, an idle task is visible as `ABANDONED` for a
+/// week and gone the week after. The sweep records the observation that says
+/// this happened, so the two-step lifecycle is always visible in the trail.
+pub const DEFAULT_ABANDON_DAYS: u32 = 7;
+
+/// What one automatic sweep did. Abandonment and retention are reported
+/// separately because they are different lifecycles: the first marks idle open
+/// work terminal, the second removes work that has been terminal for a while.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct SweepReport {
+    /// Open tasks the sweep marked `ABANDONED` this pass.
+    pub abandoned: usize,
+    /// Terminal entities retention deleted this pass.
+    pub purged: usize,
+}
 
 impl SqliteStore {
     pub fn open_default() -> crate::Result<Self> {
@@ -429,36 +462,144 @@ impl SqliteStore {
         Ok(())
     }
 
-    /// Drop finished operational entities once per process, before the first
-    /// write.
+    /// Drop finished work once per process, before the first write, and
+    /// abandon idle open tasks first.
     ///
     /// On a write rather than at open, so a pure read never mutates the graph --
     /// `asobi show` must not delete anything. Once per process rather than per
     /// call, since a single command should not pay for the sweep repeatedly.
-    /// Failures are ignored: retention is hygiene, and a command must not fail
+    /// Failures are ignored: the sweep is hygiene, and a command must not fail
     /// because housekeeping did.
     fn sweep_expired_once(&self) {
         use std::sync::atomic::Ordering;
         if self.retention_swept.swap(true, Ordering::SeqCst) {
             return;
         }
-        // Resolved the same way as `observation_limit`, the other bound in
-        // this tool: environment first, then `asobi.toml`, then the default.
-        let days = std::env::var("ASOBI_RETENTION_DAYS")
-            .ok()
-            .and_then(|v| v.parse::<u32>().ok())
-            .unwrap_or_else(|| {
-                crate::paths::AsobiPaths::resolve()
-                    .retention_days
-                    .unwrap_or(DEFAULT_RETENTION_DAYS)
-            });
+        let _ = self.sweep();
+    }
+
+    /// One full sweep: abandon idle open tasks, then let retention delete
+    /// finished ones.
+    ///
+    /// Public and repeatable so the server (WP4) can run it on a background
+    /// thread; the once-per-process guard lives in `sweep_expired_once`, not
+    /// here. Abandonment runs first because it appends an observation, which
+    /// refreshes `last_activity`: a newly abandoned task then survives
+    /// retention for its full window instead of being marked and deleted in
+    /// the same breath — the two-step lifecycle the ADR promises.
+    ///
+    /// This is deliberately not part of the `v2` traits: the sweep is a
+    /// provider-side maintenance behaviour, not a capability callers depend
+    /// on, and it stays out of the RPC surface with them.
+    pub fn sweep(&self) -> ApiResult<SweepReport> {
+        let abandoned = self.abandon_idle_tasks(resolve_window(
+            "ASOBI_ABANDON_DAYS",
+            crate::paths::AsobiPaths::resolve().abandon_days,
+            DEFAULT_ABANDON_DAYS,
+        ))?;
+        let retention_days = resolve_window(
+            "ASOBI_RETENTION_DAYS",
+            crate::paths::AsobiPaths::resolve().retention_days,
+            DEFAULT_RETENTION_DAYS,
+        );
+        let purged = if retention_days == 0 {
+            0
+        } else {
+            self.purge(PurgeRequest {
+                older_than_days: retention_days,
+                apply: true,
+            })?
+            .deleted
+        };
+        Ok(SweepReport { abandoned, purged })
+    }
+
+    /// Mark every idle open task `ABANDONED` in one transaction, each with an
+    /// observation recording that it happened automatically.
+    ///
+    /// A task counts as idle when its `last_activity` — the same MAX over
+    /// creation, observations and truth updates retention uses — is older
+    /// than `days`, and it has no open `part_of` child: an epic's own entity
+    /// goes quiet while its children are being worked, so the children's
+    /// liveness protects it.
+    fn abandon_idle_tasks(&self, days: u32) -> ApiResult<usize> {
         if days == 0 {
-            return;
+            return Ok(0);
         }
-        let _ = self.purge(PurgeRequest {
-            older_than_days: days,
-            apply: true,
-        });
+        self.write(|tx| {
+            let status_placeholders = TERMINAL_STATUSES
+                .iter()
+                .map(|_| "?")
+                .collect::<Vec<_>>()
+                .join(",");
+            // Same `last_activity` expression as the retention candidate
+            // query: one definition of activity, not two that drift.
+            let sql = format!(
+                r#"
+                SELECT name FROM (
+                    SELECT e.name,
+                        COALESCE(
+                            (SELECT value FROM asobi_truths
+                             WHERE entity_name = e.name AND key = 'status'),
+                            ''
+                        ) AS status,
+                        MAX(
+                            e.created_at,
+                            COALESCE(
+                                (SELECT MAX(created_at) FROM asobi_observations
+                                 WHERE entity_name = e.name),
+                                e.created_at
+                            ),
+                            COALESCE(
+                                (SELECT MAX(updated_at) FROM asobi_truths
+                                 WHERE entity_name = e.name),
+                                e.created_at
+                            )
+                        ) AS last_activity
+                    FROM asobi_entities e
+                    WHERE e.entity_type = 'task'
+                ) candidates
+                WHERE status NOT IN ({status_placeholders})
+                  AND last_activity < datetime('now', ?)
+                  AND NOT EXISTS (
+                      SELECT 1 FROM asobi_relations r
+                      JOIN asobi_entities child ON child.name = r.from_entity
+                      WHERE r.to_entity = candidates.name
+                        AND r.relation_type = 'part_of'
+                        AND COALESCE(
+                                (SELECT value FROM asobi_truths
+                                 WHERE entity_name = child.name AND key = 'status'),
+                                ''
+                            ) NOT IN ({status_placeholders})
+                  )
+                ORDER BY name
+                "#
+            );
+            let cutoff = format!("-{days} days");
+            // The status list is interpolated twice — the candidate's own
+            // status and the open-child check — so it is bound twice too.
+            let mut values: Vec<&dyn ToSql> =
+                TERMINAL_STATUSES.iter().map(|v| v as &dyn ToSql).collect();
+            values.push(&cutoff);
+            values.extend(TERMINAL_STATUSES.iter().map(|v| v as &dyn ToSql));
+            let names: Vec<String> = tx
+                .prepare(&sql)?
+                .query_map(params_from_iter(values), |row| row.get(0))?
+                .collect::<rusqlite::Result<_>>()?;
+            let observation = format!("abandoned automatically after {days} idle days");
+            for name in &names {
+                tx.execute(
+                    "INSERT INTO asobi_truths(entity_name,key,value) VALUES (?,'status','ABANDONED') \
+                     ON CONFLICT(entity_name,key) DO UPDATE SET value=excluded.value, updated_at=CURRENT_TIMESTAMP",
+                    params![name],
+                )?;
+                tx.execute(
+                    "INSERT INTO asobi_observations(entity_name, content) VALUES (?, ?)",
+                    params![name, observation],
+                )?;
+            }
+            Ok(names.len())
+        })
     }
 
     fn write<T>(

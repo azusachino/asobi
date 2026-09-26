@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### Added
+
+- **Idle open tasks are abandoned automatically** ([ADR 0006](docs/decisions/0006-tasks-replace-sessions.md)). A task with no activity for `abandon_days` (default 7; `ASOBI_ABANDON_DAYS` or the `asobi.toml` key, `0` disables) becomes `ABANDONED`, with an observation recording that it was abandoned automatically after that many idle days. A task with no `status` truth counts as open. An epic is never abandoned while any `part_of` child is open. Abandonment runs in the same per-process sweep as retention, before it — an abandoned task is terminal, so retention deletes it `retention_days` later, which with both defaults gives an untouched task one visible week as `ABANDONED` and deletion after two.
+- The sweep is now `SqliteStore::sweep()` on the provider, callable repeatedly, so the server (WP4) can run it on a background thread. It is not part of the `v2` traits and not an RPC method.
+
+### Changed
+
+- **`session` is no longer a special entity type** (ADR 0006). Retention no longer purges `session` entities — existing sessions become ordinary entities that nothing deletes; remove them with `asobi rm` if wanted. `compact` no longer excludes them by name, so they project to Markdown like any other knowledge entity. `purge` accepts only `task` entities now.
+
 ### Removed
 
 - **Skills management is gone** (see [ADR 0004](docs/decisions/0004-remove-skills.md)). The `skills` command group (`install`, `sync`, `update`, `remove`, `show`), the declarative `[skills]` block, the shared-Markdown relocation, the reference diagnostics, the `data_dir/skills.json` provenance manifest, and the git-cache helpers behind them are all deleted. Asobi is a graph and task CLI again. Install the companion skill — and any other skills — with the maintained [`skills` CLI](https://github.com/vercel-labs/skills) (`npx skills add <source> --skill <name> --agent universal`). Installed skill trees on disk are untouched; nothing Asobi installed is removed by upgrading.
