@@ -297,8 +297,6 @@ def main() -> None:
         assert "database" in failed.stderr.lower()
 
     batch_and_json_checks()
-    skills_checks()
-    skills_sync_checks()
     agent_feature_checks()
     task_checks()
 
@@ -368,176 +366,6 @@ def batch_and_json_checks() -> None:
         # so there is nothing to open — the shape is a deletion receipt).
         del_echo = json_data(["rm", "gamma", "--json"], env)
         assert del_echo == {"deleted": ["gamma"]}
-
-
-def skills_checks() -> None:
-    """End-to-end coverage for the `skills` command group, including the
-    git edge cases (missing git binary, unreachable remote, bad local path).
-
-    `ASOBI_HOME` is set alongside `ASOBI_DATABASE_URL` so the skills
-    cache (`paths.caches_dir()`) stays inside the temp dir — it resolves from
-    HOME/XDG, not from the database URL — and never touches global state.
-    """
-    with tempfile.TemporaryDirectory(prefix="asobi-skills-") as tmp:
-        root = Path(tmp)
-        env = os.environ.copy()
-        env["ASOBI_HOME"] = str(root / "home")
-        env["ASOBI_DATABASE_URL"] = str(root / "asobi.db")
-
-        # A skill is a directory holding SKILL.md -- the only shape supported.
-        src = root / "src-skills"
-        (src / "alpha").mkdir(parents=True)
-        (src / "nested").mkdir(parents=True)
-        (src / "alpha" / "SKILL.md").write_text(
-            "---\nname: alpha\ndescription: Alpha skill\n---\nAlpha body here\n"
-        )
-        # Only a description: the name falls back to the directory ("nested"),
-        # which is what the spec says a skill's directory is named for anyway.
-        (src / "nested" / "SKILL.md").write_text(
-            "---\ndescription: Nested skill\n---\nNested body\n"
-        )
-
-        # Install (local dir => version "local", no git needed).
-        run(["skills", "install", str(src), "--all"], env)
-
-        listed = run(["skills"], env).stdout
-        assert "Installed Skills (" in listed
-        assert "alpha" in listed
-        assert "nested" in listed
-        # Name and version, grouped under the source. No description: the
-        # manifest stopped recording one, because re-serializing it out of
-        # frontmatter meant a `description: >` skill recorded the literal ">".
-        assert "local" in listed
-        assert "Alpha skill" not in listed
-
-        # show resolves a short name and prints the raw body unescaped --
-        # which is where the description is actually readable.
-        shown = run(["skills", "show", "alpha"], env).stdout
-        assert "Alpha body here" in shown
-        assert "description: Alpha skill" in shown
-
-        # Remove by source string clears every skill from that source.
-        run(["skills", "remove", str(src)], env)
-        assert "No skills installed" in run(["skills"], env).stdout
-
-        # --select installs only the named skill, not the rest.
-        run(["skills", "install", str(src), "--select", "alpha"], env)
-        selected = run(["skills"], env).stdout
-        assert "alpha" in selected
-        assert "nested" not in selected
-        run(["skills", "remove", str(src)], env)
-
-        # --select with an unknown name fails.
-        bad_select = run_expect_failure(
-            ["skills", "install", str(src), "--select", "ghost"], env
-        )
-        assert "not found" in bad_select.stderr.lower()
-
-        # Edge case: local path that does not exist.
-        missing = run_expect_failure(
-            ["skills", "install", str(root / "does-not-exist"), "--all"], env
-        )
-        assert "does not exist" in missing.stderr.lower()
-
-        # Edge case: remote (git URL) unreachable — git present, clone fails.
-        # file:// avoids any network so the check stays offline and fast.
-        unreachable = run_expect_failure(
-            ["skills", "install", f"file://{root}/no-such-repo.git", "--all"], env
-        )
-        assert "clone" in unreachable.stderr.lower()
-
-        # Edge case: git binary not installed — strip git from PATH and point
-        # at a git URL so resolution reaches the remote path.
-        no_git_env = dict(env)
-        no_git_env["PATH"] = str(root / "empty-bin")
-        (root / "empty-bin").mkdir()
-        no_git = run_expect_failure(
-            ["skills", "install", "https://example.com/owner/repo.git", "--all"],
-            no_git_env,
-        )
-        assert "git" in no_git.stderr.lower()
-
-
-def skills_sync_checks() -> None:
-    """End-to-end coverage for declarative `skills sync`.
-
-    The project root holds the `asobi.toml` that declares the sources, so the
-    CLI runs with `cwd` set there rather than under `ASOBI_HOME` — sync reads
-    the discovered config file, which `ASOBI_HOME` deliberately bypasses.
-    """
-    with tempfile.TemporaryDirectory(prefix="asobi-skills-sync-") as tmp:
-        root = Path(tmp)
-        env = os.environ.copy()
-        env.pop("ASOBI_HOME", None)
-        env["ASOBI_DATABASE_URL"] = str(root / "asobi.db")
-
-        src = root / "src-skills"
-        src.mkdir()
-        for name in ("alpha", "beta"):
-            (src / name).mkdir()
-            (src / name / "SKILL.md").write_text(
-                f"---\nname: {name}\ndescription: {name} skill\n---\n{name} body\n"
-            )
-
-        project = root / "project"
-        project.mkdir()
-        config = project / "asobi.toml"
-        config.write_text(
-            "data_dir = '.asobi/data'\n\n"
-            "[skills]\n"
-            "path = '.agents/skills'\n\n"
-            "[[skills.source]]\n"
-            f"url = '{src}'\n"
-            "select = ['alpha']\n"
-        )
-
-        skills_dir = project / ".agents" / "skills"
-        # A vendored source checkout has no `@` in its name and must survive.
-        (skills_dir / "vendored-upstream").mkdir(parents=True)
-
-        run(["skills", "sync"], env, cwd=project)
-
-        written = list(skills_dir.glob("*@alpha/SKILL.md"))
-        assert len(written) == 1, f"expected one materialised skill, got {written}"
-        assert "alpha body" in written[0].read_text()
-        assert not list(skills_dir.glob("*@beta")), "unselected skill was written"
-        assert (skills_dir / "vendored-upstream").is_dir()
-
-        # The manifest is state, so it lands in `data_dir` -- one skills.json,
-        # naming the skills directory it describes -- and the skills directory
-        # holds nothing but skills.
-        manifest = project / ".asobi" / "data" / "skills.json"
-        assert manifest.is_file(), f"no manifest at {manifest}"
-        assert json.loads(manifest.read_text())["dir"] == str(skills_dir)
-        assert not list(skills_dir.glob("*.json")), "manifest written beside skills"
-        assert not (skills_dir / ".asobi-skills.json").exists()
-
-        listed = run(["skills"], env, cwd=project).stdout
-        assert "alpha" in listed
-        assert "beta" not in listed
-
-        # Widening the selection installs and materialises the new skill.
-        config.write_text(
-            config.read_text().replace(
-                "select = ['alpha']", "select = ['alpha', 'beta']"
-            )
-        )
-        run(["skills", "sync"], env, cwd=project)
-        assert list(skills_dir.glob("*@beta/SKILL.md"))
-
-        # Dropping the only source empties the graph and reclaims the directory.
-        config.write_text(
-            "data_dir = '.asobi/data'\n\n[skills]\npath = '.agents/skills'\n"
-        )
-        empty = run_expect_failure(["skills", "sync"], env, cwd=project)
-        assert "no `[[skills.source]]`" in empty.stderr
-
-        # An undeclared selection is rejected before anything is applied.
-        config.write_text(
-            f"data_dir = '.asobi/data'\n\n[[skills.source]]\nurl = '{src}'\n"
-        )
-        neither = run_expect_failure(["skills", "sync"], env, cwd=project)
-        assert "neither" in neither.stderr
 
 
 def task_checks() -> None:
@@ -694,7 +522,7 @@ def agent_feature_checks() -> None:
 
         # 7. JSON error formatting
         failed = run_expect_failure(
-            ["--json", "skills", "show", "no_such_skill_abc"], env
+            ["--json", "tasks", "close", "no_such_epic_abc"], env
         )
         err_json = validate_error(json.loads(failed.stdout))
         assert "not found" in err_json["error"]

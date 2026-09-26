@@ -142,38 +142,6 @@ def main() -> None:
         )
 
         # -------------------------------------------------------------
-        # Use-Case 4: Skills Registry (Install, List, and Show)
-        # -------------------------------------------------------------
-        print("\n--- Use-Case 4: Skills Registry (Install, List, and Show) ---")
-
-        # Create a mock local skill
-        skills_src_dir = Path(tmp_dir) / "mock-skills"
-        (skills_src_dir / "test-skill").mkdir(parents=True)
-        skill_file = skills_src_dir / "test-skill" / "SKILL.md"
-        skill_file.write_text(
-            "---\n"
-            "name: test-skill\n"
-            "description: A mock skill for use-case validation\n"
-            "---\n"
-            "This is the body of the test skill."
-        )
-
-        # Install the mock skill
-        run_cmd(["skills", "install", str(skills_src_dir), "--all"], db_path)
-
-        # List all skills
-        # The listing carries name and version, grouped by source. The
-        # description is not recorded, so `show` is where it is readable.
-        list_stdout = run_cmd(["skills"], db_path)
-        assert "test-skill" in list_stdout
-        assert "local" in list_stdout
-
-        # Show specific skill body
-        show_stdout = run_cmd(["skills", "show", "test-skill"], db_path)
-        assert "This is the body of the test skill." in show_stdout
-        assert "A mock skill for use-case validation" in show_stdout
-
-        # -------------------------------------------------------------
         # Use-Case 5: Daily agent practice (tasks, compact, archive)
         # -------------------------------------------------------------
         print("\n--- Use-Case 5: Daily agent practice ---")

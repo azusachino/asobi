@@ -152,11 +152,6 @@ pub(crate) enum Commands {
         #[arg(long)]
         force: bool,
     },
-    /// Manage, install, and update AI agent skills
-    Skills {
-        #[command(subcommand)]
-        subcommand: Option<SkillsCommands>,
-    },
     /// Plan and coordinate durable task-dispatcher work
     Tasks {
         #[command(subcommand)]
@@ -184,43 +179,4 @@ impl From<CompletionShell> for clap_complete::Shell {
             CompletionShell::Zsh => Self::Zsh,
         }
     }
-}
-
-#[derive(Subcommand, Debug)]
-pub(crate) enum SkillsCommands {
-    /// Install skills from a git repository or local path
-    Install {
-        /// Git URL or local directory path
-        source: String,
-        /// Install all skills found
-        #[arg(long)]
-        all: bool,
-        /// Install skills by source-relative directory path, unique suffix, or name
-        #[arg(long, num_args = 1..)]
-        select: Option<Vec<String>>,
-        /// Only walk this subdirectory of the checkout (e.g. a source that
-        /// mirrors skills across several tool-specific directories)
-        #[arg(long)]
-        subdir: Option<std::path::PathBuf>,
-        /// Pin to a commit, tag, or branch instead of the default branch
-        #[arg(long)]
-        rev: Option<String>,
-    },
-    /// Reconcile installed skills with the `[skills]` block in `asobi.toml`
-    Sync,
-    /// Update installed skills from their sources
-    Update {
-        /// Specific source URL or slug to update (updates all if omitted)
-        source: Option<String>,
-    },
-    /// Remove an installed skill or all skills from a source
-    Remove {
-        /// Name of the skill (e.g. skill:slug:name) or source slug/URL
-        target: String,
-    },
-    /// Show the raw body of an installed skill (useful for humans to read without JSON escaping)
-    Show {
-        /// Name of the skill (fully qualified e.g. skill:slug:name, or short name)
-        name: String,
-    },
 }

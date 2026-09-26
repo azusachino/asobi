@@ -23,7 +23,6 @@ Keep memory, track session state, and share context across conversations — sto
 - **Fast search** — `search` over SQLite FTS5 (BM25 relevance, porter stemming) with a substring fallback, plus `--where key=value` truth filters (the query term is optional).
 - **Concurrency-safe** — WAL-mode storage with bounded busy timeouts, so lead and dispatched agents can share a graph.
 - **Lazy reads** — `graph`/`search` return truths + counts; `show` returns the full body. Cheap to load, cheap on tokens.
-- **Skills** — install reusable agent instructions from a git repo or local path, imperatively or by declaring a `[skills]` block in `asobi.toml` and running `skills sync`. They live on the filesystem, not in the graph, with a manifest recording each one's source and commit.
 
 ## 🏗️ Architecture
 
@@ -31,7 +30,7 @@ One synchronous storage contract, one bundled backend, one local file — see [A
 
 ```mermaid
 flowchart LR
-    CLI["src/cli/*\n(commands, dispatch, graph, skills)"]
+    CLI["src/cli/*\n(commands, dispatch, graph)"]
     API["api::v2\nGraphStore · SearchStore\nMaintenanceStore · TaskStore"]
     Sqlite["SqliteStore\n(src/storage/sqlite.rs)"]
     DB[("asobi.db\nWAL + FTS5")]
@@ -87,8 +86,6 @@ asobi rm-obs "my-project" 1 --id
 - `asobi graph` / `search <q>` / `search --where status=READY` / `show <name>... --expand part_of --with-ids` — read the graph (supports subtree expansions and sequential observation IDs).
 - `asobi new <name> <type> --obs "..."` / `obs <name> "..."` / `update-obs <name> <old/id> <new> [--id]` / `rm-obs <name> <content/id> [--id]` — manage observations (supports updates and deletions by unique sequential IDs).
 - `asobi truth <name> <key> <value>` / `rm-truth <name> <key>` — manage truths. A truth is the current value and nothing else: an overwrite replaces it, with no archive behind it.
-- `asobi skills install <src> --all` / `update` / `skills` / `skills show <name>` — manage skills. `--select` accepts source-relative directory paths, unique path suffixes, or frontmatter names; `--subdir <path>` scopes the source walk, and `--rev` pins its revision. Bundled Markdown is installed alongside `SKILL.md`; shared Markdown requires an explicit declaration. Scripts, assets and other non-Markdown files are excluded.
-- `asobi skills sync` — reconcile installed skills with the `[skills]` block in `asobi.toml`, and write each one to `.agents/skills/<source-slug>@<skill-name>/SKILL.md`. Per-source `subdir = "..."` does the same scoping declaratively.
 - `asobi stats` / `purge` / `reset` — inspect & manage. The graph is one SQLite file, so `cp` it to back it up.
 
 ## 🔒 Sandboxed Environments
@@ -104,4 +101,4 @@ See the [Running in Sandboxed Environments](docs/usage.md#running-in-sandboxed-e
 - **Rust quality standard**: keep code rustfmt-clean, introduce no Clippy warnings, preserve single-threaded test isolation, and add regression coverage for behavior changes. Run `make check` before commits.
 - **Coverage**: with `cargo-tarpaulin` installed, run `cargo tarpaulin --out Html --output-dir coverage` and open `coverage/index.html`.
 - **Benchmarks**: run `make bench`; use [performance profiling](docs/benchmarks/profiling.md) for Criterion baselines, DHAT allocations, and SQL plans.
-- See [`docs/usage.md`](docs/usage.md) for the full CLI reference and [`docs/architecture.md`](docs/architecture.md) for design. The narrative walkthrough of _why_ the command set is shaped this way — the lazy-read contract, truths versus observations, the dispatcher as a convention — moved to [harus-kb](https://github.com/azusachino/harus-workstation/blob/main/docs/projects/asobi/workflow.md). Agent workflow guidance lives in the [`asobi` skill](https://github.com/azusachino/harus-skills/blob/main/skills/asobi/SKILL.md); this repository ships no `SKILL.md` of its own. Install it with `asobi skills install https://github.com/azusachino/harus-skills.git --select asobi`.
+- See [`docs/usage.md`](docs/usage.md) for the full CLI reference and [`docs/architecture.md`](docs/architecture.md) for design. The narrative walkthrough of _why_ the command set is shaped this way — the lazy-read contract, truths versus observations, the dispatcher as a convention — moved to [harus-kb](https://github.com/azusachino/harus-workstation/blob/main/docs/projects/asobi/workflow.md). Agent workflow guidance lives in the [`asobi` skill](https://github.com/azusachino/harus-skills/blob/main/skills/asobi/SKILL.md); this repository ships no `SKILL.md` of its own. Install it with `npx skills add https://github.com/azusachino/harus-skills --skill asobi --agent universal`.

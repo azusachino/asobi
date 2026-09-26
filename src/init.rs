@@ -90,12 +90,6 @@ fn ensure_dirs(dirs: &[PathBuf]) -> Result<(Vec<PathBuf>, Vec<PathBuf>)> {
 }
 
 /// Written by `asobi init --local`.
-///
-/// The `[skills]` block ships commented out and names no source on purpose.
-/// Scaffolding it is how someone discovers `skills sync` exists at all, but
-/// defaulting to any particular skill repository would install natural-language
-/// instructions the user never asked for — and a skill is read straight into an
-/// agent's context. Discovery yes, default remote no.
 const DEFAULT_LOCAL_CONFIG: &str = "\
 # Asobi project-local configuration.
 # Paths are resolved relative to this file.
@@ -103,21 +97,6 @@ const DEFAULT_LOCAL_CONFIG: &str = "\
 data_dir   = \".asobi/data\"
 config_dir = \".asobi/config\"
 topics_dir = \".asobi/topics\"
-
-# Declare the skills this workspace uses, then run `asobi skills sync`. The
-# config is the whole truth: it installs what is declared, prunes what is not,
-# and writes each skill to <path>/<source-slug>@<skill-name>/SKILL.md.
-#
-# `select` names come from each skill's frontmatter `name:`, which is often not
-# its directory name. Add `subdir = \"skills\"` for a source that mirrors the
-# same skills across several tool-specific directories.
-#
-# [skills]
-# path = \".agents/skills\"
-#
-# [[skills.source]]
-# url = \"https://github.com/<owner>/<repo>.git\"
-# select = [\"<skill-name>\"]
 ";
 
 #[cfg(test)]
@@ -137,6 +116,16 @@ mod tests {
         assert!(dir.path().join(".asobi/data").is_dir());
         assert!(dir.path().join(".asobi/topics").is_dir());
         assert!(dir.path().join(".asobi/config").is_dir());
+    }
+
+    #[test]
+    fn local_config_contains_no_skills_text() {
+        // ADR 0004: init no longer scaffolds the commented `[skills]` block.
+        let dir = tempdir().unwrap();
+        init_workspace(InitTarget::Local, dir.path()).unwrap();
+
+        let config = std::fs::read_to_string(dir.path().join("asobi.toml")).unwrap();
+        assert!(!config.to_lowercase().contains("skill"));
     }
 
     #[test]

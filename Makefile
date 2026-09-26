@@ -1,4 +1,4 @@
-.PHONY: help build run test test-scripts verify-storage-boundary verify-skills-spec bench bench-compile bench-graph bench-criterion bench-alloc bench-sql-plans bench-tasks bench-storage fmt fmt-check lint check clean init
+.PHONY: help build run test test-scripts verify-storage-boundary bench bench-compile bench-graph bench-criterion bench-alloc bench-sql-plans bench-tasks bench-storage fmt fmt-check lint check clean init
 
 help:
 	@echo "Available tasks:"
@@ -7,7 +7,6 @@ help:
 	@echo "  test                  Run all Rust tests serially"
 	@echo "  test-scripts          Run built-CLI integration checks"
 	@echo "  verify-storage-boundary  Check provider encapsulation"
-	@echo "  verify-skills-spec    Validate installed skills against the Agent Skills spec"
 	@echo "  bench                 Run all benchmark harnesses"
 	@echo "  bench-compile         Compile all benchmark targets without running them"
 	@echo "  bench-graph           Run graph benchmarks"
@@ -37,9 +36,6 @@ test-scripts: build
 
 verify-storage-boundary:
 	uv run --no-project python scripts/verify_storage_boundary.py
-
-verify-skills-spec: build
-	uv run --no-project python scripts/verify_skills_spec.py
 
 bench:
 	cargo bench
@@ -81,7 +77,7 @@ lint:
 	cargo clippy -- -D warnings
 	ruff check .
 
-check: verify-storage-boundary verify-skills-spec fmt-check lint test test-scripts bench-compile
+check: verify-storage-boundary fmt-check lint test test-scripts bench-compile
 
 clean:
 	cargo clean

@@ -15,7 +15,6 @@ pub struct AsobiPaths {
     pub data_dir: PathBuf,
     pub config_dir: PathBuf,
     pub topics_dir: PathBuf,
-    pub cache_dir: PathBuf,
     pub observation_limit: Option<usize>,
     /// Days a finished session or task survives before the automatic sweep.
     pub retention_days: Option<u32>,
@@ -37,13 +36,12 @@ pub const ENV_DATABASE_URL: &str = "ASOBI_DATABASE_URL";
 /// XDG base directories for the user-level Asobi workspace. A single root
 /// (`$XDG_DATA_HOME/asobi`, honoring the env var on every platform — macOS
 /// included, where the `directories` crate would prefer `~/Library/...`) holds
-/// the same `{data,config,topics,caches}` subtree as a project-local
+/// the same `{data,config,topics}` subtree as a project-local
 /// `.asobi/`, so the two layouts mirror each other.
 pub struct XdgDirs {
     pub data_dir: PathBuf,
     pub config_dir: PathBuf,
     pub topics_dir: PathBuf,
-    pub cache_dir: PathBuf,
 }
 
 /// Resolve `$XDG_DATA_HOME` (or its conventional `~/.local/share` fallback) on
@@ -69,7 +67,6 @@ pub fn xdg_dirs() -> Option<XdgDirs> {
         data_dir: root.join("data"),
         config_dir: root.join("config"),
         topics_dir: root.join("topics"),
-        cache_dir: root.join("caches"),
     })
 }
 
@@ -89,7 +86,6 @@ impl AsobiPaths {
         if let Ok(home) = env::var(ENV_ASOBI_HOME) {
             let root = PathBuf::from(home);
             return Self {
-                cache_dir: root.join("caches"),
                 data_dir: root.clone(),
                 config_dir: root.clone(),
                 topics_dir: root.clone(),
@@ -115,7 +111,6 @@ impl AsobiPaths {
                 data_dir: local_root.join("data"),
                 config_dir: local_root.join("config"),
                 topics_dir: local_root.join("topics"),
-                cache_dir: local_root.join("caches"),
                 observation_limit: None,
                 retention_days: None,
                 root: local_root
@@ -131,7 +126,6 @@ impl AsobiPaths {
                 data_dir: x.data_dir,
                 config_dir: x.config_dir,
                 topics_dir: x.topics_dir,
-                cache_dir: x.cache_dir,
                 observation_limit: None,
                 retention_days: None,
                 root: start.to_path_buf(),
@@ -141,7 +135,6 @@ impl AsobiPaths {
                 data_dir: PathBuf::from(".asobi/data"),
                 config_dir: PathBuf::from(".asobi/config"),
                 topics_dir: PathBuf::from(".asobi/topics"),
-                cache_dir: PathBuf::from(".asobi/caches"),
                 observation_limit: None,
                 retention_days: None,
                 root: start.to_path_buf(),
@@ -160,24 +153,15 @@ impl AsobiPaths {
             }
         };
         let data_dir = resolve(conf.data_dir, ".asobi/data");
-        let cache_dir = data_dir
-            .parent()
-            .map(|p| p.join("caches"))
-            .unwrap_or_else(|| PathBuf::from(".asobi/caches"));
         Self {
             config_dir: resolve(conf.config_dir, ".asobi/config"),
             topics_dir: resolve(conf.topics_dir, ".asobi/topics"),
             data_dir,
-            cache_dir,
             observation_limit: conf.observation_limit,
             retention_days: conf.retention_days,
             root: anchor.to_path_buf(),
             config_file: None,
         }
-    }
-
-    pub fn caches_dir(&self) -> PathBuf {
-        self.cache_dir.clone()
     }
 }
 
@@ -201,6 +185,30 @@ fn find_upwards(start: &Path, name: &str, is_dir: bool) -> Option<PathBuf> {
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    #[test]
+    fn skills_config_block_is_silently_ignored() {
+        // ADR 0004: an existing `[skills]` block must load with no warning and
+        // no error — it simply has no reader any more.
+        let dir = tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("asobi.toml"),
+            r#"
+            data_dir = "data"
+
+            [skills]
+            path = ".agents/skills"
+
+            [[skills.source]]
+            url = "https://github.com/example/repo.git"
+            select = ["some-skill"]
+            "#,
+        )
+        .unwrap();
+
+        let paths = AsobiPaths::resolve_from(dir.path());
+        assert_eq!(paths.data_dir, dir.path().join("data"));
+    }
 
     #[test]
     fn toml_relative_paths_anchor_to_config_dir_not_cwd() {
@@ -306,6 +314,5 @@ mod tests {
         assert_eq!(paths.data_dir, root.join("data"));
         assert_eq!(paths.config_dir, root.join("config"));
         assert_eq!(paths.topics_dir, root.join("topics"));
-        assert_eq!(paths.caches_dir(), root.join("caches"));
     }
 }

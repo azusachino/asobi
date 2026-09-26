@@ -1,6 +1,6 @@
 # Asobi
 
-Persistent knowledge-graph CLI for humans and AI agents. Asobi stores entities, observations, truths, relations, and task state in a local SQLite database. Skills are deliberately **not** in that list: they live on the filesystem, because the disk copy under `.agents/skills/` is the one agents actually read.
+Persistent knowledge-graph CLI for humans and AI agents. Asobi stores entities, observations, truths, relations, and task state in a local SQLite database. Skills are deliberately **not** in that list: they live on the filesystem, managed with the [`skills` CLI](https://github.com/vercel-labs/skills), because the disk copy under `.agents/skills/` is the one agents actually read.
 
 ## How to read this file
 
@@ -31,7 +31,6 @@ The layout worth knowing is the boundary, not the file list:
 - `src/api/` — backend-neutral, synchronous capability traits. Commands depend on these.
 - `src/storage/` — the SQLite provider. Every provider detail stays behind this line, and `make check` enforces it (`scripts/verify_storage_boundary.py`).
 - `src/cli/` — parsing, routing, and output. The only layer that knows it is a terminal.
-- `src/skills.rs`, `src/skills_config.rs` — skills on disk, and the declarative `[skills]` block `skills sync` reconciles against.
 - `src/tasks.rs` — durable task planning, dispatch, sync and close. `src/compact.rs` — the graph-to-Markdown topic projection.
 - `src/frontmatter.rs` — a deliberately narrow YAML-frontmatter subset, **not** a real parser. Read its module doc before widening it; see the trap below.
 - `tests/`, `benches/` — contract, CLI, edge-case and multi-process verification; graph, SQLite, task, allocation and SQL-plan benchmarks.
@@ -43,7 +42,7 @@ Anything not listed is a leaf: find it with `rg`, and it needs no entry here.
 This repository documents what the CLI _is_ and ships no `SKILL.md`. Agent workflow guidance — advice about _when_ to reach for a command — lives in the [`asobi` skill](https://github.com/azusachino/harus-skills/blob/main/skills/asobi/SKILL.md):
 
 ```bash
-asobi skills install https://github.com/azusachino/harus-skills.git --select asobi
+npx skills add https://github.com/azusachino/harus-skills --skill asobi --agent universal
 ```
 
 Keep the split when adding documentation. A change to a command's behaviour belongs in `docs/usage.md`. Advice about when to use it does not belong in this repository at all.
@@ -65,6 +64,6 @@ Three things here have bitten someone and will bite again. Each is a deliberate 
 
 **Retention runs implicitly, on write.** Finished sessions and terminal tasks past the retention window are swept once per process, before the first write — deliberately on a write and not at open, so a read never mutates the graph. The consequence: a test that seeds old finished state and then writes will watch it vanish. Disable retention in that test rather than working around the sweep. The window, its environment override, and the default live in `src/storage/sqlite.rs` and `src/paths.rs`.
 
-**`src/frontmatter.rs` is a subset, not YAML.** It handles a flat `key: value` block and nothing else — no nesting, lists, comments, or multi-line scalars. A skill declaring `description: >` therefore parses as the literal `">"`. That is known and accepted: the fix is to stop depending on the field, not to widen the parser. That call has already been made once — a block-scalar implementation was written to fix exactly this, then thrown away in favour of dropping the manifest's `description` field, which nothing read. Before widening the subset, check whether the value is load-bearing at all.
+**`src/frontmatter.rs` is a subset, not YAML.** It handles a flat `key: value` block and nothing else — no nesting, lists, comments, or multi-line scalars. A document declaring `description: >` therefore parses as the literal `">"`. That is known and accepted: the fix is to stop depending on the field, not to widen the parser. That call has already been made once — a block-scalar implementation was written to fix exactly this, then thrown away in favour of dropping the manifest's `description` field, which nothing read. Before widening the subset, check whether the value is load-bearing at all.
 
-**State and project content are anchored separately.** `AsobiPaths::root` is where project content resolves; `data_dir`, `config_dir`, `topics_dir` and `cache_dir` are state. The two do not move together — under the XDG fallback `root` follows the working directory while the state directories are global. Anything asobi regenerates belongs on the state side, and if it describes something on the project side it has to record _which_ something. The skills manifest is the worked example: `data_dir/skills.json`, carrying the path of the skills directory its entries describe, because the skills directory itself is project content and one data directory can be reached from several of them. A reader that finds a manifest for another tree scans instead of trusting it — reporting nothing would be indistinguishable from an empty tree.
+**State and project content are anchored separately.** `AsobiPaths::root` is where project content resolves; `data_dir`, `config_dir` and `topics_dir` are state. The two do not move together — under the XDG fallback `root` follows the working directory while the state directories are global. Anything asobi regenerates belongs on the state side, and if it describes something on the project side it has to record _which_ something. The topics directory is the boundary in miniature: it lives on the state side, but each topic's frontmatter names the entity it projects, so a reader can always tell which workspace root a topic belongs to rather than trusting whichever tree it happened to be found under.

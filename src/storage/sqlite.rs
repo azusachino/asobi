@@ -392,8 +392,8 @@ impl SqliteStore {
     /// too rather than being left as empty husks, since a `skill`-typed entity
     /// with no body is not a thing any reader wants back; cascades take their
     /// truths, observations and relations with them. Whatever was installed is
-    /// already on disk under the skills directory, and `skills sync` rewrites
-    /// that from `asobi.toml` regardless, so nothing here is the only copy.
+    /// already on disk under the skills directory, so nothing here is the only
+    /// copy.
     /// Runs before `init_schema`'s `CREATE TABLE IF NOT EXISTS` batch, so on a
     /// database old enough to predate the current generation entirely there is
     /// nothing here to clean up yet — hence the existence check rather than an

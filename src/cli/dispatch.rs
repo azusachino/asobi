@@ -2,7 +2,6 @@ use super::commands::{Cli, Commands};
 use super::output::*;
 use crate::api::{MaintenanceStore, PurgeRequest};
 use crate::application::AsobiRuntime;
-use crate::paths::AsobiPaths;
 use anyhow::Result;
 use clap::CommandFactory;
 use tracing::info;
@@ -33,7 +32,6 @@ pub(crate) fn run_cli(cli: Cli) -> Result<()> {
         return Ok(());
     }
 
-    let paths = AsobiPaths::resolve();
     let runtime = AsobiRuntime::open_default()?;
     let backend = runtime.storage();
 
@@ -84,7 +82,6 @@ pub(crate) fn run_cli(cli: Cli) -> Result<()> {
             }
         }
         Commands::Tasks { subcommand } => crate::tasks::run(backend, subcommand, json)?,
-        Commands::Skills { subcommand } => super::skills::run(&paths, subcommand)?,
         command => super::graph::run(backend, command, json)?,
     }
 
@@ -107,32 +104,5 @@ fn print_init_report(report: &crate::init::InitReport) {
         println!("  wrote    {}", path.display());
     } else if let Some(path) = &report.config_existed {
         println!("  exists   {}", path.display());
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use crate::api::MaintenanceStore;
-    use crate::cli::runtime::validate_git_url;
-    use crate::storage::Storage;
-    use tempfile::tempdir;
-
-    #[test]
-    fn git_url_validator_rejects_option_and_command_urls() {
-        assert!(validate_git_url("-upload-pack=x").is_err());
-        assert!(validate_git_url("ext::sh -c id").is_err());
-    }
-
-    #[test]
-    fn git_url_validator_accepts_supported_urls() {
-        for url in [
-            "https://example.com/repo.git",
-            "ssh://example.com/repo.git",
-            "git://example.com/repo.git",
-            "file:///tmp/repo",
-            "git@example.com:repo.git",
-        ] {
-            assert!(validate_git_url(url).is_ok(), "expected valid URL: {url}");
-        }
     }
 }
