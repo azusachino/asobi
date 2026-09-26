@@ -14,7 +14,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-const SCHEMA_VERSION: i64 = 8;
+const SCHEMA_VERSION: i64 = 9;
 const DEFAULT_DATABASE_FILENAME: &str = "asobi.db";
 const DEFAULT_BUSY_TIMEOUT_MS: u64 = 15_000;
 const DEFAULT_OBSERVATION_LIMIT: usize = 200;
@@ -44,13 +44,6 @@ fn resolve_window(env_key: &str, config: Option<u32>, default: u32) -> u32 {
         .unwrap_or(default)
 }
 
-/// When an entity was last touched: its creation, its newest observation, or
-/// its newest truth update, whichever is latest. The single definition of
-/// activity, shared by the retention and abandonment queries (aliased `e`).
-const LAST_ACTIVITY_SQL: &str = "MAX(e.created_at, \
-     COALESCE((SELECT MAX(created_at) FROM asobi_observations WHERE entity_name = e.name), e.created_at), \
-     COALESCE((SELECT MAX(updated_at) FROM asobi_truths WHERE entity_name = e.name), e.created_at))";
-
 fn collect_purge_candidates(
     conn: &Connection,
     request: &PurgeRequest,
@@ -71,7 +64,7 @@ fn collect_purge_candidates(
                      WHERE entity_name = e.name AND key = 'status'),
                     ''
                 ) AS status,
-                {LAST_ACTIVITY_SQL} AS last_activity,
+                e.last_activity AS last_activity,
                 (SELECT COUNT(*) FROM asobi_observations
                  WHERE entity_name = e.name) AS observations,
                 (SELECT COUNT(*) FROM asobi_relations
@@ -252,27 +245,42 @@ impl SqliteStore {
             std::fs::create_dir_all(parent)?;
         }
         let conn = Connection::open(path)?;
+        // Read the version before anything that can write to the file -- a
+        // refused database is left byte-for-byte untouched, journal mode
+        // included, since switching to WAL rewrites the header.
+        let version: i64 = conn.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+        match version {
+            0 | SCHEMA_VERSION => {}
+            v if v < SCHEMA_VERSION => anyhow::bail!(
+                "{} was created by Asobi before 0.8 (schema {v}, this build uses schema {SCHEMA_VERSION}); \
+                 pre-0.8 graph files are not migrated. Move the file aside to start a new graph there",
+                path.display()
+            ),
+            v => anyhow::bail!(
+                "{} uses schema {v}, newer than this build's schema {SCHEMA_VERSION}; \
+                 move the file aside and open it with a newer Asobi",
+                path.display()
+            ),
+        }
         conn.busy_timeout(std::time::Duration::from_millis(
             std::env::var("ASOBI_BUSY_TIMEOUT")
                 .ok()
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(DEFAULT_BUSY_TIMEOUT_MS),
         ))?;
-        let previous_version: i64 = conn.query_row("PRAGMA user_version", [], |row| row.get(0))?;
-        if previous_version == 0 {
+        if version == 0 {
             // `auto_vacuum` only takes effect before the database file's
             // header is first written, which `journal_mode=WAL` below does
             // as a side effect -- so this must run first, or the pragma
-            // silently no-ops and the database is stuck at auto_vacuum=NONE
-            // forever. A pre-existing database is switched over in
-            // `upgrade_to_v5` instead, which pays for it with the one-time
-            // VACUUM that changing this pragma later requires.
+            // silently no-ops and a new database is stuck at
+            // auto_vacuum=NONE forever. This is a property of a new file,
+            // not a migration: a schema-9 file already has it.
             conn.execute_batch("PRAGMA auto_vacuum = INCREMENTAL;")?;
         }
         conn.execute_batch(
             "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA foreign_keys=ON;",
         )?;
-        Self::init_schema(&conn, previous_version)?;
+        Self::init_schema(&conn, version)?;
         Ok(Self {
             conn: Mutex::new(conn),
             db_path: path.to_path_buf(),
@@ -280,27 +288,16 @@ impl SqliteStore {
         })
     }
 
-    fn init_schema(conn: &Connection, previous_version: i64) -> rusqlite::Result<()> {
-        if previous_version > 0 && previous_version < 5 {
-            Self::upgrade_to_v5(conn)?;
-        }
-        if previous_version > 0 && previous_version < 6 {
-            Self::upgrade_to_v6(conn)?;
-        }
-        if previous_version > 0 && previous_version < 7 {
-            Self::upgrade_to_v7(conn)?;
-        }
-        if previous_version > 0 && previous_version < 8 {
-            // The truth index is created by the schema batch below; an existing
-            // database needs it populated from rows that predate the triggers.
-            conn.execute_batch("DROP TABLE IF EXISTS asobi_truth_fts;")?;
+    fn init_schema(conn: &Connection, version: i64) -> rusqlite::Result<()> {
+        if version == SCHEMA_VERSION {
+            return Ok(());
         }
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS asobi_entities (
                 name TEXT PRIMARY KEY,
                 entity_type TEXT NOT NULL,
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                last_activity TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
             );
             CREATE TABLE IF NOT EXISTS asobi_observations (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -353,107 +350,26 @@ impl SqliteStore {
                 INSERT INTO asobi_obs_fts(asobi_obs_fts, rowid, content) VALUES ('delete', old.rowid, old.content);
                 INSERT INTO asobi_obs_fts(rowid, content) VALUES (new.rowid, new.content);
             END;
-            PRAGMA user_version = 8;",
+            CREATE TRIGGER IF NOT EXISTS asobi_activity_obs_ins AFTER INSERT ON asobi_observations BEGIN
+                UPDATE asobi_entities SET last_activity = CURRENT_TIMESTAMP WHERE name = new.entity_name;
+            END;
+            CREATE TRIGGER IF NOT EXISTS asobi_activity_obs_upd AFTER UPDATE ON asobi_observations BEGIN
+                UPDATE asobi_entities SET last_activity = CURRENT_TIMESTAMP WHERE name = new.entity_name;
+            END;
+            CREATE TRIGGER IF NOT EXISTS asobi_activity_obs_del AFTER DELETE ON asobi_observations BEGIN
+                UPDATE asobi_entities SET last_activity = CURRENT_TIMESTAMP WHERE name = old.entity_name;
+            END;
+            CREATE TRIGGER IF NOT EXISTS asobi_activity_truth_ins AFTER INSERT ON asobi_truths BEGIN
+                UPDATE asobi_entities SET last_activity = CURRENT_TIMESTAMP WHERE name = new.entity_name;
+            END;
+            CREATE TRIGGER IF NOT EXISTS asobi_activity_truth_upd AFTER UPDATE ON asobi_truths BEGIN
+                UPDATE asobi_entities SET last_activity = CURRENT_TIMESTAMP WHERE name = new.entity_name;
+            END;
+            CREATE TRIGGER IF NOT EXISTS asobi_activity_truth_del AFTER DELETE ON asobi_truths BEGIN
+                UPDATE asobi_entities SET last_activity = CURRENT_TIMESTAMP WHERE name = old.entity_name;
+            END;
+            PRAGMA user_version = 9;",
         )?;
-        let count: i64 =
-            conn.query_row("SELECT count(*) FROM asobi_observations", [], |r| r.get(0))?;
-        if count > 0 && previous_version < SCHEMA_VERSION {
-            let _ = conn.execute(
-                "INSERT INTO asobi_obs_fts(asobi_obs_fts) VALUES ('rebuild')",
-                [],
-            );
-        }
-        let truths: i64 = conn.query_row("SELECT count(*) FROM asobi_truths", [], |r| r.get(0))?;
-        if truths > 0 && previous_version < SCHEMA_VERSION {
-            let _ = conn.execute(
-                "INSERT INTO asobi_truth_fts(asobi_truth_fts) VALUES ('rebuild')",
-                [],
-            );
-        }
-        Ok(())
-    }
-
-    /// Every asobi generation before the 0.6 rusqlite rewrite (`mcp_*`
-    /// tables from the original MCP-memory schema, then `chunks`/`topics`
-    /// from the libSQL/Turso hybrid vector search era) left its tables in
-    /// place when superseded rather than dropping them, since the old
-    /// migration path only ever added the next generation's tables. On a
-    /// database that has been open continuously since before this fix,
-    /// those tables are pure dead weight — observed as high as 96% of
-    /// on-disk pages on a long-lived real database, and permanent, since
-    /// SQLite never shrinks a file after a DELETE without an explicit
-    /// VACUUM (see ADR 0003, "Compaction and physical storage").
-    ///
-    /// `chunks` carries a `libsql_vector_idx(...)` expression index that
-    /// only the libSQL fork's SQLite build can resolve; this rusqlite build
-    /// cannot, so the table (and with it, that index) must be dropped
-    /// before VACUUM rewrites the file, or VACUUM itself fails trying to
-    /// rebuild it. Dropping a table also drops its own indexes and
-    /// triggers, so no companion DROP INDEX/TRIGGER statements are needed.
-    fn upgrade_to_v5(conn: &Connection) -> rusqlite::Result<()> {
-        conn.execute_batch(
-            "DROP TABLE IF EXISTS mcp_obs_fts;
-             DROP TABLE IF EXISTS mcp_skills;
-             DROP TABLE IF EXISTS mcp_truths;
-             DROP TABLE IF EXISTS mcp_relations;
-             DROP TABLE IF EXISTS mcp_observations;
-             DROP TABLE IF EXISTS mcp_entities;
-             DROP TABLE IF EXISTS chunks;
-             DROP TABLE IF EXISTS idx_chunks_vector_shadow;
-             DROP TABLE IF EXISTS libsql_vector_meta_shadow;
-             DROP TABLE IF EXISTS topics_fts;
-             DROP TABLE IF EXISTS topics;
-             DROP TABLE IF EXISTS sessions;",
-        )?;
-        conn.execute_batch("PRAGMA auto_vacuum = INCREMENTAL;")?;
-        conn.execute_batch("VACUUM;")?;
-        Ok(())
-    }
-
-    /// 0.7 moved skills out of the graph and onto the filesystem, where the
-    /// Agent Skills ecosystem already expects them and where `rg` can reach
-    /// them. The graph copy was never the one agents read: it held a body, a
-    /// source and a version, and in practice accumulated nothing else — no
-    /// observations, and only a `description` truth.
-    ///
-    /// So drop the table and the entities it hung off. The skill entities go
-    /// too rather than being left as empty husks, since a `skill`-typed entity
-    /// with no body is not a thing any reader wants back; cascades take their
-    /// truths, observations and relations with them. Whatever was installed is
-    /// already on disk under the skills directory, so nothing here is the only
-    /// copy.
-    /// Runs before `init_schema`'s `CREATE TABLE IF NOT EXISTS` batch, so on a
-    /// database old enough to predate the current generation entirely there is
-    /// nothing here to clean up yet — hence the existence check rather than an
-    /// unconditional `DELETE`.
-    fn upgrade_to_v6(conn: &Connection) -> rusqlite::Result<()> {
-        let has_entities: bool = conn.query_row(
-            "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='asobi_entities'",
-            [],
-            |r| r.get::<_, i64>(0).map(|n| n > 0),
-        )?;
-        if has_entities {
-            conn.execute("DELETE FROM asobi_entities WHERE entity_type = 'skill'", [])?;
-        }
-        conn.execute_batch("DROP TABLE IF EXISTS asobi_skills;")?;
-        conn.execute_batch("PRAGMA incremental_vacuum;")?;
-        Ok(())
-    }
-
-    /// 0.7 dropped superseded truth versions. The table recorded every value a
-    /// truth had ever held, unbounded and cascading only on entity delete --
-    /// the one store in Asobi with no limit of its own, growing fastest on
-    /// whatever was written most often. On a real six-week-old graph that was
-    /// 616 rows, 496 of them sessions whose `next` had been rewritten 139 times.
-    ///
-    /// It had no reader. `asobi history` appeared in no workflow, and where a
-    /// trail genuinely mattered the observations already carried it in better
-    /// form: a task's history held one row saying `status=DISPATCHED`, next to
-    /// an observation saying "dispatched to codex". A bi-temporal store answers
-    /// questions about how state changed over time; nothing here asked one.
-    fn upgrade_to_v7(conn: &Connection) -> rusqlite::Result<()> {
-        conn.execute_batch("DROP TABLE IF EXISTS asobi_truth_history;")?;
-        conn.execute_batch("PRAGMA incremental_vacuum;")?;
         Ok(())
     }
 
@@ -540,7 +456,7 @@ impl SqliteStore {
                              WHERE entity_name = e.name AND key = 'status'),
                             ''
                         ) AS status,
-                        {LAST_ACTIVITY_SQL} AS last_activity
+                        e.last_activity AS last_activity
                     FROM asobi_entities e
                     WHERE e.entity_type = 'task'
                 ) candidates
@@ -1021,8 +937,8 @@ impl MaintenanceStore for SqliteStore {
         })?;
         if report.deleted > 0 {
             // A no-op unless this database is in incremental auto-vacuum
-            // mode, which every database is as of schema v5 -- see
-            // `upgrade_to_v5`. Bounded to a few thousand pages so a large
+            // mode, which every database is: `open_at` sets it when it creates
+            // the file. Bounded to a few thousand pages so a large
             // backlog reclaims gradually across purges instead of stalling
             // this one; VACUUM (unbounded, exclusive-locking) stays a
             // manual `backup`-adjacent maintenance step, not something a

@@ -61,7 +61,10 @@ fn age(db: &std::path::Path, name: &str, days: i64) {
     conn.execute_batch(&format!(
         "UPDATE asobi_entities SET created_at = datetime('now', '-{days} days') WHERE name = '{name}';
          UPDATE asobi_observations SET created_at = datetime('now', '-{days} days') WHERE entity_name = '{name}';
-         UPDATE asobi_truths SET updated_at = datetime('now', '-{days} days') WHERE entity_name = '{name}';"
+         UPDATE asobi_truths SET updated_at = datetime('now', '-{days} days') WHERE entity_name = '{name}';
+         -- Last: the observation/truth updates above fire the activity
+         -- triggers, which would otherwise reset last_activity to now.
+         UPDATE asobi_entities SET last_activity = datetime('now', '-{days} days') WHERE name = '{name}';"
     ))
     .unwrap();
 }
