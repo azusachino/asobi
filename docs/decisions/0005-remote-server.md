@@ -4,7 +4,7 @@ title: "0005. Shared graph through asobi serve and an HTTP remote backend"
 date: 2026-09-26
 status: proposed
 tags: [storage, api, server, rpc, v0.8]
-related: [0001-sqlite-only-v2-rewrite.md, 0002-why-rusqlite.md, 0004-remove-skills.md, 0006-tasks-replace-sessions.md]
+related: [0001-sqlite-only-v2-rewrite.md, 0002-why-rusqlite.md, 0004-remove-skills.md, 0006-tasks-replace-sessions.md, 0008-async-storage-on-sqlx.md]
 ---
 
 ## Context
@@ -21,7 +21,7 @@ Options considered (full comparison in harus-workstation's research note `2026-0
 | Clients connect directly to PostgreSQL | A second storage implementation with different search ranking, and every client binary touches the shared schema, so version skew across devices can corrupt it. |
 | **One server owns the SQLite file; clients call it** | Chosen. |
 
-[0001](0001-sqlite-only-v2-rewrite.md) anticipated this: "any future long-lived server/daemon mode would need to reintroduce concurrency at the process level, … not resurrect async traits."
+[0001](0001-sqlite-only-v2-rewrite.md) anticipated a server but expected it to stay synchronous. [0008](0008-async-storage-on-sqlx.md) revisits that: storage becomes async on sqlx, and the server below is built on it.
 
 ## Decision
 
@@ -35,7 +35,7 @@ remote            asobi ──► RemoteStore ──HTTP──► asobi serve �
 ```
 
 - **`asobi serve --listen <addr:port>`** is a long-lived process that holds **named graphs**, one SQLite file per graph name in its data directory, and answers the RPC contract below over HTTP.
-- **`RemoteStore`** implements the same `v2` traits (`GraphStore`, `SearchStore`, `MaintenanceStore`, `TaskStore`) by sending one RPC per trait call. Commands keep depending on traits only, so every command, flag, and output is identical in both modes.
+- **`RemoteStore`** implements the same `v3` traits (`GraphStore`, `SearchStore`, `MaintenanceStore`, `TaskStore`; see [0008](0008-async-storage-on-sqlx.md)) by sending one RPC per trait call. Commands keep depending on traits only, so every command, flag, and output is identical in both modes.
 - **Configuration:** two keys in `asobi.toml`, each overridable by its environment variable:
   - `remote = "https://asobi.h.azusachino.com"` (`ASOBI_REMOTE`) selects remote mode and the server;
   - `graph = "<name>"` (`ASOBI_GRAPH`) selects the graph on it, defaulting to `asobi`.
@@ -62,7 +62,7 @@ No existing graph is migrated: the server starts empty, and local graphs stay wh
 ### RPC contract
 
 - **Transport:** plain JSON over HTTP/1.1. One call is `POST <remote>/rpc/<graph>/<method>` with `Content-Type: application/json`; the body is the params object, and a success is HTTP 200 whose body is the result. There is no envelope: HTTP already pairs each response with its request, and nothing here batches, streams, or sends notifications.
-- **Methods:** one per `v2` trait method, named `<trait>.<method>` in camelCase. Params are a named object whose fields are the trait method's arguments; results are the method's return value, serialized with the existing camelCase serde types (`()` becomes a `null` body, still 200).
+- **Methods:** one per `v3` trait method, named `<trait>.<method>` in camelCase. Params are a named object whose fields are the trait method's arguments; results are the method's return value, serialized with the existing camelCase serde types (`()` becomes a `null` body, still 200).
 
 | Method | Params | Result |
 | --- | --- | --- |
@@ -111,9 +111,9 @@ JSON-RPC 2.0 was considered and not used: its `id`, batches and notifications se
 ### Server behavior
 
 - **Access:** no authentication. The server must only be reachable over the owner's tailnet; exposure is a deployment concern, and binding to a public interface is out of contract.
-- **One request at a time.** SQLite has one writer; serial handling matches it and needs no pool or locking of its own. The background sweep takes the same turn as a request.
+- **Concurrent requests, pooled storage.** Requests are served concurrently from one sqlx pool per graph ([0008](0008-async-storage-on-sqlx.md)). SQLite still has one writer: writes serialise through WAL and the busy timeout, and atomic operations (task claims, abandonment) use `BEGIN IMMEDIATE`.
 - **`reset` is local-only.** Over RPC it is refused, so an agent on any device cannot wipe a shared graph. Run `asobi reset` on the server host against the file directly when that is intended.
-- **Sweeps run in the background.** The CLI sweeps once per process before its first write; a server process lives for weeks, so `serve` runs the same sweeps (retention, and idle-task abandonment from [0006](0006-tasks-replace-sessions.md)) on a background thread, hourly, over every graph it holds.
+- **Sweeps run in the background.** The CLI sweeps once per process before its first write; a server process lives for weeks, so `serve` runs the same sweeps (retention, and idle-task abandonment from [0006](0006-tasks-replace-sessions.md)) as a background task on a one-hour interval, over every graph it holds.
 
 ### When the server is unreachable
 
@@ -121,7 +121,7 @@ A remote-mode command whose server cannot be reached within about two seconds **
 
 ### Libraries
 
-Server and client must stay synchronous, without an async runtime (the constraint from [0001](0001-sqlite-only-v2-rewrite.md)). Candidates are `tiny_http` for the server and `ureq` for the client; the choice is made against their documentation during implementation and recorded in the implementing PR.
+The server is built on tokio, axum and hyper; the client on reqwest, one client per process so a command reuses its connection. Storage is sqlx ([0008](0008-async-storage-on-sqlx.md)).
 
 ## Verification
 
@@ -139,6 +139,6 @@ Server and client must stay synchronous, without an async runtime (the constrain
 
 ## Roadmap: PostgreSQL behind the server
 
-A `PgStore` implementing the `v2` traits may later replace `SqliteStore` **inside `asobi serve` only**. Clients are unaffected: they speak the RPC contract, not SQL. Differences to accept at that point: `ts_rank` instead of BM25 ranking, reported through `capabilities.keywordSearchKind`, and SQLite-specific tests staying SQLite-only.
+A `PgStore` implementing the `v3` traits may later replace `SqliteStore` **inside `asobi serve` only**. Clients are unaffected: they speak the RPC contract, not SQL. Differences to accept at that point: `ts_rank` instead of BM25 ranking, reported through `capabilities.keywordSearchKind`, and SQLite-specific tests staying SQLite-only.
 
 Trigger, not a date: build it when the single SQLite file is a demonstrated bottleneck (write latency or size measured on the server), or when something other than Asobi needs SQL access to the graph.

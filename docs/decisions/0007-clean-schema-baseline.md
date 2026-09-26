@@ -4,7 +4,7 @@ title: "0007. A clean schema baseline for 0.8; pre-0.8 graph files are refused"
 date: 2026-09-27
 status: proposed
 tags: [storage, schema, v0.8]
-related: [0005-remote-server.md, 0006-tasks-replace-sessions.md]
+related: [0005-remote-server.md, 0006-tasks-replace-sessions.md, 0008-async-storage-on-sqlx.md]
 ---
 
 ## Context
@@ -22,6 +22,8 @@ The schema also has a dead column and a derived value computed the long way. `as
 - **One creation path, no upgrade chain.** `upgrade_to_v5`, `upgrade_to_v6`, `upgrade_to_v7`, the v8 index-rebuild step and the legacy-table knowledge behind them are deleted. A new file is created directly at version 9, still switching on incremental auto-vacuum before the first write, since that is a property of a new file rather than a migration.
 - **Pre-0.8 files are refused.** Opening a file whose `user_version` is non-zero and not 9 fails with an error that names the path, says the file was created by an Asobi version before 0.8 (or after this one, for a higher version), and says to move it aside to start a new graph. Nothing in the file is touched. There is no automatic move and no silent restart.
 - **`last_activity` is a column.** `asobi_entities.updated_at` becomes `last_activity`, set at creation and kept current by triggers on every insert, update and delete of the entity's observations and truths. Relations do not count as activity. Retention and abandonment read `e.last_activity` instead of recomputing it, so the definition lives in one place: the schema.
+
+Amended by [0008](0008-async-storage-on-sqlx.md): the baseline is carried by the first sqlx migration rather than `PRAGMA user_version = 9`; the refusal of pre-0.8 files and the `last_activity` design are unchanged.
 
 ## Consequences
 
