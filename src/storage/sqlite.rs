@@ -44,6 +44,13 @@ fn resolve_window(env_key: &str, config: Option<u32>, default: u32) -> u32 {
         .unwrap_or(default)
 }
 
+/// When an entity was last touched: its creation, its newest observation, or
+/// its newest truth update, whichever is latest. The single definition of
+/// activity, shared by the retention and abandonment queries (aliased `e`).
+const LAST_ACTIVITY_SQL: &str = "MAX(e.created_at, \
+     COALESCE((SELECT MAX(created_at) FROM asobi_observations WHERE entity_name = e.name), e.created_at), \
+     COALESCE((SELECT MAX(updated_at) FROM asobi_truths WHERE entity_name = e.name), e.created_at))";
+
 fn collect_purge_candidates(
     conn: &Connection,
     request: &PurgeRequest,
@@ -64,19 +71,7 @@ fn collect_purge_candidates(
                      WHERE entity_name = e.name AND key = 'status'),
                     ''
                 ) AS status,
-                MAX(
-                    e.created_at,
-                    COALESCE(
-                        (SELECT MAX(created_at) FROM asobi_observations
-                         WHERE entity_name = e.name),
-                        e.created_at
-                    ),
-                    COALESCE(
-                        (SELECT MAX(updated_at) FROM asobi_truths
-                         WHERE entity_name = e.name),
-                        e.created_at
-                    )
-                ) AS last_activity,
+                {LAST_ACTIVITY_SQL} AS last_activity,
                 (SELECT COUNT(*) FROM asobi_observations
                  WHERE entity_name = e.name) AS observations,
                 (SELECT COUNT(*) FROM asobi_relations
@@ -492,6 +487,10 @@ impl SqliteStore {
     /// provider-side maintenance behaviour, not a capability callers depend
     /// on, and it stays out of the RPC surface with them.
     pub fn sweep(&self) -> ApiResult<SweepReport> {
+        // This sweep writes through `write`, which would otherwise start the
+        // once-per-process sweep inside this one when called directly.
+        self.retention_swept
+            .store(true, std::sync::atomic::Ordering::SeqCst);
         let abandoned = self.abandon_idle_tasks(resolve_window(
             "ASOBI_ABANDON_DAYS",
             crate::paths::AsobiPaths::resolve().abandon_days,
@@ -532,8 +531,6 @@ impl SqliteStore {
                 .map(|_| "?")
                 .collect::<Vec<_>>()
                 .join(",");
-            // Same `last_activity` expression as the retention candidate
-            // query: one definition of activity, not two that drift.
             let sql = format!(
                 r#"
                 SELECT name FROM (
@@ -543,19 +540,7 @@ impl SqliteStore {
                              WHERE entity_name = e.name AND key = 'status'),
                             ''
                         ) AS status,
-                        MAX(
-                            e.created_at,
-                            COALESCE(
-                                (SELECT MAX(created_at) FROM asobi_observations
-                                 WHERE entity_name = e.name),
-                                e.created_at
-                            ),
-                            COALESCE(
-                                (SELECT MAX(updated_at) FROM asobi_truths
-                                 WHERE entity_name = e.name),
-                                e.created_at
-                            )
-                        ) AS last_activity
+                        {LAST_ACTIVITY_SQL} AS last_activity
                     FROM asobi_entities e
                     WHERE e.entity_type = 'task'
                 ) candidates

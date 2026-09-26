@@ -233,3 +233,28 @@ fn session_entities_are_no_longer_purged_by_retention() {
     assert_eq!(report.purged, 0, "sessions are ordinary entities now");
     assert_eq!(status_of(&store, "proj:session").as_deref(), Some("DONE"));
 }
+
+#[test]
+fn direct_sweep_on_a_fresh_store_reports_its_own_work_once() {
+    // A server calls `sweep()` on a store before any other write. The sweep's
+    // own writes must not start a second, nested sweep that does the work and
+    // leaves the outer call reporting nothing.
+    let _abandon = EnvGuard::set("ASOBI_ABANDON_DAYS", "7");
+    let _retention = EnvGuard::set("ASOBI_RETENTION_DAYS", "90");
+    let (_dir, db, seeding) = store();
+    task(&seeding, "proj:task-idle", Some("IN_PROGRESS"));
+    drop(seeding);
+    age(&db, "proj:task-idle", 30);
+
+    let fresh = SqliteStore::open_at(&db).unwrap();
+    let report = fresh.sweep().unwrap();
+    assert_eq!(report.abandoned, 1);
+    let observations = entity_of(&fresh, "proj:task-idle").unwrap().observations;
+    assert_eq!(
+        observations
+            .iter()
+            .filter(|o| o.contains("abandoned automatically"))
+            .count(),
+        1
+    );
+}
