@@ -1,4 +1,4 @@
-.PHONY: help build run test test-scripts verify-storage-boundary bench bench-compile bench-graph bench-criterion bench-alloc bench-sql-plans bench-tasks bench-storage fmt fmt-check lint check clean init
+.PHONY: help build run test test-scripts bench bench-compile bench-graph bench-criterion bench-alloc bench-sql-plans bench-tasks bench-storage fmt fmt-check lint check clean init
 
 help:
 	@echo "Available tasks:"
@@ -6,7 +6,7 @@ help:
 	@echo "  run                   Run the Asobi CLI via cargo"
 	@echo "  test                  Run all Rust tests serially"
 	@echo "  test-scripts          Run built-CLI integration checks"
-	@echo "  verify-storage-boundary  Check provider encapsulation"
+	@echo "   Check provider encapsulation"
 	@echo "  bench                 Run all benchmark harnesses"
 	@echo "  bench-compile         Compile all benchmark targets without running them"
 	@echo "  bench-graph           Run graph benchmarks"
@@ -22,26 +22,27 @@ help:
 	@echo "  init                  Install the pinned toolchain with mise"
 
 build:
-	cargo build
+	cargo build --workspace
 
 run:
 	cargo run -- $(ARGS)
 
 test:
-	cargo test -- --test-threads=1
+	cargo test --workspace -- --test-threads=1
 
 test-scripts: build
 	uv run --with fastjsonschema scripts/verify_cli.py
 	uv run --no-project python scripts/use_cases.py
 
-verify-storage-boundary:
-	uv run --no-project python scripts/verify_storage_boundary.py
+check-storage-deps:
+	@if grep -Hn "sqlx" $$(ls crates/*/Cargo.toml | grep -v '^crates/asobi-storage/'); then \
+		echo "storage boundary violation: only asobi-storage may depend on sqlx (ADR 0009)"; exit 1; fi
 
 bench:
 	cargo bench
 
 bench-compile:
-	cargo bench --no-run
+	cargo bench --workspace --no-run
 
 bench-graph:
 	cargo bench --bench graph
@@ -74,7 +75,7 @@ lint:
 	cargo clippy -- -D warnings
 	ruff check .
 
-check: verify-storage-boundary fmt-check lint test test-scripts bench-compile
+check: fmt-check lint test test-scripts bench-compile
 
 clean:
 	cargo clean

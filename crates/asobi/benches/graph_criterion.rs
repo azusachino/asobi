@@ -1,6 +1,6 @@
-use asobi::api::{GraphStore, OpenNodes, SearchQuery, SearchStore};
-use asobi::model::EntityInput;
-use asobi::storage::SqliteStore;
+use asobi_core::api::{GraphStore, OpenNodes, SearchQuery, SearchStore};
+use asobi_core::model::EntityInput;
+use asobi_storage::SqliteStore;
 use criterion::{Criterion, criterion_group, criterion_main};
 use std::hint::black_box;
 use tempfile::tempdir;

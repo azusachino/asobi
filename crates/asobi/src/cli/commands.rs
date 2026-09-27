@@ -112,7 +112,7 @@ pub(crate) enum Commands {
     /// narrower window than the configured one.
     Purge {
         /// Only consider entities finished for at least this many days
-        #[arg(long, default_value_t = crate::storage::DEFAULT_RETENTION_DAYS)]
+        #[arg(long, default_value_t = asobi_storage::DEFAULT_RETENTION_DAYS)]
         older_than: u32,
         /// Apply the deletion; without this flag purge is a preview
         #[arg(long)]

@@ -8,9 +8,9 @@
 //! can shift a boundary under the assertions. Tests run serially under
 //! `make check` (`--test-threads=1`) because the variables are process-global.
 
-use asobi::api::{GraphStore, OpenNodes};
-use asobi::model::{EntityInput, RelationInput};
-use asobi::storage::SqliteStore;
+use asobi_core::api::{GraphStore, OpenNodes};
+use asobi_core::model::{EntityInput, RelationInput};
+use asobi_storage::SqliteStore;
 use sqlx::Connection;
 use sqlx::sqlite::SqliteConnection;
 use tempfile::tempdir;
@@ -75,7 +75,7 @@ async fn age(db: &std::path::Path, name: &str, days: i64) {
     .unwrap();
 }
 
-async fn entity_of(store: &SqliteStore, name: &str) -> Option<asobi::model::EntityOutput> {
+async fn entity_of(store: &SqliteStore, name: &str) -> Option<asobi_core::model::EntityOutput> {
     store
         .open_nodes(OpenNodes {
             observation_limit: 0,

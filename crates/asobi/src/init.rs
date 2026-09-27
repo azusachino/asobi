@@ -38,7 +38,7 @@ pub fn init_workspace(target: InitTarget, cwd: &Path) -> Result<InitReport> {
 }
 
 fn init_xdg() -> Result<InitReport> {
-    let xdg = crate::paths::xdg_dirs().ok_or_else(|| {
+    let xdg = asobi_core::paths::xdg_dirs().ok_or_else(|| {
         anyhow::anyhow!("XDG paths unavailable ($HOME unset); retry with `--local`")
     })?;
     let dirs = [xdg.data_dir, xdg.topics_dir, xdg.config_dir];

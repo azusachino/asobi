@@ -1,83 +1,39 @@
-[package]
-name = "asobi"
+[workspace]
+resolver = "2"
+members = [
+    "crates/asobi-core",
+    "crates/asobi-storage",
+    "crates/asobi",
+    "crates/asobi-server",
+]
+
+[workspace.package]
 version = "0.7.3"
 edition = "2024"
 authors = ["haru <azusachino@proton.me>"]
-description = "A persistent, project-local knowledge graph CLI for AI agents."
 license = "MIT"
 repository = "https://github.com/azusachino/asobi"
-keywords = ["knowledge-graph", "cli", "ai-agents", "persistent-memory", "rust"]
-categories = ["development-tools"]
-# Never ship runtime data / model caches in the published crate. These dirs are
-# gitignored, so a fresh CI checkout omits them anyway — this is belt-and-braces
-# for local `cargo publish` where a stale workspace would otherwise be swept in.
-exclude = [
-  ".asobi/",
-  "memory_export.json",
-  "tools_list.json",
-]
 
-# cargo-binstall: fetch prebuilt binaries from the GitHub release instead of
-# compiling. Archives are published as `asobi-<target>.tar.gz` with the `asobi`
-# binary at the archive root; the tag is `v<version>`.
-[package.metadata.binstall]
-pkg-url = "{ repo }/releases/download/v{ version }/{ name }-{ target }.{ archive-format }"
-pkg-fmt = "tgz"
-bin-dir = "{ bin }{ binary-ext }"
-
-[dependencies]
-# Core
+# One version for the workspace; all four crates publish together (ADR 0009).
+[workspace.dependencies]
+asobi-core = { path = "crates/asobi-core", version = "0.7.3" }
+asobi-storage = { path = "crates/asobi-storage", version = "0.7.3" }
 anyhow = "1"
-serde = { version = "1", features = ["derive"] }
-thiserror = "2"
-serde_json = "1"
-schemars = "1"
-
-
-# CLI
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
 clap = { version = "4.6", default-features = false, features = ["std", "derive", "help", "usage", "error-context"] }
 clap_complete = "4.6"
-toml = "1"
-
-# Logging
-tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-
-# Time
-chrono = { version = "0.4", default-features = false, features = ["clock"] }
-sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "sqlite", "migrate", "macros"] }
-tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "time"] }
-
-
-[dev-dependencies]
 criterion = "0.8"
 dhat = "0.3"
+schemars = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "sqlite", "migrate", "macros"] }
 tempfile = "3"
-
-[[bench]]
-name = "normalize"
-harness = false
-
-[[bench]]
-name = "graph"
-harness = false
-
-[[bench]]
-name = "graph_criterion"
-harness = false
-
-[[bench]]
-name = "allocations"
-harness = false
-
-[[bench]]
-name = "tasks"
-harness = false
-
-[[bench]]
-name = "sql_plans"
-harness = false
-
+thiserror = "2"
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "time", "fs"] }
+toml = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [profile.release]
 opt-level = "s"      # Optimize for size

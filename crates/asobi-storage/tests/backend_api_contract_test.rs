@@ -1,8 +1,8 @@
-use asobi::api::{
+use asobi_core::api::{
     GraphStore, MaintenanceStore, OpenNodes, PurgeRequest, SearchQuery, SearchStore, TaskStore,
 };
-use asobi::model::{EntityInput, ObservationDeletion, ObservationInput, RelationInput};
-use asobi::storage::SqliteStore;
+use asobi_core::model::{EntityInput, ObservationDeletion, ObservationInput, RelationInput};
+use asobi_storage::SqliteStore;
 use sqlx::Connection;
 use sqlx::sqlite::SqliteConnection;
 use tempfile::tempdir;
@@ -116,7 +116,7 @@ async fn graph_truth_search_and_task_claim_are_atomic_surfaces() {
 async fn graph_and_search_keep_observations_lazy() {
     let (_dir, store) = store().await;
     store
-        .create_entities(vec![asobi::model::EntityInput {
+        .create_entities(vec![asobi_core::model::EntityInput {
             name: "lean-read".into(),
             entity_type: "concept".into(),
             observations: vec![],
@@ -125,7 +125,7 @@ async fn graph_and_search_keep_observations_lazy() {
         .unwrap();
     store
         .add_observations(
-            vec![asobi::model::ObservationInput {
+            vec![asobi_core::model::ObservationInput {
                 entity_name: "lean-read".into(),
                 contents: vec!["heavy observation".into()],
             }],
@@ -484,7 +484,7 @@ async fn show_returns_recent_observations_and_the_true_total() {
     for i in 0..50 {
         store
             .add_observations(
-                vec![asobi::model::ObservationInput {
+                vec![asobi_core::model::ObservationInput {
                     entity_name: "proj:session".into(),
                     contents: vec![format!("note {i}")],
                 }],

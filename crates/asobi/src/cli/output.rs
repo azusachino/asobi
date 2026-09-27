@@ -1,5 +1,5 @@
-use crate::api::{GraphStore, OpenNodes};
 use anyhow::Result;
+use asobi_core::api::{GraphStore, OpenNodes};
 use schemars::JsonSchema;
 use serde::Serialize;
 
@@ -36,8 +36,8 @@ pub(crate) struct StatsReceipt {
 #[serde(rename_all = "camelCase")]
 pub(crate) struct CapabilitiesReceipt {
     pub(crate) api_version: u32,
-    pub(crate) capabilities: crate::api::BackendCapabilities,
-    pub(crate) health: crate::api::BackendHealth,
+    pub(crate) capabilities: asobi_core::api::BackendCapabilities,
+    pub(crate) health: asobi_core::api::BackendHealth,
 }
 
 /// Print the named entities (and the relations among them) as pretty JSON to
@@ -76,14 +76,14 @@ type SchemaRow = (&'static str, fn() -> serde_json::Value);
 /// machine-readable payload. Most commands echo the affected `Graph`; the rest
 /// have their own receipt type. Adding a command means adding one row here.
 fn schema_registry() -> Vec<SchemaRow> {
-    use crate::model::Graph;
+    use asobi_core::model::Graph;
     let rows: Vec<SchemaRow> = vec![
         ("capabilities", schema_for_data::<CapabilitiesReceipt>),
         ("graph", schema_for_data::<Graph>),
         ("link", schema_for_data::<Graph>),
         ("new", schema_for_data::<Graph>),
         ("obs", schema_for_data::<Graph>),
-        ("purge", schema_for_data::<crate::api::PurgeReport>),
+        ("purge", schema_for_data::<asobi_core::api::PurgeReport>),
         ("rm", schema_for_data::<DeletedReceipt>),
         ("rm-obs", schema_for_data::<Graph>),
         ("rm-truth", schema_for_data::<Graph>),
@@ -95,8 +95,8 @@ fn schema_registry() -> Vec<SchemaRow> {
             "tasks-dispatch",
             schema_for_data::<crate::tasks::TaskReceipt>,
         ),
-        ("tasks-list", schema_for_data::<crate::model::Graph>),
-        ("tasks-plan", schema_for_data::<crate::model::Graph>),
+        ("tasks-list", schema_for_data::<asobi_core::model::Graph>),
+        ("tasks-plan", schema_for_data::<asobi_core::model::Graph>),
         ("tasks-sync", schema_for_data::<crate::tasks::TaskReceipt>),
         ("truth", schema_for_data::<Graph>),
         ("unlink", schema_for_data::<Graph>),

@@ -30,9 +30,9 @@ One synchronous storage contract, one bundled backend, one local file — see [A
 
 ```mermaid
 flowchart LR
-    CLI["src/cli/*\n(commands, dispatch, graph)"]
+    CLI["crates/asobi\n(commands, dispatch, graph)"]
     API["api::v2\nGraphStore · SearchStore\nMaintenanceStore · TaskStore"]
-    Sqlite["SqliteStore\n(src/storage/sqlite.rs)"]
+    Sqlite["SqliteStore\n(crates/asobi-storage)"]
     DB[("asobi.db\nWAL + FTS5")]
 
     CLI --> API
@@ -40,14 +40,16 @@ flowchart LR
     Sqlite --> DB
 ```
 
-Commands depend only on the `api::v2` traits, never on `rusqlite` types directly — `src/storage/sqlite.rs` is the only file that owns SQL, schema, and pragmas.
+Commands depend only on the `api::v3` traits, never on driver types directly — `crates/asobi-storage` is the only crate that owns SQL, schema, and pragmas (ADR 0009).
 
 ## 📦 Installation
 
 ### From crates.io (recommended)
 
 ```bash
-cargo install asobi
+cargo install asobi                       # local-only CLI, no HTTP stack
+cargo install asobi --features remote    # adds remote mode (WP5)
+cargo install asobi-server               # the graph server binary (WP4)
 ```
 
 ### Prebuilt binary (cargo-binstall)

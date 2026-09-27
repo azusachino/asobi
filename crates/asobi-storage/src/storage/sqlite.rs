@@ -19,12 +19,12 @@
 //! [`SqliteStore::begin_write`] -- begin with `BEGIN IMMEDIATE`, which the
 //! default deferred transaction does not give.
 
-use crate::api::v3::{
+use asobi_core::api::v3::{
     ApiError, ApiResult, BackendCapabilities, BackendHealth, GraphStore, MaintenanceStore,
     OpenNodes, PurgeCandidate, PurgeReport, PurgeRequest, SearchQuery, SearchStore, Stats,
     StorageLocation, TaskStore,
 };
-use crate::model::{
+use asobi_core::model::{
     EntityInput, EntityOutput, Graph, ObservationDeletion, ObservationInput, RelationInput,
 };
 use sqlx::sqlite::{
@@ -52,7 +52,7 @@ fn backend_error(error: impl std::fmt::Display) -> ApiError {
 }
 
 fn normalize(value: &str) -> String {
-    crate::normalize::normalize_key(value)
+    asobi_core::normalize::normalize_key(value)
 }
 
 /// Resolve a sweep window: environment variable first, then `asobi.toml`,
@@ -115,8 +115,8 @@ pub struct SweepReport {
 
 impl SqliteStore {
     pub async fn open_default() -> crate::Result<Self> {
-        let paths = crate::paths::AsobiPaths::resolve();
-        let path = std::env::var(crate::paths::ENV_DATABASE_URL)
+        let paths = asobi_core::paths::AsobiPaths::resolve();
+        let path = std::env::var(asobi_core::paths::ENV_DATABASE_URL)
             .map(PathBuf::from)
             .unwrap_or_else(|_| paths.data_dir.join(DEFAULT_DATABASE_FILENAME));
         Self::open_at(&path).await
@@ -241,13 +241,13 @@ impl SqliteStore {
         let abandoned = self
             .abandon_idle_tasks(resolve_window(
                 "ASOBI_ABANDON_DAYS",
-                crate::paths::AsobiPaths::resolve().abandon_days,
+                asobi_core::paths::AsobiPaths::resolve().abandon_days,
                 DEFAULT_ABANDON_DAYS,
             ))
             .await?;
         let retention_days = resolve_window(
             "ASOBI_RETENTION_DAYS",
-            crate::paths::AsobiPaths::resolve().retention_days,
+            asobi_core::paths::AsobiPaths::resolve().retention_days,
             DEFAULT_RETENTION_DAYS,
         );
         let purged = if retention_days == 0 {
@@ -534,7 +534,7 @@ async fn graph_from_connection(
                 let id: i64 = row.try_get(0).map_err(backend_error)?;
                 let content: String = row.try_get(1).map_err(backend_error)?;
                 observations.push(content.clone());
-                detailed.push(crate::model::DetailedObservation { id, content });
+                detailed.push(asobi_core::model::DetailedObservation { id, content });
             }
             (observations, Some(detailed))
         } else {

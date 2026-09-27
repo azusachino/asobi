@@ -1,11 +1,11 @@
 use super::commands::Commands;
 use super::output::*;
-use crate::api::{GraphStore, MaintenanceStore, OpenNodes, SearchQuery, SearchStore, Stats};
 use anyhow::Result;
+use asobi_core::api::{GraphStore, MaintenanceStore, OpenNodes, SearchQuery, SearchStore, Stats};
 use tracing::info;
 
 pub(crate) async fn run(
-    backend: &crate::storage::Storage,
+    backend: &asobi_storage::Storage,
     command: Commands,
     json: bool,
 ) -> Result<()> {
@@ -20,11 +20,11 @@ pub(crate) async fn run(
                     pairs.len()
                 );
             }
-            let entities: Vec<crate::model::EntityInput> = pairs
+            let entities: Vec<asobi_core::model::EntityInput> = pairs
                 .as_chunks::<2>()
                 .0
                 .iter()
-                .map(|c| crate::model::EntityInput {
+                .map(|c| asobi_core::model::EntityInput {
                     name: c[0].clone(),
                     entity_type: c[1].clone(),
                     observations: observations.clone(),
@@ -44,11 +44,11 @@ pub(crate) async fn run(
                     triples.len()
                 );
             }
-            let relations: Vec<crate::model::RelationInput> = triples
+            let relations: Vec<asobi_core::model::RelationInput> = triples
                 .as_chunks::<3>()
                 .0
                 .iter()
-                .map(|c| crate::model::RelationInput {
+                .map(|c| asobi_core::model::RelationInput {
                     from: c[0].clone(),
                     to: c[1].clone(),
                     relation_type: c[2].clone(),
@@ -66,14 +66,14 @@ pub(crate) async fn run(
             }
         }
         Commands::Obs { name, contents } => {
-            let paths = crate::paths::AsobiPaths::resolve();
+            let paths = asobi_core::paths::AsobiPaths::resolve();
             let limit = std::env::var("ASOBI_OBSERVATION_LIMIT")
                 .ok()
                 .and_then(|v| v.parse::<usize>().ok())
                 .unwrap_or(paths.observation_limit.unwrap_or(200));
             backend
                 .add_observations(
-                    vec![crate::model::ObservationInput {
+                    vec![asobi_core::model::ObservationInput {
                         entity_name: name.clone(),
                         contents,
                     }],
@@ -118,7 +118,7 @@ pub(crate) async fn run(
                 backend.delete_observation_by_id(&name, parsed_id).await?;
             } else {
                 backend
-                    .delete_observations(vec![crate::model::ObservationDeletion {
+                    .delete_observations(vec![asobi_core::model::ObservationDeletion {
                         entity_name: name.clone(),
                         observations: vec![content],
                     }])
@@ -161,7 +161,7 @@ pub(crate) async fn run(
             relation_type,
         } => {
             backend
-                .delete_relations(vec![crate::model::RelationInput {
+                .delete_relations(vec![asobi_core::model::RelationInput {
                     from: from.clone(),
                     to: to.clone(),
                     relation_type,
@@ -225,7 +225,7 @@ pub(crate) async fn run(
             } = backend.stats().await?;
             if json {
                 let entities_detailed = if per_entity {
-                    let paths = crate::paths::AsobiPaths::resolve();
+                    let paths = asobi_core::paths::AsobiPaths::resolve();
                     let limit = std::env::var("ASOBI_OBSERVATION_LIMIT")
                         .ok()
                         .and_then(|v| v.parse::<usize>().ok())
@@ -273,7 +273,7 @@ pub(crate) async fn run(
                 println!("  Observations: {}", observations);
 
                 if per_entity {
-                    let paths = crate::paths::AsobiPaths::resolve();
+                    let paths = asobi_core::paths::AsobiPaths::resolve();
                     let limit = std::env::var("ASOBI_OBSERVATION_LIMIT")
                         .ok()
                         .and_then(|v| v.parse::<usize>().ok())
@@ -305,7 +305,7 @@ pub(crate) async fn run(
             let capabilities = backend.capabilities().await?;
             let health = backend.health().await?;
             print_json(CapabilitiesReceipt {
-                api_version: crate::api::API_VERSION,
+                api_version: asobi_core::api::API_VERSION,
                 capabilities,
                 health,
             })?;
