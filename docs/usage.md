@@ -506,6 +506,33 @@ asobi-server --listen 127.0.0.1:8300 --data-dir /srv/asobi-data
 - **Liveness:** `GET /healthz` returns 200 without opening a graph; use it for container and cluster probes.
 - **Access:** no authentication — the server must only be reachable on your tailnet; binding it to a public interface is out of contract.
 
+### Asobi server container image
+
+Build the Podman image locally with `make image`. It is tagged
+`azusachino.com/asobi-server:v<workspace-version>` and built for the machine's
+native architecture. The image runs as UID/GID 65532, stores graph files
+under `/data`, and listens on `0.0.0.0:8300` by default. The mounted volume
+must be writable by UID/GID 65532; configure Kubernetes `fsGroup` accordingly.
+For example, with the 0.8.0 workspace version:
+
+```bash
+podman run --rm --detach --name asobi-server \
+  --publish 127.0.0.1:8300:8300 \
+  --volume asobi-server-data:/data \
+  azusachino.com/asobi-server:v0.8.0
+curl --fail --show-error http://127.0.0.1:8300/healthz
+podman stop asobi-server
+```
+
+A successful health probe returns HTTP 200. The endpoint is for liveness only;
+it does not open a graph. The server has no authentication, so only publish it
+on trusted interfaces and keep deployment access tailnet-only. `make image-import`
+additionally pipes `podman save` into `sudo k3s ctr images import`; run it only on
+the k3s host. The local `make image` build uses the
+host architecture, so build the deployable amd64 image on `harus-mini` when
+doing WP10 rather than importing this arm64 development image. No registry
+push is involved.
+
 ## Running in Sandboxed Environments (Codex, etc.)
 
 When running in sandboxed or highly restricted environments (such as Codex, Nix build sandboxes, or certain containerized runners), the environment might impose constraints on directory write access or shared-memory creation. Asobi can be configured to run smoothly in these environments using the following techniques:

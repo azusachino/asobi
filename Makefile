@@ -1,4 +1,8 @@
-.PHONY: help build run test test-scripts bench bench-compile bench-graph bench-criterion bench-alloc bench-sql-plans bench-tasks bench-storage fmt fmt-check lint check clean init
+.PHONY: help build run test test-scripts bench bench-compile bench-graph bench-criterion bench-alloc bench-sql-plans bench-tasks bench-storage fmt fmt-check lint check clean init image image-import
+
+VERSION := $(shell awk -F'"' '/^version = / { print $$2; exit }' Cargo.toml)
+TAG ?= v$(VERSION)
+IMAGE ?= azusachino.com/asobi-server:$(TAG)
 
 help:
 	@echo "Available tasks:"
@@ -20,6 +24,8 @@ help:
 	@echo "  check                 Run the complete local quality gate"
 	@echo "  clean                 Remove build artifacts"
 	@echo "  init                  Install the pinned toolchain with mise"
+	@echo "  image                 Build the native asobi-server Podman image (TAG=$(TAG))"
+	@echo "  image-import          Build and import into k3s containerd (cluster host only)"
 
 build:
 	cargo build --workspace
@@ -85,3 +91,9 @@ clean:
 
 init:
 	mise install
+
+image:
+	podman build -t "$(IMAGE)" -f Dockerfile .
+
+image-import: image
+	bash -o pipefail -c 'podman save "$(IMAGE)" | sudo k3s ctr images import --all-platforms --digests --skip-digest-for-named -'
