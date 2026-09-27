@@ -49,7 +49,7 @@ async fn run() -> Result<()> {
 async fn explain(
     conn: &mut sqlx::SqliteConnection,
     label: &str,
-    sql: &str,
+    sql: &'static str,
     values: &[&str],
 ) -> Result<()> {
     println!("\n[{label}]");

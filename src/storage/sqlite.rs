@@ -4,9 +4,14 @@
 //! bounded busy timeout. All provider detail -- schema, SQL, pragmas -- stays
 //! inside this module; callers depend on the `api` traits only.
 //!
-//! sqlx specifics: queries are runtime-checked (`sqlx::query`, `query_as`;
-//! never the `query!` macros, because part of the SQL is built dynamically and
-//! the build must not need a database). One [`SqlitePool`] per graph file --
+//! sqlx specifics: queries are runtime-checked (`sqlx::query`, `query_scalar`,
+//! `raw_sql`; never the `query!` macros, because part of the SQL is built
+//! dynamically and the build must not need a database). sqlx 0.9 requires
+//! dynamically built SQL to be wrapped in [`sqlx::AssertSqlSafe`]: every wrap
+//! in this module interpolates only placeholder counts and `?` lists over
+//! constants (`TERMINAL_STATUSES`, `PURGEABLE_*`, the caller's own entity
+//! names), never user text, which always travels through `.bind()`. Static
+//! SQL stays plain string literals, which `SqlSafeStr` trusts. One [`SqlitePool`] per graph file --
 //! SQLite still has one writer, so concurrency comes from WAL readers and the
 //! busy timeout, not from the pool. Transactions that must be atomic against
 //! other writers -- task claims, abandonment, every mutation through
@@ -118,12 +123,14 @@ impl SqliteStore {
 
     pub async fn open_at(path: &Path) -> crate::Result<Self> {
         if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
+            tokio::fs::create_dir_all(parent).await?;
         }
         // Read the version before the pool opens: the pool's connection
         // options switch on WAL, which rewrites the file header, and a
         // refused database must be left byte-for-byte untouched.
-        let version = if path.exists() {
+        // tokio::fs: the store is async already, so a directory probe never
+        // blocks the runtime thread.
+        let version = if tokio::fs::try_exists(path).await.unwrap_or(false) {
             read_user_version(path).await.map_err(backend_error)?
         } else {
             0
@@ -325,7 +332,7 @@ impl SqliteStore {
         let cutoff = format!("-{days} days");
         // The status list is interpolated twice -- the candidate's own status
         // and the open-child check -- so it is bound twice too.
-        let mut query = sqlx::query_scalar::<_, String>(&sql);
+        let mut query = sqlx::query_scalar::<_, String>(sqlx::AssertSqlSafe(sql.as_str()));
         for status in TERMINAL_STATUSES {
             query = query.bind(status);
         }
@@ -432,7 +439,7 @@ async fn graph_from_connection(
             "SELECT from_entity, to_entity, relation_type FROM asobi_relations \
              WHERE from_entity IN ({placeholders}) OR to_entity IN ({placeholders})"
         );
-        let mut query = sqlx::query(&sql);
+        let mut query = sqlx::query(sqlx::AssertSqlSafe(sql.as_str()));
         for value in values.iter() {
             query = query.bind(value);
         }
@@ -466,7 +473,7 @@ async fn graph_from_connection(
         None => "SELECT name, entity_type FROM asobi_entities ORDER BY name".to_string(),
     };
     let values = selected.unwrap_or_default();
-    let mut entity_query = sqlx::query(&entity_sql);
+    let mut entity_query = sqlx::query(sqlx::AssertSqlSafe(entity_sql.as_str()));
     if entity_sql.contains("IN (") {
         for value in &values {
             entity_query = entity_query.bind(value);
@@ -611,7 +618,7 @@ async fn matching_names(
     // does -- so its errors collapse to "no matches on this path".
     async fn ranked(
         conn: &mut SqliteConnection,
-        sql: &str,
+        sql: &'static str,
         binds: &[String],
     ) -> ApiResult<Vec<String>> {
         let mut query = sqlx::query_scalar::<_, String>(sql);
@@ -734,7 +741,7 @@ async fn collect_purge_candidates(
         "#
     );
     let cutoff = format!("-{} days", request.older_than_days);
-    let mut query = sqlx::query(&sql);
+    let mut query = sqlx::query(sqlx::AssertSqlSafe(sql.as_str()));
     for value in PURGEABLE_ENTITY_TYPES {
         query = query.bind(value);
     }
@@ -1013,7 +1020,7 @@ impl SearchStore for SqliteStore {
                 binds.push(value.clone());
             }
             sql.push_str(" ORDER BY e.name");
-            let mut filter_query = sqlx::query(&sql);
+            let mut filter_query = sqlx::query(sqlx::AssertSqlSafe(sql.as_str()));
             for bind in &binds {
                 filter_query = filter_query.bind(bind);
             }
@@ -1044,18 +1051,18 @@ impl SearchStore for SqliteStore {
 
 impl MaintenanceStore for SqliteStore {
     async fn stats(&self) -> ApiResult<Stats> {
-        let count = |sql: &'static str| async {
-            let mut conn = self.pool.acquire().await.map_err(backend_error)?;
+        async fn count(conn: &mut SqliteConnection, sql: &'static str) -> ApiResult<usize> {
             let count: i64 = sqlx::query_scalar(sql)
-                .fetch_one(&mut *conn)
+                .fetch_one(conn)
                 .await
                 .map_err(backend_error)?;
-            Ok::<usize, ApiError>(count as usize)
-        };
+            Ok(count as usize)
+        }
+        let mut conn = self.pool.acquire().await.map_err(backend_error)?;
         Ok(Stats {
-            entities: count("SELECT count(*) FROM asobi_entities").await?,
-            relations: count("SELECT count(*) FROM asobi_relations").await?,
-            observations: count("SELECT count(*) FROM asobi_observations").await?,
+            entities: count(&mut conn, "SELECT count(*) FROM asobi_entities").await?,
+            relations: count(&mut conn, "SELECT count(*) FROM asobi_relations").await?,
+            observations: count(&mut conn, "SELECT count(*) FROM asobi_observations").await?,
         })
     }
 

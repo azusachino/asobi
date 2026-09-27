@@ -5,8 +5,6 @@ use asobi::model::{EntityInput, ObservationDeletion, ObservationInput, RelationI
 use asobi::storage::SqliteStore;
 use sqlx::Connection;
 use sqlx::sqlite::SqliteConnection;
-use std::fs;
-use std::path::PathBuf;
 use tempfile::tempdir;
 
 /// Pull one entity's activity anchor into the past so a single write is
@@ -15,9 +13,9 @@ async fn age_last_activity(db: &std::path::Path, name: &str) {
     let mut conn = SqliteConnection::connect(&format!("sqlite://{}?mode=rwc", db.display()))
         .await
         .unwrap();
-    sqlx::raw_sql(&format!(
+    sqlx::raw_sql(sqlx::AssertSqlSafe(format!(
         "UPDATE asobi_entities SET last_activity = datetime('now', '-2 days') WHERE name = '{name}';"
-    ))
+    )))
     .execute(&mut conn)
     .await
     .unwrap();

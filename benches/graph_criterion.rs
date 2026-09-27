@@ -1,4 +1,4 @@
-use asobi::api::{GraphStore, MaintenanceStore, OpenNodes, SearchQuery, SearchStore};
+use asobi::api::{GraphStore, OpenNodes, SearchQuery, SearchStore};
 use asobi::model::EntityInput;
 use asobi::storage::SqliteStore;
 use criterion::{Criterion, criterion_group, criterion_main};
