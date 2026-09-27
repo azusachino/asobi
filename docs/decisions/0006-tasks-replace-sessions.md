@@ -2,7 +2,7 @@
 id: 0006
 title: "0006. Tasks replace sessions; idle tasks are abandoned automatically"
 date: 2026-09-26
-status: proposed
+status: accepted
 tags: [tasks, retention, lifecycle, v0.8]
 related: [0003-retention-and-agent-ux.md, 0005-remote-server.md]
 ---
@@ -29,7 +29,7 @@ An open task (any non-terminal status, or none) with **no activity for `abandon_
 
 - **Epics are protected:** a task with an open `part_of` child is never abandoned by the sweep, since an epic's own entity goes quiet while its children are worked.
 - **Two steps before deletion:** an abandoned task is terminal, so retention deletes it `retention_days` later (default 7). With defaults, an untouched task is visible as `ABANDONED` for a week and gone after two. Setting its status back revives it within that week.
-- **Same rule in both modes:** local mode abandons in the existing per-process sweep before the first write; `asobi serve` runs it on its hourly background thread, with the server's `abandon_days`.
+- **Same rule in both modes:** local mode abandons in the existing per-process sweep before the first write; `asobi-server` runs it hourly as a background task over its named graphs, using the server's `abandon_days`.
 
 ## Consequences
 

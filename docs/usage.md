@@ -2,23 +2,23 @@
 
 This is Asobi's interface reference: what each command does, what it accepts, and what it returns. It describes the CLI and nothing more.
 
-It deliberately does not prescribe a session workflow — when to read the graph, what to write at closeout, how to sequence a task board. That guidance is agent policy rather than a property of the tool, it differs between users, and keeping a copy here produced a set of documents that drifted into contradicting each other. Workflow lives in the [`asobi` skill](https://github.com/azusachino/harus-skills/blob/main/skills/asobi/SKILL.md), which cites this document for exact contracts.
+It describes command behavior, not agent workflow: when to read the graph, what to write at closeout, or how to sequence a task board. That guidance differs between users and lives in the [`asobi` skill](https://github.com/azusachino/harus-skills/blob/main/skills/asobi/SKILL.md), which cites this document for exact contracts.
 
 ## For humans
 
 ### Installation
 
-From source via cargo (Rust 1.85+ toolchain required for edition 2024):
+From crates.io (Rust 1.85+ toolchain required for edition 2024):
 
 ```bash
-cargo install --git https://github.com/azusachino/asobi asobi
+cargo install asobi                         # local-only CLI
+cargo install asobi --features remote      # CLI with remote mode
+cargo install asobi-server                 # named-graph HTTP server
 ```
 
-Prebuilt binary via `cargo-binstall` (once GitHub releases are published):
+For a prebuilt release, install the CLI and server binaries from the platform archive; the release CLI includes remote support. A source install can use `cargo install --git https://github.com/azusachino/asobi asobi --features remote`.
 
-```bash
-cargo binstall asobi
-```
+Prebuilt binaries are available in the [GitHub release archive](https://github.com/azusachino/asobi/releases); the platform archive contains the remote-enabled `asobi` CLI and `asobi-server`.
 
 Or build locally:
 
@@ -47,6 +47,12 @@ asobi completions fish > ~/.config/fish/completions/asobi.fish
 ```
 
 The command also supports `elvish` and `powershell`. Completions cover commands, flags, enum values, and help text; entity names remain dynamic graph data and are intentionally resolved through `search` rather than a stale completion cache.
+
+### Upgrade to 0.8
+
+Asobi 0.8 starts a new graph and refuses pre-0.8 graph files without modifying them. Move an old local graph aside before running 0.8; server-side graph files created by an older version must likewise be moved aside on the server. There is no automatic migration or import.
+
+The former session handoff is replaced by graph-backed tasks. `session` is no longer a special type; legacy session entities are ordinary entities. Skills management and `[skills]` configuration are removed; any existing `[skills]` block is ignored. Install the maintained skill with `npx skills add https://github.com/azusachino/harus-skills --skill asobi --agent universal`.
 
 ### Workspace setup
 
@@ -87,7 +93,7 @@ Add `.asobi/` to `.gitignore`; the `asobi.toml` itself can be checked in.
 
 ```bash
 asobi search --where status=IN_PROGRESS
-asobi show "my-project:session"
+asobi show "my-project:task:deploy"
 ```
 
 **Store a decision (supports hierarchical naming and seeded observations):**
@@ -122,24 +128,24 @@ Use `graph` when the whole graph is wanted. `search` is intentionally top-K by d
 **Persist state — truths for the current value, observations for the trail:**
 
 ```bash
-asobi truth "my-project:session" "status" "DONE"
-asobi truth "my-project:session" "next" "implement FTS5 index"
-asobi obs "my-project:session" "completed 2026-05-21: added the FTS5 index"
+asobi truth "my-project:task:search" "status" "DONE"
+asobi truth "my-project:task:search" "next" "implement FTS5 index"
+asobi obs "my-project:task:search" "completed 2026-05-21: added the FTS5 index"
 ```
 
 A truth is the right home for anything read back as _current_ state, because writing the same key updates it in place. Observations accumulate and are evicted at the cap, so a next-action stored as an observation can silently age out.
 
 ### Lifecycle
 
-Two rules, and no others:
+Three rules, and no others:
 
 1. **Durable entities live forever** — `project`, `concept`, `reference`, `preference`, `standard`. Each keeps its most recent 200 observations; older ones are evicted as new ones arrive.
 2. **An open task idle for 7 days is abandoned** — its status becomes `ABANDONED`, with an observation recording that it happened automatically. A task with no `status` truth counts as open. An epic is protected while any `part_of` child is still open: an epic's own entity goes quiet while its children are worked.
 3. **Finished tasks are deleted after 7 more days** — a `task` whose status is `DONE`, `CLOSED` or `ABANDONED`. Abandonment is step one and deletion is step two: an untouched task is visible as `ABANDONED` for a week and gone after two, and setting its status back revives it within that week. Both steps happen automatically, once per process, before the first write.
 
-That is the whole of it. Nothing else accumulates: a truth is a current value with no archive behind it, and relations disappear with the entities they connect.
+In local mode both steps run automatically once per process before the first write. On a server, a background task runs the same abandonment-then-retention sweep hourly across its named graphs. Nothing else accumulates: a truth is a current value with no archive behind it, and relations disappear with the entities they connect.
 
-The sweep runs on a _write_ rather than at startup, so a read never mutates the graph. Both numbers are configurable, resolved the same way — environment variable first, then `asobi.toml`, then the default:
+In local mode the sweep runs on a _write_ rather than at startup, so a read never mutates the graph. On the server, `ASOBI_ABANDON_DAYS` and `ASOBI_RETENTION_DAYS` configure its hourly sweep. In both modes the values resolve from environment first, then `asobi.toml` where applicable, then the default:
 
 | What | Config key | Environment | Default |
 | --- | --- | --- | --- |
@@ -158,13 +164,13 @@ The reason for the second rule is that operational state is relevant for hours, 
 asobi purge
 
 # Narrow the policy to completed tasks older than 90 days
-asobi purge --older-than 30
+asobi purge --older-than 90
 
 # Apply exactly the previewed policy
-asobi purge --older-than 30 --apply
+asobi purge --older-than 90 --apply
 ```
 
-This normally runs by itself — see [Lifecycle](#lifecycle). Reach for it to preview what would go, or to sweep a narrower window than the configured one. It only ever considers finished `task` entities; durable knowledge is not something a request can name, and `session` entities are ordinary entities now — nothing purges them. Use `--json` for a machine-readable candidate report. An applied purge also runs `PRAGMA incremental_vacuum`, so the database file shrinks with the graph rather than retaining a free list.
+The background lifecycle sweep normally handles configured abandonment and retention — see [Lifecycle](#lifecycle). Use `purge` to preview or apply a different age threshold. It only ever considers finished `task` entities; durable knowledge is not something a request can name. A `session` entity created by a pre-0.8 version is now an ordinary durable entity and is not purged. Use `--json` for a machine-readable candidate report. An applied purge also runs `PRAGMA incremental_vacuum`, so the database file shrinks with the graph rather than retaining a free list.
 
 `compact` projects every durable entity to Markdown. `task` entities (epics included) stay graph-only — query them with `search` / `show`.
 
@@ -172,19 +178,20 @@ This normally runs by itself — see [Lifecycle](#lifecycle). Reach for it to pr
 
 ```bash
 asobi stats                                # Quick count of entities, relations, observations
-asobi graph | jq '.entities[] | select(.entityType == "session")'
+asobi graph | jq '.entities[] | select(.entityType == "task")'
 ```
 
 ### Archival
 
-The graph is one SQLite file. Copy it:
+In local mode the graph is one SQLite file. Copy it to back it up or inspect it:
 
 ```bash
 cp .asobi/data/asobi.db backup.db          # project-local
 cp ~/.local/share/asobi/data/asobi.db .    # XDG
+sqlite3 backup.db
 ```
 
-The graph is one SQLite file. `cp` backs it up, and `sqlite3` reads it directly.
+In remote mode, back up the server's data directory using its deployment's backup procedure; client-local graph paths are not used.
 
 The one thing this genuinely gives up is moving a single entity between two graphs — a project-local one and the XDG one, say. Re-create it with `new`/`truth`/`obs`; it is a handful of commands, and it happens rarely enough that a subgraph traversal engine was the wrong price to pay for it.
 
@@ -220,7 +227,7 @@ Use `asobi tasks --help` or `asobi tasks <command> --help` for the complete argu
 
 ## Command reference
 
-Every command is a single CLI invocation. No server to start, no authentication; graph operations complete in under 10ms.
+Every command is a single CLI invocation. Local mode needs no server; remote mode uses the configured `asobi-server` and its network-access policy.
 
 `asobi <command> --help` is generated from the same definitions as the binary and is authoritative if this section ever falls behind it.
 
@@ -326,7 +333,7 @@ asobi purge [--older-than <DAYS>] [--apply]
 asobi reset [--force]
 ```
 
-`compact` projects **durable knowledge** entities — `project`, `concept`, `reference`, `preference`, `standard`, and `session` since 0.8 removed the type's special status — into Markdown under `.asobi/topics/`. `task` entities are skipped by design; read those with `search`/`show`.
+`compact` projects **durable knowledge** entities — `project`, `concept`, `reference`, `preference`, `standard`, and any legacy `session` entities — into Markdown under `.asobi/topics/`. In 0.8, sessions stopped being a special type. `task` entities are skipped by design; read those with `search`/`show`.
 
 `purge` is a dry run unless given `--apply`, and accepts only `task` entities in a terminal status (`DONE`, `CLOSED`, `ABANDONED`) — durable knowledge is refused. It defaults to entities inactive for 30 days. It never runs implicitly during `graph`, `search`, `compact`, or startup. An applied purge also runs `PRAGMA incremental_vacuum`, so the database file shrinks with the graph rather than retaining a free list.
 
@@ -359,16 +366,16 @@ The type given to `asobi new` determines what `--where` filters, `compact`, and 
 | Type         | Use for                                             |
 | ------------ | --------------------------------------------------- |
 | `project`    | Stable per-project facts and architecture decisions |
-| `session`    | Legacy session state; an ordinary entity since 0.8  |
+| `session`    | Legacy data from pre-0.8 workspaces; ordinary entity in 0.8 |
 | `task`       | Epics and their dispatchable child tasks            |
 | `concept`    | Decisions, pitfalls, technical definitions          |
 | `preference` | Cross-project user or tool preferences              |
 | `standard`   | Conventions that apply everywhere                   |
 | `reference`  | Pointers to external resources and URLs             |
 
-Only `task` entities stay out of the Markdown projection, and only finished `task` entities are eligible for `purge`; every other type — `session` included, since 0.8 — is durable knowledge both places.
+Only `task` entities stay out of the Markdown projection, and only finished `task` entities are eligible for `purge`; legacy `session` entities are ordinary durable knowledge in 0.8.
 
-Names are hierarchical and colon-separated — `project-x`, `project-x:session`, `project-x:epic`, `project-x:epic:task-1` — and preserve case and dots, so `CLAUDE.md` and `UserPreferences` are valid names. Relations read as verb phrases: `part_of`, `depends_on`, `supersedes`, `extends`, `uses`, `blocks`.
+Names are hierarchical and colon-separated — `project-x`, `project-x:task:deploy`, `project-x:epic`, `project-x:epic:task-1` — and preserve case and dots, so `CLAUDE.md` and `UserPreferences` are valid names. Relations read as verb phrases: `part_of`, `depends_on`, `supersedes`, `extends`, `uses`, `blocks`.
 
 ## Response contract
 
@@ -467,7 +474,7 @@ The payload for `graph` and `search` is a lazy JSON structure (excluding `observ
 For exact entity retrieval, prefer `show` over `search`:
 
 ```bash
-asobi show "project-x:session" "UserPreferences"
+asobi show "project-x:task:deploy" "UserPreferences"
 ```
 
 ## Remote workspaces
@@ -481,11 +488,11 @@ graph = "workstation"
 
 `ASOBI_REMOTE` and `ASOBI_GRAPH` override those keys. When `remote` is set, all graph and task calls go to that server; local `data_dir` and `ASOBI_DATABASE_URL` are not used. The `observation_limit` and `topics_dir` stay client-side, so `compact` writes Markdown locally.
 
-The API version is encoded in the `/v3` URL; there is no separate handshake. The first remote operation is the reachability probe (a write command first makes a read-only `maintenance.location` call). If that call cannot connect, times out after about two seconds, or receives gateway HTTP 502/503/504, the process warns on stderr and uses the local graph for the whole command; its writes will not reach the server and are not merged later. Once any remote call succeeds, a later failure is an error and never switches backend mid-command. A non-protocol response fails with `server does not speak API v3`. The process reuses one HTTP client/connection. Use a build with the `remote` feature (`cargo install asobi --features remote`); a local-only build fails clearly if it finds `remote` configured.
+The API version is encoded in the `/v3` URL; there is no `server.hello` call or separate handshake. Each operation is plain JSON over `POST /v3/graphs/<graph>/<operation>`; successful calls return JSON, and errors use a non-2xx status with `{ "kind", "message" }`. `GET /healthz` returns 200 without opening a graph and is for liveness probes only. The first remote operation is the reachability probe (a write command first makes a read-only `maintenance.location` call). If that call cannot connect, times out after about two seconds, or receives gateway HTTP 502/503/504, the process warns on stderr and uses the local graph for the whole command; outage writes stay local and are never merged later. Once any remote call succeeds, a later failure is an error and never switches backend mid-command. A non-protocol response fails with `server does not speak API v3`. The process reuses one HTTP client/connection. Use a build with the `remote` feature (`cargo install asobi --features remote`); a local-only build fails clearly if it finds `remote` configured.
 
 ## The graph server: `asobi-server`
 
-One long-lived process holds **named graphs** — one SQLite file per graph in its data directory — and serves them over HTTP to every device that points its `remote` at it (WP4; see ADR 0005 for the whole picture).
+One long-lived `asobi-server` process holds **named graphs** — one SQLite file per graph in its required data directory — and serves them over HTTP to workspaces configured with `remote` (see ADR 0005). Build/install `asobi-server` separately; the remote client is optional on the `asobi` CLI.
 
 ```bash
 asobi-server --listen 127.0.0.1:8300 --data-dir /srv/asobi-data
@@ -494,8 +501,9 @@ asobi-server --listen 127.0.0.1:8300 --data-dir /srv/asobi-data
 - **Both arguments are required.** `--data-dir` is the server's own data directory — created if missing and never resolved from `asobi.toml`/XDG, so a server and a local CLI on one host cannot silently share a graph file, and the server's sweep never walks the CLI's directory. Each graph is `<data-dir>/<name>.db`. Graph names match `^[a-z0-9-]+$` — they become file names, so anything else is refused with `422 invalid` and no file is created. Naming a graph that does not exist yet creates it on first use.
 - **Route:** `POST /v3/graphs/<graph>/<operation>` with the operation's request object as the body; a success is `200` with the result JSON. A failure is a non-2xx status with `{"kind", "message"}`. Any other verb on a known path is `405 badRequest`; any other path is `404`.
 - **Requests are concurrent** (one sqlx pool per graph); SQLite serialises writes through WAL and the busy timeout, and task claims and abandonment run in `BEGIN IMMEDIATE` transactions.
-- **Sweeps run in the background** on a one-hour interval over every graph: idle open tasks are abandoned and finished tasks deleted, exactly as in local mode, driven by the server's own `retention_days` / `abandon_days` configuration.
+- **Sweeps run in the background** on a one-hour interval over every graph: idle open tasks are abandoned before retention deletes finished tasks, exactly as in local mode, using the server's own `retention_days` / `abandon_days` configuration.
 - **`maintenance.reset` is refused over the network** (`501 unsupported`): run `asobi reset` on the server host against the file directly when that is intended.
+- **Liveness:** `GET /healthz` returns 200 without opening a graph; use it for container and cluster probes.
 - **Access:** no authentication — the server must only be reachable on your tailnet; binding it to a public interface is out of contract.
 
 ## Running in Sandboxed Environments (Codex, etc.)

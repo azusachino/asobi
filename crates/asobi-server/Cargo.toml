@@ -7,6 +7,13 @@ authors.workspace = true
 license.workspace = true
 repository.workspace = true
 
+# cargo-binstall: the release archive `asobi-<target>.tar.gz` carries both
+# binaries (the CLI and this server) at its root; the tag is `v<version>`.
+[package.metadata.binstall]
+pkg-url = "{ repo }/releases/download/v{ version }/asobi-{ target }.{ archive-format }"
+pkg-fmt = "tgz"
+bin-dir = "{ bin }{ binary-ext }"
+
 [dependencies]
 asobi-core = { workspace = true }
 asobi-storage = { workspace = true }
