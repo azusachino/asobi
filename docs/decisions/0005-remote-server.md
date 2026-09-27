@@ -34,7 +34,7 @@ local (default)   asobi ──► SqliteStore ──► data_dir/asobi.db
 remote            asobi ──► RemoteStore ──HTTP──► asobi-server ──► SqliteStore per graph name
 ```
 
-- **`asobi-server --listen <addr:port>`** is a separate binary ([0009](0009-workspace-crates.md)): a long-lived process that holds **named graphs**, one SQLite file per graph name in its data directory, and answers the HTTP protocol below.
+- **`asobi-server --listen <addr:port> --data-dir <path>`** is a separate binary ([0009](0009-workspace-crates.md)): a long-lived process that holds **named graphs**, one SQLite file per graph name in its data directory, and answers the HTTP protocol below. Its data directory is required and its own: it never falls back to the CLI's `asobi.toml` or XDG location, so a server and a local CLI on one host cannot end up sharing a graph file.
 - **`RemoteStore`** implements the same `v3` traits (`GraphStore`, `SearchStore`, `MaintenanceStore`, `TaskStore`; see [0008](0008-async-storage-on-sqlx.md)) by sending one HTTP request per trait call. Commands keep depending on traits only, so every command, flag, and output is identical in both modes. Remote mode is compiled in only with the CLI's `remote` feature ([0009](0009-workspace-crates.md)).
 - **Configuration:** two keys in `asobi.toml`, each overridable by its environment variable:
   - `remote = "https://asobi.h.azusachino.com"` (`ASOBI_REMOTE`) selects remote mode and the server;
@@ -62,7 +62,7 @@ No existing graph is migrated: the server starts empty, and local graphs stay wh
 ### HTTP protocol
 
 - **Transport:** plain JSON over HTTP/1.1. One call is `POST <remote>/v3/graphs/<graph>/<operation>` with `Content-Type: application/json`; the body is the operation's request object, and a success is HTTP 200 whose body is the result. The `v3` prefix is `API_VERSION`, so a later server can serve two versions side by side. "Method" always means the HTTP verb; what a call does is its **operation**. There is no envelope: HTTP already pairs each response with its request, and nothing here batches, streams, or sends notifications.
-- **Operations:** one per `v3` trait method, named `<trait>.<method>` in camelCase (e.g. `graph.openNodes`). The request body is a named object whose fields are the trait method's arguments; a field left out takes the same default the CLI uses, never a zero that changes meaning (an omitted search `limit` is the CLI's default limit, not 0). Results are the method's return value, serialized with the existing camelCase serde types (`()` becomes a `null` body, still 200).
+- **Operations:** one per `v3` trait method, named `<trait>.<method>` in camelCase (e.g. `graph.openNodes`). The request body is a named object whose fields are the trait method's arguments; a field left out takes the same default the CLI uses, never a zero that changes meaning (an omitted search `limit` is the CLI's default limit, not 0). Results are the method's return value, serialized with the existing camelCase serde types (`()` becomes a `null` body, still 200). An empty request body means `{}`.
 
 | Operation | Request body | Result |
 | --- | --- | --- |
