@@ -6,14 +6,14 @@
 
 use asobi_core::api::GraphStore;
 use asobi_core::model::EntityInput;
-use asobi_core::rpc::{Method, dispatch, error_body_to_api};
+use asobi_core::protocol::{Operation, dispatch, error_body_to_api};
 use asobi_storage::SqliteStore;
 use serde_json::{Value, json};
 use tempfile::tempdir;
 
 async fn seeded_store() -> (tempfile::TempDir, SqliteStore) {
     let dir = tempdir().unwrap();
-    let store = SqliteStore::open_at(&dir.path().join("rpc.db"))
+    let store = SqliteStore::open_at(&dir.path().join("protocol.db"))
         .await
         .unwrap();
     store
@@ -46,18 +46,22 @@ async fn seeded_store() -> (tempfile::TempDir, SqliteStore) {
     (dir, store)
 }
 
-/// One round-trip: serialize the params, hand the bytes to the dispatcher,
-/// and assert the result. The params here are already the exact JSON the
-/// wire carries, so this is the contract, not a Rust-only path.
-async fn ok(store: &SqliteStore, method: &str, params: Value) -> Value {
+/// One round-trip: serialize the request body, hand the bytes to the
+/// dispatcher, and assert the result. The bodies here are already the exact
+/// JSON the wire carries, so this is the contract, not a Rust-only path.
+async fn ok(store: &SqliteStore, operation: &str, params: Value) -> Value {
     let body = serde_json::to_vec(&params).unwrap();
-    dispatch(store, method, Some(&body))
+    dispatch(store, "asobi", operation, Some(&body))
         .await
-        .unwrap_or_else(|e| panic!("{method} failed: {e:?}"))
+        .unwrap_or_else(|e| panic!("{operation} failed: {e:?}"))
 }
 
-async fn err(store: &SqliteStore, method: &str, body: Option<&[u8]>) -> asobi_core::rpc::RpcError {
-    dispatch(store, method, body)
+async fn err(
+    store: &SqliteStore,
+    operation: &str,
+    body: Option<&[u8]>,
+) -> asobi_core::protocol::RpcError {
+    dispatch(store, "asobi", operation, body)
         .await
         .expect_err("expected an error")
 }
@@ -70,6 +74,8 @@ async fn every_method_round_trips() {
     let hello = ok(&store, "server.hello", json!({})).await;
     assert_eq!(hello["apiVersion"], asobi_core::api::API_VERSION);
     assert_eq!(hello["backend"], "sqlite");
+    // stateId is the graph name, never a server file path (ADR 0005).
+    assert_eq!(hello["stateId"], "asobi");
 
     // graph writes
     ok(
@@ -109,7 +115,7 @@ async fn every_method_round_trips() {
     ok(
         &store,
         "graph.truthUpsert",
-        json!({ "entity": "project:asobi", "key": "topic", "value": "rpc" }),
+        json!({ "entity": "project:asobi", "key": "topic", "value": "protocol" }),
     )
     .await;
 
@@ -128,7 +134,7 @@ async fn every_method_round_trips() {
     let search = ok(
         &store,
         "search.nodes",
-        json!({ "query": "commonterm", "limit": 10, "filters": [["topic", "rpc"]] }),
+        json!({ "query": "commonterm", "limit": 10, "filters": [["topic", "protocol"]] }),
     )
     .await;
     assert_eq!(search["entities"][0]["name"], "project:asobi");
@@ -154,13 +160,18 @@ async fn every_method_round_trips() {
     let claimed = ok(
         &store,
         "tasks.dispatch",
-        json!({ "task": null, "agent": "rpc-agent", "observationLimit": 200 }),
+        json!({ "task": null, "agent": "protocol-agent", "observationLimit": 200 }),
     )
     .await;
     assert_eq!(claimed, "project:asobi:task-1");
     // Nothing left to claim: claimNext finds nothing.
     assert_eq!(
-        ok(&store, "tasks.claimNext", json!({ "agent": "rpc-agent" })).await,
+        ok(
+            &store,
+            "tasks.claimNext",
+            json!({ "agent": "protocol-agent" })
+        )
+        .await,
         Value::Null
     );
 
@@ -240,7 +251,7 @@ async fn unknown_method_is_404_unknown_method() {
     let (_dir, store) = seeded_store().await;
     let error = err(&store, "graph.frobnicate", Some(b"{}".as_slice())).await;
     assert_eq!(error.status, 404);
-    assert_eq!(error.kind, "unknownMethod");
+    assert_eq!(error.kind, "unknownOperation");
 }
 
 #[tokio::test]
@@ -282,6 +293,7 @@ async fn dispatch_parses_raw_json_bodies_not_only_values() {
     let (_dir, store) = seeded_store().await;
     let graph = dispatch(
         &store,
+        "asobi",
         "graph.openNodes",
         Some(br#"{"names": ["project:asobi"], "observationLimit": 0}"#),
     )
@@ -294,13 +306,42 @@ async fn dispatch_parses_raw_json_bodies_not_only_values() {
 /// row breaks this assertion.
 #[test]
 fn method_schemas_cover_every_method() {
-    let schemas = asobi_core::rpc::method_schemas();
-    assert_eq!(schemas.len(), Method::all().count());
-    for (name, params, result) in schemas {
-        assert!(params.is_object(), "{name} params schema missing");
+    let schemas = asobi_core::protocol::method_schemas();
+    assert_eq!(schemas.len(), Operation::all().count());
+    for (name, request, result) in schemas {
+        assert!(request.is_object(), "{name} request schema missing");
         assert!(
             result.is_object() || result.is_null(),
             "{name} result schema missing"
         );
     }
+}
+
+#[tokio::test]
+async fn omitted_optional_fields_take_the_cli_defaults() {
+    let (_dir, store) = seeded_store().await;
+
+    // search.nodes with no `limit`: defaults to the CLI's 10, not a
+    // meaning-changing zero, and the seed matches, so results come back.
+    let search = dispatch(
+        &store,
+        "asobi",
+        "search.nodes",
+        Some(br#"{"query": "seed"}"#),
+    )
+    .await
+    .unwrap();
+    assert_eq!(search["entities"][0]["name"], "project:asobi");
+
+    // openNodes with no `observationLimit`: defaults to the CLI's 200, so the
+    // eager read carries observations instead of an empty trail.
+    let nodes = dispatch(
+        &store,
+        "asobi",
+        "graph.openNodes",
+        Some(br#"{"names": ["project:asobi"]}"#),
+    )
+    .await
+    .unwrap();
+    assert_eq!(nodes["entities"][0]["observationCount"], 1);
 }

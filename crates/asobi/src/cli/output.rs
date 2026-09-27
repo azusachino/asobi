@@ -84,13 +84,13 @@ fn schema_registry() -> Vec<SchemaRow> {
         ("new", schema_for_data::<Graph>),
         ("obs", schema_for_data::<Graph>),
         ("purge", schema_for_data::<asobi_core::api::PurgeReport>),
-        ("rpc", || {
-            let methods: std::collections::BTreeMap<_, _> = asobi_core::rpc::method_schemas()
+        ("protocol", || {
+            let methods: std::collections::BTreeMap<_, _> = asobi_core::protocol::method_schemas()
                 .into_iter()
-                .map(|(name, params, result)| {
+                .map(|(name, request, result)| {
                     (
                         name,
-                        serde_json::json!({ "params": params, "result": result }),
+                        serde_json::json!({ "request": request, "result": result }),
                     )
                 })
                 .collect();

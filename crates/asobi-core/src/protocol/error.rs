@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 
 /// The protocol error kinds that have no `ApiError` behind them.
 pub mod kinds {
-    pub const UNKNOWN_METHOD: &str = "unknownMethod";
+    pub const UNKNOWN_OPERATION: &str = "unknownOperation";
     pub const BAD_REQUEST: &str = "badRequest";
 }
 
@@ -86,7 +86,9 @@ pub fn error_body_to_api(body: &ErrorBody) -> Option<ApiError> {
     Some(match body.kind.as_str() {
         "notFound" => ApiError::NotFound(body.message.clone()),
         "conflict" => ApiError::Conflict(body.message.clone()),
-        "unsupported" => ApiError::Unsupported("unsupported operation over RPC"),
+        "unsupported" => ApiError::Unsupported(
+            "reset is not available over the network; run `asobi reset` on the server host",
+        ),
         "unavailable" => ApiError::Unavailable(body.message.clone()),
         "invalid" => ApiError::Invalid(body.message.clone()),
         "backend" => ApiError::Backend(body.message.clone()),
