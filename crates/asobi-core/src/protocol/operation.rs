@@ -1,4 +1,4 @@
-//! The operation names, one per `v3` trait method plus the handshake.
+//! The operation names, one per `v3` trait method.
 //!
 //! One call is `POST /v3/graphs/<graph>/<operation>` (ADR 0005): the final
 //! path segment names the operation, in `<trait>.<method>` camelCase exactly
@@ -9,7 +9,6 @@
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Operation {
-    ServerHello,
     GraphCreateEntities,
     GraphAddObservations,
     GraphCreateRelations,
@@ -39,7 +38,6 @@ pub enum Operation {
 impl Operation {
     pub fn parse(name: &str) -> Option<Operation> {
         Some(match name {
-            "server.hello" => Operation::ServerHello,
             "graph.createEntities" => Operation::GraphCreateEntities,
             "graph.addObservations" => Operation::GraphAddObservations,
             "graph.createRelations" => Operation::GraphCreateRelations,
@@ -71,7 +69,6 @@ impl Operation {
     /// The wire name, the inverse of [`Method::parse`].
     pub fn name(&self) -> &'static str {
         match self {
-            Operation::ServerHello => "server.hello",
             Operation::GraphCreateEntities => "graph.createEntities",
             Operation::GraphAddObservations => "graph.addObservations",
             Operation::GraphCreateRelations => "graph.createRelations",
@@ -102,7 +99,6 @@ impl Operation {
     /// Every method, in table order.
     pub fn all() -> impl Iterator<Item = Operation> {
         [
-            Operation::ServerHello,
             Operation::GraphCreateEntities,
             Operation::GraphAddObservations,
             Operation::GraphCreateRelations,

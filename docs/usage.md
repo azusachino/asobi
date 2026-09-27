@@ -470,6 +470,19 @@ For exact entity retrieval, prefer `show` over `search`:
 asobi show "project-x:session" "UserPreferences"
 ```
 
+## Remote workspaces
+
+A workspace can use a whole named graph on an Asobi server. Add `remote` to its `asobi.toml`; `graph` selects the server graph and defaults to `asobi`:
+
+```toml
+remote = "https://asobi.h.azusachino.com"
+graph = "workstation"
+```
+
+`ASOBI_REMOTE` and `ASOBI_GRAPH` override those keys. When `remote` is set, all graph and task calls go to that server; local `data_dir` and `ASOBI_DATABASE_URL` are not used. The `observation_limit` and `topics_dir` stay client-side, so `compact` writes Markdown locally.
+
+The API version is encoded in the `/v3` URL; there is no separate handshake. The first remote operation is the reachability probe (a write command first makes a read-only `maintenance.location` call). If that call cannot connect, times out after about two seconds, or receives gateway HTTP 502/503/504, the process warns on stderr and uses the local graph for the whole command; its writes will not reach the server and are not merged later. Once any remote call succeeds, a later failure is an error and never switches backend mid-command. A non-protocol response fails with `server does not speak API v3`. The process reuses one HTTP client/connection. Use a build with the `remote` feature (`cargo install asobi --features remote`); a local-only build fails clearly if it finds `remote` configured.
+
 ## The graph server: `asobi-server`
 
 One long-lived process holds **named graphs** — one SQLite file per graph in its data directory — and serves them over HTTP to every device that points its `remote` at it (WP4; see ADR 0005 for the whole picture).

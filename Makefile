@@ -29,6 +29,7 @@ run:
 
 test:
 	cargo test --workspace -- --test-threads=1
+	cargo test -p asobi --features remote --test remote_client_test -- --test-threads=1
 
 test-scripts: build
 	uv run --with fastjsonschema scripts/verify_cli.py

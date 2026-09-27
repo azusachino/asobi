@@ -5,8 +5,8 @@
 //! through [`AsobiRuntime`] and never needs to name a provider or its state
 //! file.
 
+use crate::storage::Storage;
 use asobi_core::api::{ApiResult, BackendCapabilities, MaintenanceStore};
-use asobi_storage::Storage;
 
 /// Tighten handoff-file permissions without coupling the application layer to
 /// a provider's physical-backup implementation.

@@ -10,6 +10,8 @@ pub struct AsobiConfig {
     pub observation_limit: Option<usize>,
     pub retention_days: Option<u32>,
     pub abandon_days: Option<u32>,
+    pub remote: Option<String>,
+    pub graph: Option<String>,
 }
 
 pub struct AsobiPaths {
@@ -20,6 +22,8 @@ pub struct AsobiPaths {
     /// Days a finished session or task survives before the automatic sweep.
     pub retention_days: Option<u32>,
     pub abandon_days: Option<u32>,
+    pub remote: Option<String>,
+    pub graph: Option<String>,
     /// The directory the workspace was discovered from: the `asobi.toml`'s
     /// directory, the `.asobi/` parent, or the starting directory under XDG.
     /// Relative paths that describe project content — as opposed to state —
@@ -94,6 +98,8 @@ impl AsobiPaths {
                 observation_limit: None,
                 retention_days: None,
                 abandon_days: None,
+                remote: None,
+                graph: None,
                 root,
                 config_file: None,
             };
@@ -117,6 +123,8 @@ impl AsobiPaths {
                 observation_limit: None,
                 retention_days: None,
                 abandon_days: None,
+                remote: None,
+                graph: None,
                 root: local_root
                     .parent()
                     .map(Path::to_path_buf)
@@ -133,6 +141,8 @@ impl AsobiPaths {
                 observation_limit: None,
                 retention_days: None,
                 abandon_days: None,
+                remote: None,
+                graph: None,
                 root: start.to_path_buf(),
                 config_file: None,
             },
@@ -143,6 +153,8 @@ impl AsobiPaths {
                 observation_limit: None,
                 retention_days: None,
                 abandon_days: None,
+                remote: None,
+                graph: None,
                 root: start.to_path_buf(),
                 config_file: None,
             },
@@ -166,6 +178,8 @@ impl AsobiPaths {
             observation_limit: conf.observation_limit,
             retention_days: conf.retention_days,
             abandon_days: conf.abandon_days,
+            remote: conf.remote,
+            graph: conf.graph,
             root: anchor.to_path_buf(),
             config_file: None,
         }

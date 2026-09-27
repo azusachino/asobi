@@ -13,10 +13,11 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use asobi_core::protocol::{self, ProtocolError};
-use axum::extract::{Path, State};
-use axum::http::{StatusCode, Uri};
+use axum::extract::{Path, Request, State};
+use axum::http::StatusCode;
+use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
-use axum::routing::post;
+use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde_json::json;
 
@@ -46,11 +47,13 @@ impl App {
     /// registry and trigger the sweep while the router serves real HTTP.
     fn router(self: &Arc<Self>) -> Router {
         Router::new()
+            .route("/healthz", get(Self::healthz))
             .route(
                 "/v3/graphs/{graph}/{operation}",
                 post(Self::call).fallback(Self::method_not_allowed),
             )
             .fallback(Self::no_such_path)
+            .layer(middleware::from_fn(Self::log_request))
             .with_state(self.clone())
     }
 
@@ -62,35 +65,17 @@ impl App {
         Path((graph, operation)): Path<(String, String)>,
         body: axum::body::Bytes,
     ) -> Response {
-        let start = Instant::now();
         let store = match app.registry.get_or_open(&graph).await {
             Ok(store) => store,
-            Err(error) => return protocol_error(&error),
+            Err(error) => {
+                tracing::warn!(graph = %graph, operation = %operation, status = error.status, error_kind = %error.kind, error_message = %error.message, "failed to open graph for request");
+                return protocol_error(&error);
+            }
         };
 
-        let result = protocol::dispatch(store.as_ref(), &graph, &operation, Some(&body)).await;
-        let elapsed = start.elapsed();
-        match result {
-            Ok(value) => {
-                tracing::info!(
-                    graph = %graph,
-                    operation = %operation,
-                    duration = ?elapsed,
-                    "request ok"
-                );
-                (StatusCode::OK, Json(value)).into_response()
-            }
-            Err(error) => {
-                tracing::info!(
-                    graph = %graph,
-                    operation = %operation,
-                    duration = ?elapsed,
-                    error_kind = %error.kind,
-                    status = error.status,
-                    "request failed"
-                );
-                protocol_error(&error)
-            }
+        match protocol::dispatch(store.as_ref(), &operation, Some(&body)).await {
+            Ok(value) => (StatusCode::OK, Json(value)).into_response(),
+            Err(error) => protocol_error(&error),
         }
     }
 
@@ -101,9 +86,36 @@ impl App {
         (StatusCode::METHOD_NOT_ALLOWED, Json(error.body())).into_response()
     }
 
+    /// Log every request, including health and routing failures, without
+    /// recording query strings or request bodies.
+    async fn log_request(request: Request, next: Next) -> Response {
+        let method = request.method().clone();
+        let path = request.uri().path().to_string();
+        let start = Instant::now();
+        let response = next.run(request).await;
+        let status = response.status();
+        let elapsed_ms = start.elapsed().as_millis() as u64;
+        match status {
+            status if status.is_server_error() => tracing::error!(
+                method = %method, path = %path, status = status.as_u16(), elapsed_ms, "http request"
+            ),
+            status if status.is_client_error() => tracing::warn!(
+                method = %method, path = %path, status = status.as_u16(), elapsed_ms, "http request"
+            ),
+            status => tracing::info!(
+                method = %method, path = %path, status = status.as_u16(), elapsed_ms, "http request"
+            ),
+        }
+        response
+    }
+
+    /// Liveness endpoint for container and cluster probes. Does not touch a graph.
+    async fn healthz() -> StatusCode {
+        StatusCode::OK
+    }
+
     /// Any other path: plain 404, same shape as an unknown operation.
-    async fn no_such_path(uri: Uri) -> Response {
-        tracing::info!(path = %uri, "no such path");
+    async fn no_such_path() -> Response {
         (
             StatusCode::NOT_FOUND,
             Json(json!({ "kind": "notFound", "message": "no such path" })),

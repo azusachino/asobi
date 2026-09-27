@@ -51,7 +51,7 @@ async fn seeded_store() -> (tempfile::TempDir, SqliteStore) {
 /// JSON the wire carries, so this is the contract, not a Rust-only path.
 async fn ok(store: &SqliteStore, operation: &str, params: Value) -> Value {
     let body = serde_json::to_vec(&params).unwrap();
-    dispatch(store, "asobi", operation, Some(&body))
+    dispatch(store, operation, Some(&body))
         .await
         .unwrap_or_else(|e| panic!("{operation} failed: {e:?}"))
 }
@@ -61,7 +61,7 @@ async fn err(
     operation: &str,
     body: Option<&[u8]>,
 ) -> asobi_core::protocol::ProtocolError {
-    dispatch(store, "asobi", operation, body)
+    dispatch(store, operation, body)
         .await
         .expect_err("expected an error")
 }
@@ -69,13 +69,6 @@ async fn err(
 #[tokio::test]
 async fn every_operation_round_trips() {
     let (_dir, store) = seeded_store().await;
-
-    // server.hello
-    let hello = ok(&store, "server.hello", json!({})).await;
-    assert_eq!(hello["apiVersion"], asobi_core::api::API_VERSION);
-    assert_eq!(hello["backend"], "sqlite");
-    // stateId is the graph name, never a server file path (ADR 0005).
-    assert_eq!(hello["stateId"], "asobi");
 
     // graph writes
     ok(
@@ -152,14 +145,9 @@ async fn every_operation_round_trips() {
         )
         .await
         .unwrap();
-    let many = dispatch(
-        &store,
-        "asobi",
-        "search.nodes",
-        Some(br#"{"query": "manymatch"}"#),
-    )
-    .await
-    .unwrap();
+    let many = dispatch(&store, "search.nodes", Some(br#"{"query": "manymatch"}"#))
+        .await
+        .unwrap();
     assert_eq!(many["entities"].as_array().unwrap().len(), 10);
 
     // maintenance
@@ -316,7 +304,6 @@ async fn dispatch_parses_raw_json_bodies_not_only_values() {
     let (_dir, store) = seeded_store().await;
     let graph = dispatch(
         &store,
-        "asobi",
         "graph.openNodes",
         Some(br#"{"names": ["project:asobi"], "observationLimit": 0}"#),
     )
@@ -346,14 +333,9 @@ async fn omitted_optional_fields_take_the_cli_defaults() {
 
     // search.nodes with no `limit`: defaults to the CLI's 10, not a
     // meaning-changing zero, and the seed matches, so results come back.
-    let search = dispatch(
-        &store,
-        "asobi",
-        "search.nodes",
-        Some(br#"{"query": "seed"}"#),
-    )
-    .await
-    .unwrap();
+    let search = dispatch(&store, "search.nodes", Some(br#"{"query": "seed"}"#))
+        .await
+        .unwrap();
     assert_eq!(search["entities"][0]["name"], "project:asobi");
 
     // openNodes with no `observationLimit`: defaults to `asobi show`'s 20
@@ -368,7 +350,6 @@ async fn omitted_optional_fields_take_the_cli_defaults() {
         .unwrap();
     let nodes = dispatch(
         &store,
-        "asobi",
         "graph.openNodes",
         Some(br#"{"names": ["project:long-trail"]}"#),
     )
@@ -395,15 +376,12 @@ async fn claims_require_an_agent() {
         ),
         ("tasks.claimNext", br#"{}"#.as_slice()),
     ] {
-        let error = dispatch(&store, "asobi", operation, Some(body))
-            .await
-            .unwrap_err();
+        let error = dispatch(&store, operation, Some(body)).await.unwrap_err();
         assert_eq!(error.status, 400, "{operation}");
     }
     // Nothing was claimed.
     let task = dispatch(
         &store,
-        "asobi",
         "graph.openNodes",
         Some(br#"{"names": ["project:asobi:task-1"]}"#),
     )
