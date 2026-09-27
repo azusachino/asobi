@@ -8,3 +8,4 @@ pub mod api;
 pub mod model;
 pub mod normalize;
 pub mod paths;
+pub mod rpc;

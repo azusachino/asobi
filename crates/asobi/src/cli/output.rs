@@ -84,6 +84,21 @@ fn schema_registry() -> Vec<SchemaRow> {
         ("new", schema_for_data::<Graph>),
         ("obs", schema_for_data::<Graph>),
         ("purge", schema_for_data::<asobi_core::api::PurgeReport>),
+        ("rpc", || {
+            let methods: std::collections::BTreeMap<_, _> = asobi_core::rpc::method_schemas()
+                .into_iter()
+                .map(|(name, params, result)| {
+                    (
+                        name,
+                        serde_json::json!({ "params": params, "result": result }),
+                    )
+                })
+                .collect();
+            serde_json::json!({
+                "schemaVersion": CLI_SCHEMA_VERSION,
+                "methods": methods,
+            })
+        }),
         ("rm", schema_for_data::<DeletedReceipt>),
         ("rm-obs", schema_for_data::<Graph>),
         ("rm-truth", schema_for_data::<Graph>),

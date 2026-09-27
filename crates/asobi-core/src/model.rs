@@ -23,14 +23,14 @@ pub struct RelationInput {
     pub relation_type: String,
 }
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, JsonSchema, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct ObservationInput {
     pub entity_name: String,
     pub contents: Vec<String>,
 }
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, JsonSchema, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct ObservationDeletion {
     pub entity_name: String,
