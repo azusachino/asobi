@@ -95,6 +95,7 @@ version = "0.7.3"
 dependencies = [
  "schemars",
  "serde",
+ "serde_json",
  "tempfile",
  "thiserror",
  "toml",
