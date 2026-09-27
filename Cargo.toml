@@ -19,6 +19,7 @@ repository = "https://github.com/azusachino/asobi"
 asobi-core = { path = "crates/asobi-core", version = "0.7.3" }
 asobi-storage = { path = "crates/asobi-storage", version = "0.7.3" }
 anyhow = "1"
+axum = "0.8"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 clap = { version = "4.6", default-features = false, features = ["std", "derive", "help", "usage", "error-context"] }
 clap_complete = "4.6"
