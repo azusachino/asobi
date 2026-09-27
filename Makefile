@@ -35,7 +35,7 @@ test-scripts: build
 	uv run --no-project python scripts/use_cases.py
 
 check-storage-deps:
-	@if grep -Hn "sqlx" crates/asobi-core/Cargo.toml crates/asobi/Cargo.toml crates/asobi-server/Cargo.toml; then \
+	@if grep -Hn "sqlx" $$(ls crates/*/Cargo.toml | grep -v '^crates/asobi-storage/'); then \
 		echo "storage boundary violation: only asobi-storage may depend on sqlx (ADR 0009)"; exit 1; fi
 
 bench:
