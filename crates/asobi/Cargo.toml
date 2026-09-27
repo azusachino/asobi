@@ -1,0 +1,70 @@
+[package]
+name = "asobi"
+description = "A persistent, project-local knowledge graph CLI for AI agents."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+keywords = ["knowledge-graph", "cli", "ai-agents", "persistent-memory", "rust"]
+categories = ["development-tools"]
+
+# Never ship runtime data / model caches in the published crate. These dirs are
+# gitignored, so a fresh CI checkout omits them anyway — this is belt-and-braces
+# for local `cargo publish` where a stale workspace would otherwise be swept in.
+exclude = [
+  ".asobi/",
+  "memory_export.json",
+  "tools_list.json",
+]
+
+# cargo-binstall: fetch prebuilt binaries from the GitHub release instead of
+# compiling. Archives are published as `asobi-<target>.tar.gz` with the `asobi`
+# binary at the archive root; the tag is `v<version>`.
+[package.metadata.binstall]
+pkg-url = "{ repo }/releases/download/v{ version }/{ name }-{ target }.{ archive-format }"
+pkg-fmt = "tgz"
+bin-dir = "{ bin }{ binary-ext }"
+
+[features]
+# Remote mode (WP5) sits behind this feature, off by default: `cargo install
+# asobi` builds a local-only CLI with no HTTP stack. Prebuilt release binaries
+# are built with `--features remote`.
+remote = []
+
+[dependencies]
+asobi-core = { workspace = true }
+asobi-storage = { workspace = true }
+anyhow = { workspace = true }
+chrono = { workspace = true }
+clap = { workspace = true }
+clap_complete = { workspace = true }
+schemars = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
+[[bench]]
+name = "normalize"
+harness = false
+
+[[bench]]
+name = "graph"
+harness = false
+
+[[bench]]
+name = "graph_criterion"
+harness = false
+
+[[bench]]
+name = "allocations"
+harness = false
+
+[[bench]]
+name = "tasks"
+harness = false

@@ -1,0 +1,12 @@
+[package]
+name = "asobi-server"
+description = "The Asobi graph server: one process, named graphs, HTTP access (ADR 0005)."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+# WP4 fills this in: axum/hyper on a multi-threaded tokio runtime, the graph
+# registry and the background sweep (ADR 0009). The stub links nothing.
+[dependencies]
