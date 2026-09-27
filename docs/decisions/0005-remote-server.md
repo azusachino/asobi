@@ -3,7 +3,7 @@ id: 0005
 title: "0005. Shared graph through asobi-server and an HTTP remote backend"
 date: 2026-09-26
 status: proposed
-tags: [storage, api, server, rpc, v0.8]
+tags: [storage, api, server, http, v0.8]
 related: [0001-sqlite-only-v2-rewrite.md, 0002-why-rusqlite.md, 0004-remove-skills.md, 0006-tasks-replace-sessions.md, 0008-async-storage-on-sqlx.md, 0009-workspace-crates.md]
 ---
 
@@ -34,8 +34,8 @@ local (default)   asobi ──► SqliteStore ──► data_dir/asobi.db
 remote            asobi ──► RemoteStore ──HTTP──► asobi-server ──► SqliteStore per graph name
 ```
 
-- **`asobi-server --listen <addr:port>`** is a separate binary ([0009](0009-workspace-crates.md)): a long-lived process that holds **named graphs**, one SQLite file per graph name in its data directory, and answers the RPC contract below over HTTP.
-- **`RemoteStore`** implements the same `v3` traits (`GraphStore`, `SearchStore`, `MaintenanceStore`, `TaskStore`; see [0008](0008-async-storage-on-sqlx.md)) by sending one RPC per trait call. Commands keep depending on traits only, so every command, flag, and output is identical in both modes. Remote mode is compiled in only with the CLI's `remote` feature ([0009](0009-workspace-crates.md)).
+- **`asobi-server --listen <addr:port>`** is a separate binary ([0009](0009-workspace-crates.md)): a long-lived process that holds **named graphs**, one SQLite file per graph name in its data directory, and answers the HTTP protocol below.
+- **`RemoteStore`** implements the same `v3` traits (`GraphStore`, `SearchStore`, `MaintenanceStore`, `TaskStore`; see [0008](0008-async-storage-on-sqlx.md)) by sending one HTTP request per trait call. Commands keep depending on traits only, so every command, flag, and output is identical in both modes. Remote mode is compiled in only with the CLI's `remote` feature ([0009](0009-workspace-crates.md)).
 - **Configuration:** two keys in `asobi.toml`, each overridable by its environment variable:
   - `remote = "https://asobi.h.azusachino.com"` (`ASOBI_REMOTE`) selects remote mode and the server;
   - `graph = "<name>"` (`ASOBI_GRAPH`) selects the graph on it, defaulting to `asobi`.
@@ -59,14 +59,14 @@ The choice is made **per workspace, for the whole graph**: a workspace whose `as
 
 No existing graph is migrated: the server starts empty, and local graphs stay where they are.
 
-### RPC contract
+### HTTP protocol
 
-- **Transport:** plain JSON over HTTP/1.1. One call is `POST <remote>/rpc/<graph>/<method>` with `Content-Type: application/json`; the body is the params object, and a success is HTTP 200 whose body is the result. There is no envelope: HTTP already pairs each response with its request, and nothing here batches, streams, or sends notifications.
-- **Methods:** one per `v3` trait method, named `<trait>.<method>` in camelCase. Params are a named object whose fields are the trait method's arguments; results are the method's return value, serialized with the existing camelCase serde types (`()` becomes a `null` body, still 200).
+- **Transport:** plain JSON over HTTP/1.1. One call is `POST <remote>/v3/graphs/<graph>/<operation>` with `Content-Type: application/json`; the body is the operation's request object, and a success is HTTP 200 whose body is the result. The `v3` prefix is `API_VERSION`, so a later server can serve two versions side by side. "Method" always means the HTTP verb; what a call does is its **operation**. There is no envelope: HTTP already pairs each response with its request, and nothing here batches, streams, or sends notifications.
+- **Operations:** one per `v3` trait method, named `<trait>.<method>` in camelCase (e.g. `graph.openNodes`). The request body is a named object whose fields are the trait method's arguments; a field left out takes the same default the CLI uses, never a zero that changes meaning (an omitted search `limit` is the CLI's default limit, not 0). Results are the method's return value, serialized with the existing camelCase serde types (`()` becomes a `null` body, still 200).
 
-| Method | Params | Result |
+| Operation | Request body | Result |
 | --- | --- | --- |
-| `server.hello` | `{}` | `BackendInfo` |
+| `server.hello` | `{}` | `BackendInfo`, with `stateId` = the graph name (server file paths never leave the server) |
 | `graph.createEntities` | `{entities: EntityInput[]}` | `null` |
 | `graph.addObservations` | `{observations: ObservationInput[], limit}` | `null` |
 | `graph.createRelations` / `graph.deleteRelations` | `{relations: RelationInput[]}` | `null` |
@@ -100,19 +100,19 @@ No existing graph is migrated: the server starts empty, and local graphs stay wh
 | `ApiError::Unsupported` | 501 | `unsupported` |
 | `ApiError::Unavailable` | 503 | `unavailable` |
 | `ApiError::Backend` | 500 | `backend` |
-| Unknown method | 404 | `unknownMethod` |
-| Body is not JSON, or params do not match the method | 400 | `badRequest` |
+| Unknown operation | 404 | `unknownOperation` |
+| Body is not JSON, or does not match the operation's request | 400 | `badRequest` |
 | Any method other than `POST` | 405 | `badRequest` |
 
 JSON-RPC 2.0 was considered and not used: its `id`, batches and notifications serve nothing here, and it answers HTTP 200 for failures, hiding them from everything that reads HTTP.
 
-- **Handshake:** before its first call, `RemoteStore` calls `server.hello` once per process and refuses to continue unless `apiVersion` equals its own `API_VERSION`. Only the server touches the schema, so schema version skew between devices cannot happen.
+- **Handshake:** before its first call, `RemoteStore` calls `server.hello` once per process and refuses to continue unless `apiVersion` equals its own `API_VERSION`. The error `unsupported` from `maintenance.reset` is rebuilt on the client with a fixed message that says reset is not available over the network and names the alternative: `asobi reset` on the server host. Only the server touches the schema, so schema version skew between devices cannot happen.
 
 ### Server behavior
 
 - **Access:** no authentication. The server must only be reachable over the owner's tailnet; exposure is a deployment concern, and binding to a public interface is out of contract.
 - **Concurrent requests, pooled storage.** Requests are served concurrently from one sqlx pool per graph ([0008](0008-async-storage-on-sqlx.md)). SQLite still has one writer: writes serialise through WAL and the busy timeout, and atomic operations (task claims, abandonment) use `BEGIN IMMEDIATE`.
-- **`reset` is local-only.** Over RPC it is refused, so an agent on any device cannot wipe a shared graph. Run `asobi reset` on the server host against the file directly when that is intended.
+- **`reset` is local-only.** Over HTTP it is refused, so an agent on any device cannot wipe a shared graph. Run `asobi reset` on the server host against the file directly when that is intended.
 - **Sweeps run in the background.** The CLI sweeps once per process before its first write; a server process lives for weeks, so `asobi-server` runs the same sweeps (retention, and idle-task abandonment from [0006](0006-tasks-replace-sessions.md)) as a background task on a one-hour interval, over every graph it holds.
 
 ### When the server is unreachable
@@ -127,7 +127,7 @@ The server is built on tokio, axum and hyper; the client on reqwest, one client 
 
 - `tests/backend_api_contract_test.rs` and `tests/concurrency_test.rs` run against `RemoteStore` with an in-process server on `127.0.0.1:0`, in addition to `SqliteStore`. SQLite-specific cases (migrations, `sqlite_master`, incremental vacuum) stay SQLite-only.
 - Error round-trip: each `ApiError` variant survives server → wire → client unchanged.
-- The handshake rejects a mismatched `apiVersion`; `maintenance.reset` over RPC is refused; an unknown graph name is created, and an invalid one rejected.
+- The handshake rejects a mismatched `apiVersion`; `maintenance.reset` over HTTP is refused; an unknown graph name is created, and an invalid one rejected.
 - An unreachable server falls back to the local graph, with the warning on every command.
 
 ## Consequences
@@ -139,6 +139,6 @@ The server is built on tokio, axum and hyper; the client on reqwest, one client 
 
 ## Roadmap: PostgreSQL behind the server
 
-A `PgStore` implementing the `v3` traits may later replace `SqliteStore` **inside `asobi-server` only**. Clients are unaffected: they speak the RPC contract, not SQL. Differences to accept at that point: `ts_rank` instead of BM25 ranking, reported through `capabilities.keywordSearchKind`, and SQLite-specific tests staying SQLite-only.
+A `PgStore` implementing the `v3` traits may later replace `SqliteStore` **inside `asobi-server` only**. Clients are unaffected: they speak the HTTP protocol, not SQL. Differences to accept at that point: `ts_rank` instead of BM25 ranking, reported through `capabilities.keywordSearchKind`, and SQLite-specific tests staying SQLite-only.
 
 Trigger, not a date: build it when the single SQLite file is a demonstrated bottleneck (write latency or size measured on the server), or when something other than Asobi needs SQL access to the graph.
