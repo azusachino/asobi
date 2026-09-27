@@ -2,7 +2,7 @@
 id: 0004
 title: "0004. Remove skills management"
 date: 2026-09-26
-status: proposed
+status: accepted
 tags: [skills, scope, v0.8]
 related: [0005-remote-server.md]
 ---

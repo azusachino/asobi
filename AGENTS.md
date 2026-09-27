@@ -1,6 +1,6 @@
 # Asobi
 
-Persistent knowledge-graph CLI for humans and AI agents. Asobi stores entities, observations, truths, relations, and task state in a local SQLite database. Skills are deliberately **not** in that list: they live on the filesystem, managed with the [`skills` CLI](https://github.com/vercel-labs/skills), because the disk copy under `.agents/skills/` is the one agents actually read.
+Persistent knowledge-graph CLI for humans and AI agents. Asobi stores entities, observations, truths, relations, and task state in a graph, either in local SQLite or on an `asobi-server`. Skills are deliberately **not** in that list: they live on the filesystem, managed with the [`skills` CLI](https://github.com/vercel-labs/skills), because the disk copy under `.agents/skills/` is the one agents actually read.
 
 ## How to read this file
 
@@ -33,7 +33,7 @@ The layout worth knowing is the boundary, not the file list:
 - `crates/asobi` — the CLI binary: parsing, routing, and output. The only layer that knows it is a terminal.
 - `crates/asobi/src/tasks.rs` — durable task planning, dispatch, sync and close. `crates/asobi/src/compact.rs` — the graph-to-Markdown topic projection.
 - `crates/asobi/src/frontmatter.rs` — a deliberately narrow YAML-frontmatter subset, **not** a real parser. Read its module doc before widening it; see the trap below.
-- `crates/asobi-server` — the server binary (WP4); a stub until then.
+- `crates/asobi-server` — the `asobi-server` binary: HTTP routes, named-graph registry, and hourly background sweeps.
 - `tests/`, `benches/` — contract, CLI, edge-case and multi-process verification; graph, SQLite, task, allocation and SQL-plan benchmarks.
 
 Anything not listed is a leaf: find it with `rg`, and it needs no entry here.
@@ -61,9 +61,11 @@ Run `make check` before committing. Benchmarks compile as part of it; they execu
 
 ## Traps
 
-Three things here have bitten someone and will bite again. Each is a deliberate design choice that reads like a bug.
+Four things here have bitten someone and will bite again. Each is a deliberate design choice that reads like a bug.
 
-**The sweep runs implicitly, on write.** Abandonment and retention are one sweep, once per process, before the first write — deliberately on a write and not at open, so a read never mutates the graph. Abandonment first: an open task (epics excepted while a `part_of` child is open) idle past `abandon_days` becomes `ABANDONED`, and the abandonment observation refreshes its activity, so a just-abandoned task survives retention for its full window. Then retention: finished tasks past `retention_days` are deleted. The consequence: a test that seeds old state and then writes will watch it vanish or flip. Pin both windows through `ASOBI_ABANDON_DAYS`/`ASOBI_RETENTION_DAYS` (or `0` to disable) rather than working around the sweep. The windows, their environment overrides, and the defaults live in `crates/asobi-storage/src/storage/sqlite.rs` and `crates/asobi-core/src/paths.rs`.
+**The sweep is implicit.** In local mode, abandonment and retention run once per process before the first write, not at open, so a read never mutates the graph. Abandonment runs first: an idle open task becomes `ABANDONED` (an epic with an open `part_of` child is protected), and its new observation refreshes activity so retention cannot delete it in the same sweep. Retention then deletes finished tasks past `retention_days`. The server runs the same sweep hourly as a background task over every named graph. Tests that seed old state before a write may watch it vanish or change; pin `ASOBI_ABANDON_DAYS` and `ASOBI_RETENTION_DAYS` (or set either to `0` to disable that step). The windows and defaults live in `crates/asobi-storage/src/storage/sqlite.rs` and `crates/asobi-core/src/paths.rs`.
+
+**Remote fallback is local-only, not synchronization.** If the first remote call in a CLI invocation cannot connect, times out, or gets a gateway 502/503/504, the command warns and uses the workspace's local graph for the whole invocation. Writes made during that outage stay local and are never replayed to the server. After a remote call succeeds, a later failure is an error, not a backend switch. Do not describe fallback as offline sync or assume its writes will appear remotely.
 
 **`crates/asobi/src/frontmatter.rs` is a subset, not YAML.** It handles a flat `key: value` block and nothing else — no nesting, lists, comments, or multi-line scalars. A document declaring `description: >` therefore parses as the literal `">"`. That is known and accepted: the fix is to stop depending on the field, not to widen the parser. That call has already been made once — a block-scalar implementation was written to fix exactly this, then thrown away in favour of dropping the manifest's `description` field, which nothing read. Before widening the subset, check whether the value is load-bearing at all.
 

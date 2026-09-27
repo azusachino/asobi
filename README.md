@@ -2,9 +2,9 @@
 
 # 🎮 asobi
 
-**A persistent, project-local knowledge graph CLI for LLM agents.**
+**A persistent knowledge-graph CLI for people and agents.**
 
-Keep memory, track session state, and share context across conversations — stored in a local, single-file SQLite database.
+Keep project knowledge and task state in a local SQLite graph, or share a named graph across devices through `asobi-server`.
 
 [![CI](https://github.com/azusachino/asobi/actions/workflows/ci.yml/badge.svg)](https://github.com/azusachino/asobi/actions/workflows/ci.yml) [![Release](https://img.shields.io/github/v/tag/azusachino/asobi?label=release&sort=semver)](https://github.com/azusachino/asobi/releases) [![License: MIT](https://img.shields.io/github/license/azusachino/asobi)](LICENSE) [![Rust](https://img.shields.io/badge/rust-2024-orange?logo=rust&logoColor=white)](https://www.rust-lang.org)
 
@@ -18,55 +18,50 @@ Keep memory, track session state, and share context across conversations — sto
 
 ## ✨ Features
 
-- **Knowledge graph** — entities, append-only (capped) observations, and directed relations.
+- **Knowledge graph** — entities, append-only (capped) observations, truths, and directed relations; local by default, remote by workspace configuration.
 - **Truths** — durable `key→value` facts per entity for current state (`status`, `version`); status-as-truth makes a board a single `search --where status=…`.
 - **Fast search** — `search` over SQLite FTS5 (BM25 relevance, porter stemming) with a substring fallback, plus `--where key=value` truth filters (the query term is optional).
-- **Concurrency-safe** — WAL-mode storage with bounded busy timeouts, so lead and dispatched agents can share a graph.
+- **Task lifecycle** — graph-backed tasks record open work; idle tasks are abandoned, then retained or deleted by policy.
+- **Shared graphs** — `asobi-server` serves named graphs over HTTP; remote CLI mode is optional and outage fallback keeps writes local.
 - **Lazy reads** — `graph`/`search` return truths + counts; `show` returns the full body. Cheap to load, cheap on tokens.
 
 ## 🏗️ Architecture
 
-One synchronous storage contract, one bundled backend, one local file — see [ADR 0001](docs/decisions/0001-sqlite-only-v2-rewrite.md) and [ADR 0002](docs/decisions/0002-why-rusqlite.md) for why.
+The four-crate workspace builds two binaries: `asobi` for local or remote CLI use, and `asobi-server` for hosting named graphs. Both use the async `api::v3`; the SQLite provider is implemented with sqlx. Remote support is an opt-in CLI feature and sends plain JSON over HTTP.
 
 ```mermaid
 flowchart LR
-    CLI["crates/asobi\n(commands, dispatch, graph)"]
-    API["api::v2\nGraphStore · SearchStore\nMaintenanceStore · TaskStore"]
-    Sqlite["SqliteStore\n(crates/asobi-storage)"]
-    DB[("asobi.db\nWAL + FTS5")]
-
-    CLI --> API
-    API --> Sqlite
-    Sqlite --> DB
+    CLI["asobi CLI"] --> API["api::v3 traits"]
+    API --> Local["SqliteStore"] --> LocalDB[("local graph")]
+    API --> Remote["RemoteStore\n(remote feature)"]
+    Remote -->|"POST /v3/graphs/<graph>/<operation>"| Server["asobi-server"]
+    Server --> Named["SqliteStore per graph"] --> ServerDB[("named graph files")]
 ```
 
-Commands depend only on the `api::v3` traits, never on driver types directly — `crates/asobi-storage` is the only crate that owns SQL, schema, and pragmas (ADR 0009).
+Commands depend only on `api::v3` traits, never on driver types. Only `asobi-storage` owns SQL, migrations, and SQLite settings (ADR 0009). No handshake is used; `GET /healthz` is a liveness probe. Pre-0.8 graph files are refused unchanged and must be moved aside before use with 0.8. See [ADR 0005](docs/decisions/0005-remote-server.md), [ADR 0007](docs/decisions/0007-clean-schema-baseline.md), and [ADR 0008](docs/decisions/0008-async-storage-on-sqlx.md).
 
 ## 📦 Installation
 
 ### From crates.io (recommended)
 
 ```bash
-cargo install asobi                       # local-only CLI, no HTTP stack
-cargo install asobi --features remote    # adds remote mode (WP5)
-cargo install asobi-server               # the graph server binary (WP4)
+cargo install asobi                      # local-only CLI, no HTTP client
+cargo install asobi --features remote   # CLI with remote mode
+cargo install asobi-server              # named-graph HTTP server
 ```
 
-### Prebuilt binary (cargo-binstall)
+### Prebuilt binaries
 
-No compile — [`cargo-binstall`](https://github.com/cargo-bins/cargo-binstall) pulls the binary from the GitHub release:
-
-```bash
-cargo binstall asobi
-```
+Download the platform archive from the [GitHub release](https://github.com/azusachino/asobi/releases) and extract it. It contains both `asobi` (built with remote support) and `asobi-server`.
 
 ### From source
 
 ```bash
-cargo install --git https://github.com/azusachino/asobi
+cargo install --git https://github.com/azusachino/asobi asobi
+cargo install --git https://github.com/azusachino/asobi asobi --features remote
 ```
 
-Or build locally with `make build`. Requires Rust 1.85+, Edition 2024.
+Or build locally with `make build` (local CLI), `cargo build -p asobi --features remote`, or `cargo build -p asobi-server`. Requires Rust 1.85+, Edition 2024.
 
 ## 🚀 Quick Start
 
@@ -88,7 +83,7 @@ asobi rm-obs "my-project" 1 --id
 - `asobi graph` / `search <q>` / `search --where status=READY` / `show <name>... --expand part_of --with-ids` — read the graph (supports subtree expansions and sequential observation IDs).
 - `asobi new <name> <type> --obs "..."` / `obs <name> "..."` / `update-obs <name> <old/id> <new> [--id]` / `rm-obs <name> <content/id> [--id]` — manage observations (supports updates and deletions by unique sequential IDs).
 - `asobi truth <name> <key> <value>` / `rm-truth <name> <key>` — manage truths. A truth is the current value and nothing else: an overwrite replaces it, with no archive behind it.
-- `asobi stats` / `purge` / `reset` — inspect & manage. The graph is one SQLite file, so `cp` it to back it up.
+- `asobi stats` / `purge` / `reset` — inspect & manage. In local mode the graph is one SQLite file, so `cp` it to back it up; remote graphs are backed up on the server.
 
 ## 🔒 Sandboxed Environments
 

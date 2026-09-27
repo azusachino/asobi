@@ -2,7 +2,8 @@
 id: 0002
 title: "0002. Backend comparison and why rusqlite"
 date: 2026-07-17
-status: accepted
+status: superseded
+superseded_by: docs/decisions/0008-async-storage-on-sqlx.md
 tags: [storage, backend, rusqlite, v0.6]
 related: [0001-sqlite-only-v2-rewrite.md]
 pr: 24

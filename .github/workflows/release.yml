@@ -17,19 +17,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: jdx/mise-action@v2
-      - name: Verify tag matches package version
+      - name: Verify tag matches workspace version
         shell: bash
         run: |
           tag_version="${GITHUB_REF_NAME#v}"
-          package_version="$(awk -F'"' '/^version = / { print $2; exit }' Cargo.toml)"
-          test "$tag_version" = "$package_version" || {
-            echo "tag $tag_version does not match Cargo.toml version $package_version" >&2
+          workspace_version="$(awk -F'"' '/^\[workspace\.package\]$/ { in_package = 1; next } /^\[/ { in_package = 0 } in_package && /^version = / { print $2; exit }' Cargo.toml)"
+          test "$tag_version" = "$workspace_version" || {
+            echo "tag $tag_version does not match workspace version $workspace_version" >&2
             exit 1
           }
-      - name: Verify package
-        run: cargo publish --locked --dry-run
-      - name: Publish to crates.io
-        run: cargo publish --locked --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
+      - name: Verify workspace packages
+        run: cargo publish --locked --workspace --dry-run
+      - name: Publish workspace crates in dependency order
+        run: cargo publish --locked --workspace --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
       - name: Create GitHub release
         # Created once, here, rather than by the per-OS upload step below --
         # two matrix jobs racing to create the same release is exactly the
@@ -44,8 +44,8 @@ jobs:
     needs: publish-crate
     strategy:
       fail-fast: false
-      # Native runners per target keep release builds predictable. The shipped
-      # 0.6 product has one SQLite binary with no feature-specific variants.
+      # Native runners per target keep release builds predictable. The 0.8
+      # archive contains the remote-enabled CLI and the separate graph server.
       matrix:
         include:
           - os: ubuntu-latest
@@ -57,10 +57,12 @@ jobs:
       - uses: actions/checkout@v4
       - uses: jdx/mise-action@v2
 
-      - name: Build lean binary
-        run: cargo build --release --locked --target ${{ matrix.target }}
-      - name: Package lean binary
-        run: tar -czf "asobi-${{ matrix.target }}.tar.gz" -C "target/${{ matrix.target }}/release" asobi
+      - name: Build remote-enabled CLI
+        run: cargo build -p asobi --features remote --release --locked --target ${{ matrix.target }}
+      - name: Build graph server
+        run: cargo build -p asobi-server --release --locked --target ${{ matrix.target }}
+      - name: Package both binaries
+        run: tar -czf "asobi-${{ matrix.target }}.tar.gz" -C "target/${{ matrix.target }}/release" asobi asobi-server
 
       - name: Upload to release
         # The macOS runner's connection to api.github.com is intermittently

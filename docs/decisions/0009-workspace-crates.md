@@ -2,7 +2,7 @@
 id: 0009
 title: "0009. A workspace of four crates, a separate server binary, a thin CLI"
 date: 2026-09-27
-status: proposed
+status: accepted
 tags: [structure, crates, release, v0.8]
 related: [0005-remote-server.md, 0008-async-storage-on-sqlx.md]
 ---
@@ -19,7 +19,7 @@ Most people who install Asobi use it locally and never run or reach a server. In
 
 | Crate | Holds | Depends on |
 | --- | --- | --- |
-| `asobi-core` | domain types, the async `api::v3` traits and `ApiError`, the RPC contract (method names, params, status/kind table), configuration and path resolution | serde, toml; no I/O stack |
+| `asobi-core` | domain types, the async `api::v3` traits and `ApiError`, the HTTP operation contract (names, request types, status/kind table), configuration and path resolution | serde, toml; no I/O stack |
 | `asobi-storage` | `SqliteStore` on sqlx, migrations, the sweep | `asobi-core`, sqlx |
 | `asobi` | the CLI binary `asobi`: commands, tasks, compact, local/remote selection, and `RemoteStore` behind the `remote` feature | `asobi-core`, `asobi-storage`, tokio (current-thread); reqwest only with `remote` |
 | `asobi-server` | the server binary `asobi-server`: routes, graph registry, background sweep | `asobi-core`, `asobi-storage`, tokio (multi-thread), axum, hyper |

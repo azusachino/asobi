@@ -2,7 +2,7 @@
 id: 0008
 title: "0008. Async storage on sqlx"
 date: 2026-09-27
-status: proposed
+status: accepted
 tags: [storage, api, async, sqlx, v0.8]
 supersedes: docs/decisions/0002-why-rusqlite.md
 related: [0001-sqlite-only-v2-rewrite.md, 0005-remote-server.md, 0007-clean-schema-baseline.md]

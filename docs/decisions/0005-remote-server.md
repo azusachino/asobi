@@ -2,7 +2,7 @@
 id: 0005
 title: "0005. Shared graph through asobi-server and an HTTP remote backend"
 date: 2026-09-26
-status: proposed
+status: accepted
 tags: [storage, api, server, http, v0.8]
 related: [0001-sqlite-only-v2-rewrite.md, 0002-why-rusqlite.md, 0004-remove-skills.md, 0006-tasks-replace-sessions.md, 0008-async-storage-on-sqlx.md, 0009-workspace-crates.md]
 ---

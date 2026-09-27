@@ -2,7 +2,7 @@
 id: 0007
 title: "0007. A clean schema baseline for 0.8; pre-0.8 graph files are refused"
 date: 2026-09-27
-status: proposed
+status: accepted
 tags: [storage, schema, v0.8]
 related: [0005-remote-server.md, 0006-tasks-replace-sessions.md, 0008-async-storage-on-sqlx.md]
 ---
