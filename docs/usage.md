@@ -2,23 +2,23 @@
 
 This is Asobi's interface reference: what each command does, what it accepts, and what it returns. It describes the CLI and nothing more.
 
-It deliberately does not prescribe a session workflow — when to read the graph, what to write at closeout, how to sequence a task board. That guidance is agent policy rather than a property of the tool, it differs between users, and keeping a copy here produced a set of documents that drifted into contradicting each other. Workflow lives in the [`asobi` skill](https://github.com/azusachino/harus-skills/blob/main/skills/asobi/SKILL.md), which cites this document for exact contracts.
+It describes command behavior, not agent workflow: when to read the graph, what to write at closeout, or how to sequence a task board. That guidance differs between users and lives in the [`asobi` skill](https://github.com/azusachino/harus-skills/blob/main/skills/asobi/SKILL.md), which cites this document for exact contracts.
 
 ## For humans
 
 ### Installation
 
-From source via cargo (Rust 1.85+ toolchain required for edition 2024):
+From crates.io (Rust 1.85+ toolchain required for edition 2024):
 
 ```bash
-cargo install --git https://github.com/azusachino/asobi asobi
+cargo install asobi                         # local-only CLI
+cargo install asobi --features remote      # CLI with remote mode
+cargo install asobi-server                 # named-graph HTTP server
 ```
 
-Prebuilt binary via `cargo-binstall` (once GitHub releases are published):
+For a prebuilt release, install the CLI and server binaries from the platform archive; the release CLI includes remote support. A source install can use `cargo install --git https://github.com/azusachino/asobi asobi --features remote`.
 
-```bash
-cargo binstall asobi
-```
+Prebuilt binaries are available in the [GitHub release archive](https://github.com/azusachino/asobi/releases); the platform archive contains the remote-enabled `asobi` CLI and `asobi-server`.
 
 Or build locally:
 
@@ -47,6 +47,12 @@ asobi completions fish > ~/.config/fish/completions/asobi.fish
 ```
 
 The command also supports `elvish` and `powershell`. Completions cover commands, flags, enum values, and help text; entity names remain dynamic graph data and are intentionally resolved through `search` rather than a stale completion cache.
+
+### Upgrade to 0.8
+
+Asobi 0.8 starts a new graph and refuses pre-0.8 graph files without modifying them. Move an old local graph aside before running 0.8; server-side graph files created by an older version must likewise be moved aside on the server. There is no automatic migration or import.
+
+The former session handoff is replaced by graph-backed tasks. `session` is no longer a special type; legacy session entities are ordinary entities. Skills management and `[skills]` configuration are removed; any existing `[skills]` block is ignored. Install the maintained skill with `npx skills add https://github.com/azusachino/harus-skills --skill asobi --agent universal`.
 
 ### Workspace setup
 
@@ -77,8 +83,6 @@ config_dir = ".asobi/config"
 topics_dir = ".asobi/topics"
 ```
 
-An optional `[skills]` block in the same file declares the skill set that `asobi skills sync` reconciles — see [Declare skills in `asobi.toml`](#common-workflows).
-
 Path resolution order at runtime: project-local `asobi.toml` → project-local `.asobi/` → XDG. Both `init` modes are idempotent.
 
 Add `.asobi/` to `.gitignore`; the `asobi.toml` itself can be checked in.
@@ -89,7 +93,7 @@ Add `.asobi/` to `.gitignore`; the `asobi.toml` itself can be checked in.
 
 ```bash
 asobi search --where status=IN_PROGRESS
-asobi show "my-project:session"
+asobi show "my-project:task:deploy"
 ```
 
 **Store a decision (supports hierarchical naming and seeded observations):**
@@ -124,67 +128,70 @@ Use `graph` when the whole graph is wanted. `search` is intentionally top-K by d
 **Persist state — truths for the current value, observations for the trail:**
 
 ```bash
-asobi truth "my-project:session" "status" "DONE"
-asobi truth "my-project:session" "next" "implement FTS5 index"
-asobi obs "my-project:session" "completed 2026-05-21: added the FTS5 index"
+asobi truth "my-project:task:search" "status" "DONE"
+asobi truth "my-project:task:search" "next" "implement FTS5 index"
+asobi obs "my-project:task:search" "completed 2026-05-21: added the FTS5 index"
 ```
 
 A truth is the right home for anything read back as _current_ state, because writing the same key updates it in place. Observations accumulate and are evicted at the cap, so a next-action stored as an observation can silently age out.
 
 ### Lifecycle
 
-Two rules, and no others:
+Three rules, and no others:
 
 1. **Durable entities live forever** — `project`, `concept`, `reference`, `preference`, `standard`. Each keeps its most recent 200 observations; older ones are evicted as new ones arrive.
-2. **Finished operational entities are deleted after 7 days** — a `session` or `task` whose status is `DONE`, `CLOSED` or `ABANDONED`. This happens automatically, once per process, before the first write.
+2. **An open task idle for 7 days is abandoned** — its status becomes `ABANDONED`, with an observation recording that it happened automatically. A task with no `status` truth counts as open. An epic is protected while any `part_of` child is still open: an epic's own entity goes quiet while its children are worked.
+3. **Finished tasks are deleted after 7 more days** — a `task` whose status is `DONE`, `CLOSED` or `ABANDONED`. Abandonment is step one and deletion is step two: an untouched task is visible as `ABANDONED` for a week and gone after two, and setting its status back revives it within that week. Both steps happen automatically, once per process, before the first write.
 
-That is the whole of it. Nothing else accumulates: a truth is a current value with no archive behind it, and relations disappear with the entities they connect.
+In local mode both steps run automatically once per process before the first write. On a server, a background task runs the same abandonment-then-retention sweep hourly across its named graphs. Nothing else accumulates: a truth is a current value with no archive behind it, and relations disappear with the entities they connect.
 
-The sweep runs on a _write_ rather than at startup, so a read never mutates the graph. Both numbers are configurable, resolved the same way — environment variable first, then `asobi.toml`, then the default:
+In local mode the sweep runs on a _write_ rather than at startup, so a read never mutates the graph. On the server, `ASOBI_ABANDON_DAYS` and `ASOBI_RETENTION_DAYS` configure its hourly sweep. In both modes the values resolve from environment first, then `asobi.toml` where applicable, then the default:
 
 | What | Config key | Environment | Default |
 | --- | --- | --- | --- |
 | Observations kept per entity | `observation_limit` | `ASOBI_OBSERVATION_LIMIT` | 200 |
+| Idle days before an open task is abandoned | `abandon_days` | `ASOBI_ABANDON_DAYS` | 7 |
 | Days a finished task survives | `retention_days` | `ASOBI_RETENTION_DAYS` | 7 |
 
-Set `retention_days = 0` to disable the sweep and keep finished work indefinitely.
+Set `abandon_days = 0` to disable abandonment, or `retention_days = 0` to keep finished work indefinitely.
 
 The reason for the second rule is that operational state is relevant for hours, occasionally days. A task that has been `DONE` for a week is not context, it is archaeology — and context is the scarce resource. An earlier design left this to a manual command that was correct in every respect except that it never ran: six weeks of daily use produced a graph that was 96% finished work.
 
 **Preview and purge stale operational state:**
 
 ```bash
-# Preview only (the default): terminal sessions/tasks inactive for 30 days
+# Preview only (the default): finished tasks inactive for 30 days
 asobi purge
 
 # Narrow the policy to completed tasks older than 90 days
-asobi purge --older-than 30
+asobi purge --older-than 90
 
 # Apply exactly the previewed policy
-asobi purge --older-than 30 --apply
+asobi purge --older-than 90 --apply
 ```
 
-This normally runs by itself — see [Lifecycle](#lifecycle). Reach for it to preview what would go, or to sweep a narrower window than the configured one. It only ever considers finished `session` and `task` entities; durable knowledge is not something a request can name. Use `--json` for a machine-readable candidate report. An applied purge also runs `PRAGMA incremental_vacuum`, so the database file shrinks with the graph rather than retaining a free list.
+The background lifecycle sweep normally handles configured abandonment and retention — see [Lifecycle](#lifecycle). Use `purge` to preview or apply a different age threshold. It only ever considers finished `task` entities; durable knowledge is not something a request can name. A `session` entity created by a pre-0.8 version is now an ordinary durable entity and is not purged. Use `--json` for a machine-readable candidate report. An applied purge also runs `PRAGMA incremental_vacuum`, so the database file shrinks with the graph rather than retaining a free list.
 
-`compact` syncs only durable _knowledge_ entities (project, decisions, references, preferences) to Markdown. Volatile state (`session`, `task`) stays graph-only — query it with `search` / `show`. Skills are not in the graph at all; they live on disk under the skills directory.
+`compact` projects every durable entity to Markdown. `task` entities (epics included) stay graph-only — query them with `search` / `show`.
 
 **Inspect the full graph:**
 
 ```bash
 asobi stats                                # Quick count of entities, relations, observations
-asobi graph | jq '.entities[] | select(.entityType == "session")'
+asobi graph | jq '.entities[] | select(.entityType == "task")'
 ```
 
 ### Archival
 
-The graph is one SQLite file. Copy it:
+In local mode the graph is one SQLite file. Copy it to back it up or inspect it:
 
 ```bash
 cp .asobi/data/asobi.db backup.db          # project-local
 cp ~/.local/share/asobi/data/asobi.db .    # XDG
+sqlite3 backup.db
 ```
 
-The graph is one SQLite file. `cp` backs it up, and `sqlite3` reads it directly.
+In remote mode, back up the server's data directory using its deployment's backup procedure; client-local graph paths are not used.
 
 The one thing this genuinely gives up is moving a single entity between two graphs — a project-local one and the XDG one, say. Re-create it with `new`/`truth`/`obs`; it is a handful of commands, and it happens rarely enough that a subgraph traversal engine was the wrong price to pay for it.
 
@@ -197,135 +204,11 @@ asobi rm-truth "project-x" "language"
 
 Writing the same key again replaces the value. Asobi keeps no archive of what it held before: that store was unbounded, had no reader, and where a trail genuinely matters the observations carry it in better form — a task's `status` history said `DISPATCHED` where the observation beside it said "dispatched to codex".
 
-**Install the companion skill.** Asobi ships no `SKILL.md` of its own — this document describes what the CLI _is_, and when to reach for it is agent policy. The maintained skill lives in [harus-skills](https://github.com/azusachino/harus-skills):
+**Install the companion skill.** Asobi ships no `SKILL.md` of its own — this document describes what the CLI _is_, and when to reach for it is agent policy. The maintained skill lives in [harus-skills](https://github.com/azusachino/harus-skills), installed with the [`skills` CLI](https://github.com/vercel-labs/skills):
 
 ```bash
-asobi skills install https://github.com/azusachino/harus-skills.git --select asobi
+npx skills add https://github.com/azusachino/harus-skills --skill asobi --agent universal
 ```
-
-Nothing installs it for you, and no source is configured by default: a skill is natural-language instruction loaded straight into an agent's context, so which ones arrive should be a decision you made. Pin it with `--rev` if you want updates to be deliberate.
-
-**Manage skills (reusable workflows and knowledge):**
-
-```bash
-asobi skills install https://github.com/azusachino/asobi-skills --all
-asobi skills
-asobi skills show my-skill
-asobi skills update
-asobi skills remove asobi-skills
-```
-
-**Declare skills in `asobi.toml` and reconcile them:**
-
-```toml
-[skills]
-path = ".agents/skills"          # optional; this is the default
-
-[[skills.source]]
-url = "https://github.com/azusachino/asobi-skills"
-select = ["writing-plans", "code-review"]
-
-[[skills.source]]
-url = "https://github.com/some-org/multi-tool-skills"
-select = ["some-skill"]
-subdir = "skills"                # only walk this directory of the checkout
-rev = "v1.4.0"                   # pin to a commit, tag, or branch
-```
-
-```bash
-asobi skills sync
-```
-
-`sync` treats the config as the whole truth: it installs what is declared, prunes what is not, and writes each selected skill to `<path>/<source-slug>@<skill-name>/SKILL.md`. Directories without `@` in the name — vendored checkouts, hand-written skills — are left alone. Declare exactly one of `all = true` or `select = [...]` per source.
-
-Selectors accept a skill's directory path relative to the source walk root
-(`subdir` when set), a unique component suffix of that path, or its frontmatter
-name. Exact paths take precedence over suffix and name matches. For example,
-`select = ["testing/test-driven-development"]` selects that
-directory even when its display name is `Test-Driven Development (TDD)`.
-Ambiguous selectors fail with the matching paths; repeated selections install
-the skill once. Select by path when a declaration should survive a display-name
-change. Installed directory names retain the existing `<source-slug>@<skill-name>`
-layout, so a name change can still rename the installed directory. Distinct
-selections that normalize to the same destination fail before writing anything.
-
-The skills directory is the store of record: a skill exists on disk and nowhere else, so it does not appear in `graph`, `search`, or `show`, and `rg` over the skills directory is how you search one. `path` defaults to `.agents/skills`, resolved against the `asobi.toml` that declares it, or against the discovered workspace root when no config declares a `[skills]` block — so `skills` and `skills show` work under a plain `asobi init` too.
-
-`sync` also records each skill's directory, name, source and the exact commit it came from, in a `skills.json` manifest under the data directory (`.asobi/data/` project-local, `~/.local/share/asobi/data/` under XDG). `asobi skills` reports that commit, and `update` and `remove` use it to find a source again after the fact. It lives there rather than beside the skills because it is state, not project content. Committing the skill tree is what turns an upstream skill change into a reviewable diff; the manifest is regenerated and does not need committing.
-
-Sources may explicitly declare shared Markdown outside individual skill directories:
-
-```toml
-[[skills.source]]
-url = "https://github.com/addyosmani/agent-skills.git"
-rev = "cda4542ade0f3c532494b9a48837eb01d39925f1"
-subdir = "skills"
-select = ["code-review-and-quality"]
-shared_markdown = [
-  "references/security-checklist.md",
-  "references/performance-checklist.md",
-]
-```
-
-`shared_markdown` defaults to empty. Each entry names one exact `.md` or
-`.markdown` file relative to the checkout root, independently of `subdir`.
-Directories, wildcards, absolute paths, traversal, symlinks, and `SKILL.md`
-entry points are rejected.
-Resources are installed at `<path>/.shared/<source-slug>/<source-path>`; two
-sources can own the same reference filename without sharing its contents.
-Non-Markdown files, scripts, assets, and files merely mentioned by a document
-are never selected by this feature.
-
-Asobi relocates references to the explicitly selected files in single-backtick
-inline code and simple inline Markdown links, preserving `#fragments`. The
-mapping applies to `SKILL.md`, bundled Markdown, and the selected shared
-documents. For example, `../../references/security-checklist.md` becomes
-`../.shared/addyosmani-agent-skills/references/security-checklist.md` in an
-installed skill. A declared reference in unsupported syntax (such as a
-reference-style link or a fenced code block) fails with its document and path;
-Asobi does not guess how to rewrite it. Other text and undeclared references
-remain unchanged. Selecting shared documents does not install another skill
-or guarantee that all of a source's other dependencies are available.
-
-Before writing, Asobi checks each selected `SKILL.md` for simple inline relative
-file links, single-backtick relative file paths, and standalone `/skill-name` or
-`/source-slug@skill-name` invocations. File targets must have a filename
-extension and contain no whitespace.
-It warns when these cannot resolve from the planned installation, including
-bundled and declared shared Markdown, skills from other selected sources, and
-retained local skills. URLs, absolute file paths, fragment-only links and
-code-block examples are excluded. These warnings do not select, fetch, copy or
-execute dependencies.
-They are advisory: companion documents, other Markdown syntax and skills
-provided elsewhere by an agent host are outside this check. Invalid explicit
-shared-file declarations still fail rather than becoming warnings.
-
-The manifest records resource ownership, source paths, and resolved commits,
-plus each skill's source selection, `subdir`, `rev`, and shared-file declaration.
-`update` retains that declaration and pin; `sync` adopts configuration changes.
-Removing a source or omitting a shared file from the next sync prunes only its
-recorded resources. Removing the final skill from a source removes its shared
-files. Files without an ownership record are never overwritten or pruned.
-Old manifests remain readable; sources without a recorded declaration retain
-the historical update behavior of selecting all skills from the source root.
-
-Shared-resource ownership requires the manifest matching this exact skills
-tree. If it is lost or belongs to another tree, mutations refuse to adopt,
-overwrite, or prune existing `.shared` files. Restore the matching manifest,
-or inspect and move the existing shared files to a backup before syncing anew.
-If a manifest-owned skill or resource is missing, restore it before mutating
-the tree; a partial installation must not silently authorize deleting a
-sibling source. Listing retains its ordinary tolerant scan behavior.
-
-The manifest names the skills directory it describes, in a top-level `dir` field. One data directory can be reached from more than one skills directory — under XDG the data directory is global while the skills path follows the working directory — so a manifest that could not say which tree it meant would be indistinguishable from one saying the tree is empty. When it names a different directory, `skills` falls back to scanning the actual one, listing what is there without source or commit rather than reporting another project's skills or none at all.
-
-It deliberately does not record a description. `SKILL.md` already carries one, `skills show` prints it, and re-serializing it into JSON meant putting it through Asobi's frontmatter reader — a narrow subset with no multi-line scalars, which recorded a skill declaring `description: >` as the literal `">"`. A field nothing reads is not worth a YAML parser.
-
-`rev` completes that loop. Without it a re-sync silently adopts whatever the source has moved to since; with it, adopting a new revision is an edit someone makes on purpose. An annotated tag resolves to the commit it points at, not the tag object, so the recorded version is always a commit.
-
-One deliberate divergence from the [Agent Skills specification](https://agentskills.io/specification): it requires a skill's directory name to equal its frontmatter `name`, which assumes a skill is authored in place. Asobi installs many sources into one tree, so it names directories `<source-slug>@<skill-name>` — two sources may ship the same skill name, and agent hosts surface the directory name as the skill's identity. Everything else the spec says about a skill is enforced by `make check`, which runs the reference validator over each installed skill.
-
-Some sources mirror every skill across several tool-specific directories (`.opencode/`, `.kiro/`, a canonical `skills/`, ...) with the same `name:` in each copy — that collides on install, since a skill name must be unique within a source. `subdir` scopes the walk to one directory of the checkout so the mirrors are never seen; `asobi skills install <url> --subdir <path> ...` does the same for the imperative form.
 
 **Coordinate durable task work:**
 
@@ -344,7 +227,7 @@ Use `asobi tasks --help` or `asobi tasks <command> --help` for the complete argu
 
 ## Command reference
 
-Every command is a single CLI invocation. No server to start, no authentication; graph operations complete in under 10ms.
+Every command is a single CLI invocation. Local mode needs no server; remote mode uses the configured `asobi-server` and its network-access policy.
 
 `asobi <command> --help` is generated from the same definitions as the binary and is authoritative if this section ever falls behind it.
 
@@ -401,7 +284,7 @@ WARN no exact match for "deploy without cache bump"; widened to any-term and
 asobi show <NAME> [<NAME> ...] [--expand <RELATION_TYPE> ...] [--with-ids]
 ```
 
-Returns a subgraph for the named entities and the relations among them, eagerly including observations and skill bodies.
+Returns a subgraph for the named entities and the relations among them, eagerly including observations.
 
 - `--expand <RELATION_TYPE>` — repeatable; pulls in entities linked by that relation, e.g. `--expand part_of` to load an epic's tasks.
 - `--with-ids` — adds `observationsDetailed`, pairing each observation with its stable integer `id` for use with `update-obs --id` and `rm-obs --id`.
@@ -450,33 +333,11 @@ asobi purge [--older-than <DAYS>] [--apply]
 asobi reset [--force]
 ```
 
-`compact` projects **durable knowledge** entities — `project`, `concept`, `reference`, `preference`, `standard` — and their truths into Markdown under `.asobi/topics/`. Volatile `session` and `task` entities are skipped by design; read those with `search`/`show`. Skills are not graph entities at all, so nothing about them reaches `compact`.
+`compact` projects **durable knowledge** entities — `project`, `concept`, `reference`, `preference`, `standard`, and any legacy `session` entities — into Markdown under `.asobi/topics/`. In 0.8, sessions stopped being a special type. `task` entities are skipped by design; read those with `search`/`show`.
 
-`purge` is a dry run unless given `--apply`, and accepts only `session` entities plus terminal task statuses (`DONE`, `CLOSED`, `ABANDONED`) — durable knowledge is refused, and skills are not in the graph to begin with. It defaults to entities inactive for 30 days. It never runs implicitly during `graph`, `search`, `compact`, or startup. An applied purge also runs `PRAGMA incremental_vacuum`, so the database file shrinks with the graph rather than retaining a free list.
+`purge` is a dry run unless given `--apply`, and accepts only `task` entities in a terminal status (`DONE`, `CLOSED`, `ABANDONED`) — durable knowledge is refused. It defaults to entities inactive for 30 days. It never runs implicitly during `graph`, `search`, `compact`, or startup. An applied purge also runs `PRAGMA incremental_vacuum`, so the database file shrinks with the graph rather than retaining a free list.
 
 `reset` deletes every entity, relation, and observation; it prompts unless given `--force`.
-
-### Skills
-
-```text
-asobi skills                                                    # list, grouped by source
-asobi skills install <SOURCE> [--all | --select <NAME>...] [--subdir <PATH>] [--rev <REV>]
-asobi skills sync
-asobi skills update [SOURCE]
-asobi skills remove <NAME | SOURCE>
-asobi skills show <NAME>
-```
-
-`install` takes a git URL or a local path; git sources are shallow-cloned into a reused cache under `.asobi/caches/<slug>`. Frontmatter supplies the metadata, with the name falling back to the directory name. `--all` installs the source's full set; `--select` and the interactive picker install the chosen set. Each replaces that source's previously installed selection, leaving other sources' skills intact. Passing neither flag opens a numbered picker, which needs a TTY and otherwise errors asking for a flag. `--subdir` scopes the walk to one directory of the checkout, for sources that mirror the same skills across several tool-specific directories and would otherwise collide on name. `--rev` pins to a commit, tag, or branch instead of the default branch.
-
-A skill is a directory containing `SKILL.md`; a loose `<name>.md` file is not a skill and is not installed. Its Markdown comes across with it — `references/*.md` and any sibling `.md` — so the on-demand references the spec relies on still resolve after install.
-
-Nothing else is copied. Scripts, assets and tool-specific configuration remain in
-the source checkout. Skipped files are named in a warning; review and fetch one
-deliberately from its owning source if a step needs it. A successful installation
-does not establish that the skill's workflow can run.
-
-`sync` reconciles against the `[skills]` block in the discovered `asobi.toml`, as described under [Common workflows](#common-workflows). `update` refreshes from cache via `git fetch` and `reset --hard`, re-cloning if that fails; it needs `git` on `PATH`, retains recorded source selection and pins, and a scoped `update <source>` leaves other sources alone. `show` prints a skill's `SKILL.md` as raw Markdown, matched on its frontmatter name or its directory name. Never hand-edit an installed skill — the next sync overwrites it; edit the source repository instead.
 
 ### Tasks
 
@@ -505,16 +366,16 @@ The type given to `asobi new` determines what `--where` filters, `compact`, and 
 | Type         | Use for                                             |
 | ------------ | --------------------------------------------------- |
 | `project`    | Stable per-project facts and architecture decisions |
-| `session`    | Volatile session state                              |
+| `session`    | Legacy data from pre-0.8 workspaces; ordinary entity in 0.8 |
 | `task`       | Epics and their dispatchable child tasks            |
 | `concept`    | Decisions, pitfalls, technical definitions          |
 | `preference` | Cross-project user or tool preferences              |
 | `standard`   | Conventions that apply everywhere                   |
 | `reference`  | Pointers to external resources and URLs             |
 
-Only the durable types reach Markdown through `compact`, and only `session` and terminal `task` entities are eligible for `purge`, so a decision typed as `session` is both invisible to topics and reachable by retention.
+Only `task` entities stay out of the Markdown projection, and only finished `task` entities are eligible for `purge`; legacy `session` entities are ordinary durable knowledge in 0.8.
 
-Names are hierarchical and colon-separated — `project-x`, `project-x:session`, `project-x:epic`, `project-x:epic:task-1` — and preserve case and dots, so `CLAUDE.md` and `UserPreferences` are valid names. Skills are filesystem directories, not graph entities. Relations read as verb phrases: `part_of`, `depends_on`, `supersedes`, `extends`, `uses`, `blocks`.
+Names are hierarchical and colon-separated — `project-x`, `project-x:task:deploy`, `project-x:epic`, `project-x:epic:task-1` — and preserve case and dots, so `CLAUDE.md` and `UserPreferences` are valid names. Relations read as verb phrases: `part_of`, `depends_on`, `supersedes`, `extends`, `uses`, `blocks`.
 
 ## Response contract
 
@@ -522,7 +383,7 @@ Names are hierarchical and colon-separated — `project-x`, `project-x:session`,
 
 **Mutating** commands print a one-line confirmation (`Entity 'X' created.`, `Observation added.`) to **stderr** and leave **stdout empty** on success. A scripted caller must branch on the exit code, not on stdout being non-empty.
 
-**Read** commands (`graph`, `search`, `show`, `stats`, `capabilities`, `schema`) write their JSON payload to **stdout**. `asobi skills show` writes raw Markdown instead, since its purpose is to be read.
+**Read** commands (`graph`, `search`, `show`, `stats`, `capabilities`, `schema`) write their JSON payload to **stdout**.
 
 The global `--json` flag makes a mutation also print the affected entities, and the relations among them, to stdout — `asobi new A task --json` removes the follow-up `show` round-trip, and `rm --json` returns `{ "deleted": [...] }`. It has no effect on read commands, which already emit JSON.
 
@@ -613,8 +474,64 @@ The payload for `graph` and `search` is a lazy JSON structure (excluding `observ
 For exact entity retrieval, prefer `show` over `search`:
 
 ```bash
-asobi show "project-x:session" "UserPreferences"
+asobi show "project-x:task:deploy" "UserPreferences"
 ```
+
+## Remote workspaces
+
+A workspace can use a whole named graph on an Asobi server. Add `remote` to its `asobi.toml`; `graph` selects the server graph and defaults to `asobi`:
+
+```toml
+remote = "https://asobi.h.azusachino.com"
+graph = "workstation"
+```
+
+`ASOBI_REMOTE` and `ASOBI_GRAPH` override those keys. When `remote` is set, all graph and task calls go to that server; local `data_dir` and `ASOBI_DATABASE_URL` are not used. The `observation_limit` and `topics_dir` stay client-side, so `compact` writes Markdown locally.
+
+The API version is encoded in the `/v3` URL; there is no `server.hello` call or separate handshake. Each operation is plain JSON over `POST /v3/graphs/<graph>/<operation>`; successful calls return JSON, and errors use a non-2xx status with `{ "kind", "message" }`. `GET /healthz` returns 200 without opening a graph and is for liveness probes only. The first remote operation is the reachability probe (a write command first makes a read-only `maintenance.location` call). If that call cannot connect, times out after about two seconds, or receives gateway HTTP 502/503/504, the process warns on stderr and uses the local graph for the whole command; outage writes stay local and are never merged later. Once any remote call succeeds, a later failure is an error and never switches backend mid-command. A non-protocol response fails with `server does not speak API v3`. The process reuses one HTTP client/connection. Use a build with the `remote` feature (`cargo install asobi --features remote`); a local-only build fails clearly if it finds `remote` configured.
+
+## The graph server: `asobi-server`
+
+One long-lived `asobi-server` process holds **named graphs** — one SQLite file per graph in its required data directory — and serves them over HTTP to workspaces configured with `remote` (see ADR 0005). Build/install `asobi-server` separately; the remote client is optional on the `asobi` CLI.
+
+```bash
+asobi-server --listen 127.0.0.1:8300 --data-dir /srv/asobi-data
+```
+
+- **Both arguments are required.** `--data-dir` is the server's own data directory — created if missing and never resolved from `asobi.toml`/XDG, so a server and a local CLI on one host cannot silently share a graph file, and the server's sweep never walks the CLI's directory. Each graph is `<data-dir>/<name>.db`. Graph names match `^[a-z0-9-]+$` — they become file names, so anything else is refused with `422 invalid` and no file is created. Naming a graph that does not exist yet creates it on first use.
+- **Route:** `POST /v3/graphs/<graph>/<operation>` with the operation's request object as the body; a success is `200` with the result JSON. A failure is a non-2xx status with `{"kind", "message"}`. Any other verb on a known path is `405 badRequest`; any other path is `404`.
+- **Requests are concurrent** (one sqlx pool per graph); SQLite serialises writes through WAL and the busy timeout, and task claims and abandonment run in `BEGIN IMMEDIATE` transactions.
+- **Sweeps run in the background** on a one-hour interval over every graph: idle open tasks are abandoned before retention deletes finished tasks, exactly as in local mode, using the server's own `retention_days` / `abandon_days` configuration.
+- **`maintenance.reset` is refused over the network** (`501 unsupported`): run `asobi reset` on the server host against the file directly when that is intended.
+- **Liveness:** `GET /healthz` returns 200 without opening a graph; use it for container and cluster probes.
+- **Access:** no authentication — the server must only be reachable on your tailnet; binding it to a public interface is out of contract.
+
+### Asobi server container image
+
+Build the Podman image locally with `make image`. It is tagged
+`azusachino.com/asobi-server:v<workspace-version>` and built for the machine's
+native architecture. The image runs as UID/GID 65532, stores graph files
+under `/data`, and listens on `0.0.0.0:8300` by default. The mounted volume
+must be writable by UID/GID 65532; configure Kubernetes `fsGroup` accordingly.
+For example, with the 0.8.0 workspace version:
+
+```bash
+podman run --rm --detach --name asobi-server \
+  --publish 127.0.0.1:8300:8300 \
+  --volume asobi-server-data:/data \
+  azusachino.com/asobi-server:v0.8.0
+curl --fail --show-error http://127.0.0.1:8300/healthz
+podman stop asobi-server
+```
+
+A successful health probe returns HTTP 200. The endpoint is for liveness only;
+it does not open a graph. The server has no authentication, so only publish it
+on trusted interfaces and keep deployment access tailnet-only. `make image-import`
+additionally pipes `podman save` into `sudo k3s ctr images import`; run it only on
+the k3s host. The local `make image` build uses the
+host architecture, so build the deployable amd64 image on `harus-mini` when
+doing WP10 rather than importing this arm64 development image. No registry
+push is involved.
 
 ## Running in Sandboxed Environments (Codex, etc.)
 

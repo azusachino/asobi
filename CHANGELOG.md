@@ -1,5 +1,52 @@
 # Changelog
 
+## v0.8.0
+
+### Migration from 0.7.x
+
+- **Start with a new graph.** Asobi 0.8 refuses pre-0.8 graph files without changing them. Move any old local graph file aside, or move a server graph file aside on the server host, before opening it with 0.8; no contents are migrated or imported.
+- **Replace session handoffs with tasks.** Sessions are no longer a special workflow or entity type. Use `asobi tasks plan`, `list`, `sync`, and `close`; configure `abandon_days` / `ASOBI_ABANDON_DAYS` if the seven-day default does not fit. Existing pre-0.8 graph files are refused, not converted.
+- **Remove the old `[skills]` configuration.** It is silently ignored. Install the maintained `asobi` skill separately with `npx skills add https://github.com/azusachino/harus-skills --skill asobi --agent universal`; existing installed skill files are untouched.
+- **Choose local or remote CLI installation.** `cargo install asobi` is local-only; use `cargo install asobi --features remote` for server access. The prebuilt release CLI includes remote support.
+- **Configure remote workspaces and run the server.** Set `remote` and optionally `graph` in `asobi.toml` (or `ASOBI_REMOTE` / `ASOBI_GRAPH`), then run `asobi-server --listen <addr:port> --data-dir <path>` on the server host. Graphs are created by name on first use; outage fallback writes remain local.
+
+### Added
+
+- **Remote CLI mode** (ADR 0005/0009): `remote` and `graph` (`asobi` by default) in `asobi.toml`, overridden by `ASOBI_REMOTE`/`ASOBI_GRAPH`; `RemoteStore` implements the async v3 traits over HTTP behind the off-by-default `remote` feature, with optional reqwest 0.13.5 using rustls. There is no hello handshake; the first actual call probes reachability (writes first use read-only `maintenance.location`). A first-call connection failure, two-second timeout, or gateway HTTP 502/503/504 warns and falls back to the local graph for the whole process. Once a call succeeds, later failures never switch backends. Non-protocol responses report `server does not speak API v3`. A build without the feature errors if `remote` is configured. The server logs each request with method, path, status and elapsed time without logging bodies or query strings. See [usage](docs/usage.md#remote-workspaces).
+- **`asobi-server` serves named graphs** (ADR 0005): `asobi-server --listen <addr:port> --data-dir <path>` serves named graphs over `POST /v3/graphs/<graph>/<operation>` — one sqlx pool per graph, concurrent requests, hourly background sweeps (abandonment + retention) over every graph, one log line per request. Graph names match `^[a-z0-9-]+$` (else `422 invalid`, no file created); unknown valid names are created on first use; `maintenance.reset` is refused over the network. No authentication: keep it on the tailnet. `--data-dir` is a required argument with no asobi.toml/XDG fallback — the server never shares the CLI's data directory.
+- **A local-first Podman image for `asobi-server`** is built with `make image`
+  as `azusachino.com/asobi-server:v<workspace-version>`. It uses a multi-stage
+  release build, a distroless non-root runtime, and `/data` for graph files.
+  `make image-import` builds and imports the image into k3s containerd on the
+  cluster host; no registry push is used.
+
+### Changed
+
+- **The repository is a Cargo workspace of four crates** ([ADR 0009](docs/decisions/0009-workspace-crates.md)): `asobi-core` (types, traits, configuration), `asobi-storage` (the sqlx provider — the only crate allowed a driver dependency), `asobi` (the CLI, with `remote` behind an off-by-default feature), and `asobi-server` (the named-graph HTTP server). Pure reorganisation; behaviour and command output are unchanged. `scripts/verify_storage_boundary.py` is deleted — the boundary is now a dependency rule Cargo enforces, and `make check` fails if any crate other than `asobi-storage` lists `sqlx`.
+- **Async storage on sqlx; `api::v2` replaced by `api::v3` (breaking)** ([ADR 0008](docs/decisions/0008-async-storage-on-sqlx.md)). The four capability traits now have `async fn` methods with `Send` futures; `API_VERSION` is 3. `SqliteStore` runs on a `SqlitePool` with runtime-checked queries; every CLI command executes on a single-threaded tokio runtime (the server's multi-threaded runtime calls the same store directly). Behaviour and command output are unchanged.
+- **`rusqlite` is gone; `sqlx` is the storage layer.** The bundled SQLite build keeps FTS5/BM25 search, WAL, foreign keys, the bounded `ASOBI_BUSY_TIMEOUT`, and the activity triggers.
+- **The schema-9 baseline moved to `migrations/0001_baseline.sql`, applied by `sqlx::migrate!`.** sqlx tracks migration versions in `_sqlx_migrations`; new files retain `user_version 0`. Before opening the pool, a read-only check refuses pre-0.8 files with non-zero `user_version`, leaving them byte-for-byte untouched.
+- Task claims and the abandonment sweep still run in `BEGIN IMMEDIATE` transactions, so the concurrency guarantees (a task is never claimed twice) hold unchanged.
+- **Clean schema baseline: schema 9, pre-0.8 graph files refused** ([ADR 0007](docs/decisions/0007-clean-schema-baseline.md)). A new database applies the schema-9 baseline migration; the old upgrade chain is deleted. A read-only check rejects pre-0.8 files before the pool opens and leaves them untouched. **Move every existing local or server graph file aside before using 0.8; nothing is carried forward.**
+- `asobi_entities.updated_at` is now `last_activity`, kept current by triggers on observation and truth insert/update/delete (relations do not count). Retention and abandonment read the column instead of recomputing a `MAX` over three sources per entity, so the definition of activity lives in one place: the schema.
+
+### Added
+
+- **Idle open tasks are abandoned automatically** ([ADR 0006](docs/decisions/0006-tasks-replace-sessions.md)). A task with no activity for `abandon_days` (default 7; `ASOBI_ABANDON_DAYS` or the `asobi.toml` key, `0` disables) becomes `ABANDONED`, with an observation recording that it was abandoned automatically after that many idle days. A task with no `status` truth counts as open. An epic is never abandoned while any `part_of` child is open. Abandonment runs in the same per-process sweep as retention, before it — an abandoned task is terminal, so retention deletes it `retention_days` later, which with both defaults gives an untouched task one visible week as `ABANDONED` and deletion after two.
+- The sweep is now `SqliteStore::sweep()` on the provider, callable repeatedly, so `asobi-server` runs it hourly as a background task over its graphs. It is not part of the `v3` traits or the HTTP protocol.
+
+### Changed
+
+- **`session` is no longer a special entity type** (ADR 0006). Retention no longer purges `session` entities — existing sessions become ordinary entities that nothing deletes; remove them with `asobi rm` if wanted. `compact` no longer excludes them by name, so they project to Markdown like any other knowledge entity. `purge` accepts only `task` entities now.
+
+### Removed
+
+- **Skills management is gone** (see [ADR 0004](docs/decisions/0004-remove-skills.md)). The `skills` command group (`install`, `sync`, `update`, `remove`, `show`), the declarative `[skills]` block, the shared-Markdown relocation, the reference diagnostics, the `data_dir/skills.json` provenance manifest, and the git-cache helpers behind them are all deleted. Asobi is a graph and task CLI again. Install the companion skill — and any other skills — with the maintained [`skills` CLI](https://github.com/vercel-labs/skills) (`npx skills add <source> --skill <name> --agent universal`). Installed skill trees on disk are untouched; nothing Asobi installed is removed by upgrading.
+- **An existing `[skills]` block in `asobi.toml` is silently ignored.** `AsobiConfig` does not deny unknown fields, so the block simply has no reader. No warning, no error, and no migration needed.
+- **A stale `data_dir/skills.json` is left where it is.** Asobi no longer reads or deletes it; removing it is your choice.
+- `asobi init` no longer scaffolds the commented `[skills]` block in its project-local config.
+- `verify-skills-spec` and `scripts/verify_skills_spec.py` are removed; `make check` no longer validates installed skills (there is nothing to validate).
+
 ## v0.7.3 — Shared Markdown, and skills selected by path
 
 ### Added

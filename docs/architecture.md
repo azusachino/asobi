@@ -1,31 +1,41 @@
 # Asobi architecture
 
-Asobi is a focused, synchronous knowledge-graph CLI. `main.rs` is only the process entry point; command routing, API contracts, storage, tasks, skills, and compaction live in their own modules.
+Asobi 0.8 ships two binaries over one async `api::v3` storage contract. The `asobi` CLI uses a local SQLite graph by default; with its optional `remote` feature and workspace configuration, it sends the same operations to `asobi-server`.
 
 ```text
-CLI commands
+asobi CLI
     |
-api::v2 capability traits
-    |
-storage::SqliteStore
-    |
-SQLite + WAL + FTS5
+api::v3 capability traits
+    ├── local ── SqliteStore ── local SQLite graph
+    └── remote ── RemoteStore ── HTTP ── asobi-server
+                                         └── SqliteStore per named graph
 ```
 
-## API boundary
+## Workspace crates
 
-`src/api/v2.rs` contains domain requests, results, errors, and capability traits. It does not expose SQL statements, connection handles, or SQLite row types. The application composes `SqliteStore`, while commands depend only on the API traits.
+- `asobi-core` owns domain types, errors, configuration, paths, and the transport-neutral `api::v3` traits and HTTP operation contract. It has no I/O stack.
+- `asobi-storage` implements `SqliteStore` with sqlx, SQLite migrations, FTS5 search, and lifecycle sweeps. Only this crate depends on sqlx.
+- `asobi` contains the CLI and `RemoteStore`. Its reqwest client is behind the opt-in `remote` feature, so a default local-only build does not include the HTTP client.
+- `asobi-server` is a separate Tokio/Axum binary. It owns the server data directory and lazily opens one SQLite file per named graph.
 
-The API is synchronous because this is a local SQLite CLI: each operation is a short transaction, and SQLite's WAL mode allows readers to proceed while a writer commits. The task dispatcher claims a READY task and records its claim observation in one immediate transaction.
+Commands depend on API traits, not provider types. The CLI runs on a current-thread Tokio runtime; the server runs a multi-threaded runtime and calls the async storage API directly.
 
-## SQLite storage
+## Remote protocol and graph ownership
 
-`src/storage/sqlite.rs` owns schema creation, migrations, connection settings, and queries. The database uses foreign keys, WAL, bounded busy timeouts, and an external-content FTS5 index with porter stemming and BM25 ranking. Truth filters are applied in SQL and combine with keyword search through AND semantics.
+The remote client sends plain JSON over HTTP: `POST /v3/graphs/<graph>/<operation>`, with the operation request object as the body. Success returns JSON; failures use a non-2xx status and `{ "kind", "message" }`. There is no JSON-RPC envelope or `server.hello` handshake: the `/v3` path identifies the API version. `GET /healthz` is a liveness probe that does not open a graph.
 
-## Durable projections
+A workspace selects either local or remote mode for its entire graph. Remote workspaces name one server graph (default `asobi`); unrelated graphs cannot share entities or relations. The server accepts graph names matching `[a-z0-9-]+` and creates a valid graph on first use. Its required `--data-dir` is isolated from CLI config and XDG paths.
 
-`compact` renders durable graph entities to Markdown topics. It is a deterministic graph-to-Markdown projection; it does not ingest documents or build embeddings. Sessions and tasks remain graph data, available through graph, search, and show. Skills are not graph data: they live on the filesystem under the skills directory, with a `skills.json` manifest in the data directory recording each one's source and commit, plus the skills directory those entries describe.
+On the first remote call, connection failure, timeout, or gateway 502/503/504 falls back to the workspace's local graph with a warning. Those outage writes remain local and are never replayed. Once a remote call succeeds, later failures return errors rather than switching backends.
+
+## Storage and lifecycle
+
+`asobi-storage` uses sqlx with bundled SQLite/FTS5, WAL, foreign keys, and bounded busy timeouts. Queries are runtime-checked; schema 9 is established by the baseline migration. Asobi 0.8 refuses pre-0.8 graph files without modifying them; move those files aside to start a new graph. No migration or import is performed.
+
+Tasks replace the former session workflow. Status is a truth, notes are observations, and task relationships connect work to epics. In local mode, abandonment and retention run once per process before its first write. `asobi-server` runs the same sweep hourly over its graphs: idle open tasks become `ABANDONED`, then finished tasks past retention are deleted. Active-parent protection and refreshed activity preserve the two-stage lifecycle.
+
+`compact` projects durable graph entities to local Markdown topics; in remote mode, the graph is remote but `topics_dir` remains on the client. Asobi has no skills-management subsystem: install agent guidance from the maintained skills source with the external `skills` CLI.
 
 ## Verification
 
-The quality gate combines the v2 backend contract tests, CLI integration tests, multi-process concurrency tests, benchmark compilation, formatting, linting, and the storage-boundary verifier. `make check` is the authoritative list; benchmark sources stay under `benches/` so hot paths can be measured as the implementation evolves.
+`make check` is the authoritative quality gate. It covers the shared storage contract on SQLite and RemoteStore, CLI and server integration tests, remote end-to-end tests, concurrency, formatting, linting, and benchmark compilation. SQLite-specific schema and vacuum cases stay local to `asobi-storage`.

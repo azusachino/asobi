@@ -2,9 +2,9 @@
 
 # 🎮 asobi
 
-**A persistent, project-local knowledge graph CLI for LLM agents.**
+**A persistent knowledge-graph CLI for people and agents.**
 
-Keep memory, track session state, and share context across conversations — stored in a local, single-file SQLite database.
+Keep project knowledge and task state in a local SQLite graph, or share a named graph across devices through `asobi-server`.
 
 [![CI](https://github.com/azusachino/asobi/actions/workflows/ci.yml/badge.svg)](https://github.com/azusachino/asobi/actions/workflows/ci.yml) [![Release](https://img.shields.io/github/v/tag/azusachino/asobi?label=release&sort=semver)](https://github.com/azusachino/asobi/releases) [![License: MIT](https://img.shields.io/github/license/azusachino/asobi)](LICENSE) [![Rust](https://img.shields.io/badge/rust-2024-orange?logo=rust&logoColor=white)](https://www.rust-lang.org)
 
@@ -18,54 +18,58 @@ Keep memory, track session state, and share context across conversations — sto
 
 ## ✨ Features
 
-- **Knowledge graph** — entities, append-only (capped) observations, and directed relations.
+- **Knowledge graph** — entities, append-only (capped) observations, truths, and directed relations; local by default, remote by workspace configuration.
 - **Truths** — durable `key→value` facts per entity for current state (`status`, `version`); status-as-truth makes a board a single `search --where status=…`.
 - **Fast search** — `search` over SQLite FTS5 (BM25 relevance, porter stemming) with a substring fallback, plus `--where key=value` truth filters (the query term is optional).
-- **Concurrency-safe** — WAL-mode storage with bounded busy timeouts, so lead and dispatched agents can share a graph.
+- **Task lifecycle** — graph-backed tasks record open work; idle tasks are abandoned, then retained or deleted by policy.
+- **Shared graphs** — `asobi-server` serves named graphs over HTTP; remote CLI mode is optional and outage fallback keeps writes local.
 - **Lazy reads** — `graph`/`search` return truths + counts; `show` returns the full body. Cheap to load, cheap on tokens.
-- **Skills** — install reusable agent instructions from a git repo or local path, imperatively or by declaring a `[skills]` block in `asobi.toml` and running `skills sync`. They live on the filesystem, not in the graph, with a manifest recording each one's source and commit.
 
 ## 🏗️ Architecture
 
-One synchronous storage contract, one bundled backend, one local file — see [ADR 0001](docs/decisions/0001-sqlite-only-v2-rewrite.md) and [ADR 0002](docs/decisions/0002-why-rusqlite.md) for why.
+The four-crate workspace builds two binaries: `asobi` for local or remote CLI use, and `asobi-server` for hosting named graphs. Both use the async `api::v3`; the SQLite provider is implemented with sqlx. Remote support is an opt-in CLI feature and sends plain JSON over HTTP.
 
 ```mermaid
 flowchart LR
-    CLI["src/cli/*\n(commands, dispatch, graph, skills)"]
-    API["api::v2\nGraphStore · SearchStore\nMaintenanceStore · TaskStore"]
-    Sqlite["SqliteStore\n(src/storage/sqlite.rs)"]
-    DB[("asobi.db\nWAL + FTS5")]
-
-    CLI --> API
-    API --> Sqlite
-    Sqlite --> DB
+    CLI["asobi CLI"] --> API["api::v3 traits"]
+    API --> Local["SqliteStore"] --> LocalDB[("local graph")]
+    API --> Remote["RemoteStore\n(remote feature)"]
+    Remote -->|"POST /v3/graphs/<graph>/<operation>"| Server["asobi-server"]
+    Server --> Named["SqliteStore per graph"] --> ServerDB[("named graph files")]
 ```
 
-Commands depend only on the `api::v2` traits, never on `rusqlite` types directly — `src/storage/sqlite.rs` is the only file that owns SQL, schema, and pragmas.
+Commands depend only on `api::v3` traits, never on driver types. Only `asobi-storage` owns SQL, migrations, and SQLite settings (ADR 0009). No handshake is used; `GET /healthz` is a liveness probe. Pre-0.8 graph files are refused unchanged and must be moved aside before use with 0.8. See [ADR 0005](docs/decisions/0005-remote-server.md), [ADR 0007](docs/decisions/0007-clean-schema-baseline.md), and [ADR 0008](docs/decisions/0008-async-storage-on-sqlx.md).
 
 ## 📦 Installation
 
 ### From crates.io (recommended)
 
 ```bash
-cargo install asobi
+cargo install asobi                      # local-only CLI, no HTTP client
+cargo install asobi --features remote   # CLI with remote mode
+cargo install asobi-server              # named-graph HTTP server
 ```
 
-### Prebuilt binary (cargo-binstall)
+### Prebuilt binaries
 
-No compile — [`cargo-binstall`](https://github.com/cargo-bins/cargo-binstall) pulls the binary from the GitHub release:
+Download the platform archive from the [GitHub release](https://github.com/azusachino/asobi/releases) and extract it. It contains both `asobi` (built with remote support) and `asobi-server`.
 
-```bash
-cargo binstall asobi
-```
+### Local server container image
+
+Run `make image` to build the native-architecture Podman image
+`azusachino.com/asobi-server:v<workspace-version>`. The non-root container
+persists graph files under `/data`. See the
+[server image guide](docs/usage.md#asobi-server-container-image) for the
+liveness probe and the cluster-host-only import target.
 
 ### From source
 
 ```bash
-cargo install --git https://github.com/azusachino/asobi
+cargo install --git https://github.com/azusachino/asobi asobi
+cargo install --git https://github.com/azusachino/asobi asobi --features remote
 ```
 
-Or build locally with `make build`. Requires Rust 1.85+, Edition 2024.
+Or build locally with `make build` (local CLI), `cargo build -p asobi --features remote`, or `cargo build -p asobi-server`. Requires Rust 1.85+, Edition 2024.
 
 ## 🚀 Quick Start
 
@@ -87,9 +91,7 @@ asobi rm-obs "my-project" 1 --id
 - `asobi graph` / `search <q>` / `search --where status=READY` / `show <name>... --expand part_of --with-ids` — read the graph (supports subtree expansions and sequential observation IDs).
 - `asobi new <name> <type> --obs "..."` / `obs <name> "..."` / `update-obs <name> <old/id> <new> [--id]` / `rm-obs <name> <content/id> [--id]` — manage observations (supports updates and deletions by unique sequential IDs).
 - `asobi truth <name> <key> <value>` / `rm-truth <name> <key>` — manage truths. A truth is the current value and nothing else: an overwrite replaces it, with no archive behind it.
-- `asobi skills install <src> --all` / `update` / `skills` / `skills show <name>` — manage skills. `--select` accepts source-relative directory paths, unique path suffixes, or frontmatter names; `--subdir <path>` scopes the source walk, and `--rev` pins its revision. Bundled Markdown is installed alongside `SKILL.md`; shared Markdown requires an explicit declaration. Scripts, assets and other non-Markdown files are excluded.
-- `asobi skills sync` — reconcile installed skills with the `[skills]` block in `asobi.toml`, and write each one to `.agents/skills/<source-slug>@<skill-name>/SKILL.md`. Per-source `subdir = "..."` does the same scoping declaratively.
-- `asobi stats` / `purge` / `reset` — inspect & manage. The graph is one SQLite file, so `cp` it to back it up.
+- `asobi stats` / `purge` / `reset` — inspect & manage. In local mode the graph is one SQLite file, so `cp` it to back it up; remote graphs are backed up on the server.
 
 ## 🔒 Sandboxed Environments
 
@@ -104,4 +106,4 @@ See the [Running in Sandboxed Environments](docs/usage.md#running-in-sandboxed-e
 - **Rust quality standard**: keep code rustfmt-clean, introduce no Clippy warnings, preserve single-threaded test isolation, and add regression coverage for behavior changes. Run `make check` before commits.
 - **Coverage**: with `cargo-tarpaulin` installed, run `cargo tarpaulin --out Html --output-dir coverage` and open `coverage/index.html`.
 - **Benchmarks**: run `make bench`; use [performance profiling](docs/benchmarks/profiling.md) for Criterion baselines, DHAT allocations, and SQL plans.
-- See [`docs/usage.md`](docs/usage.md) for the full CLI reference and [`docs/architecture.md`](docs/architecture.md) for design. The narrative walkthrough of _why_ the command set is shaped this way — the lazy-read contract, truths versus observations, the dispatcher as a convention — moved to [harus-kb](https://github.com/azusachino/harus-workstation/blob/main/docs/projects/asobi/workflow.md). Agent workflow guidance lives in the [`asobi` skill](https://github.com/azusachino/harus-skills/blob/main/skills/asobi/SKILL.md); this repository ships no `SKILL.md` of its own. Install it with `asobi skills install https://github.com/azusachino/harus-skills.git --select asobi`.
+- See [`docs/usage.md`](docs/usage.md) for the full CLI reference and [`docs/architecture.md`](docs/architecture.md) for design. The narrative walkthrough of _why_ the command set is shaped this way — the lazy-read contract, truths versus observations, the dispatcher as a convention — moved to [harus-kb](https://github.com/azusachino/harus-workstation/blob/main/docs/projects/asobi/workflow.md). Agent workflow guidance lives in the [`asobi` skill](https://github.com/azusachino/harus-skills/blob/main/skills/asobi/SKILL.md); this repository ships no `SKILL.md` of its own. Install it with `npx skills add https://github.com/azusachino/harus-skills --skill asobi --agent universal`.
