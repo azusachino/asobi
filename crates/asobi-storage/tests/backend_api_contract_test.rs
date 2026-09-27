@@ -1,11 +1,12 @@
-use asobi_core::api::{
-    GraphStore, MaintenanceStore, OpenNodes, PurgeRequest, SearchQuery, SearchStore, TaskStore,
-};
+use asobi_core::api::{GraphStore, MaintenanceStore, PurgeRequest};
 use asobi_core::model::{EntityInput, ObservationDeletion, ObservationInput, RelationInput};
 use asobi_storage::SqliteStore;
 use sqlx::Connection;
 use sqlx::sqlite::SqliteConnection;
 use tempfile::tempdir;
+
+#[path = "../../asobi-core/tests/support/backend_api_contract.rs"]
+mod shared_contract;
 
 /// Pull one entity's activity anchor into the past so a single write is
 /// observable even though SQLite timestamps have one-second granularity.
@@ -40,267 +41,27 @@ async fn store() -> (tempfile::TempDir, SqliteStore) {
 }
 
 #[tokio::test]
-async fn sqlite_implements_the_v2_contract() {
+async fn sqlite_implements_the_v3_contract() {
     let (_dir, store) = store().await;
-    let capabilities = store.capabilities().await.unwrap();
-    assert_eq!(capabilities.backend, "sqlite");
-    assert_eq!(capabilities.keyword_search_kind, "fts5");
-    assert!(capabilities.multi_process);
+    shared_contract::stats_capabilities_health_and_location_contract(&store).await;
 }
 
 #[tokio::test]
 async fn graph_truth_search_and_task_claim_are_atomic_surfaces() {
     let (_dir, store) = store().await;
-    store
-        .create_entities(vec![EntityInput {
-            name: "project:asobi".into(),
-            entity_type: "project".into(),
-            observations: vec!["SQLite FTS5 supports concurrent agent recall".into()],
-        }])
-        .await
-        .unwrap();
-    store
-        .create_entities(vec![EntityInput {
-            name: "asobi:task-1".into(),
-            entity_type: "task".into(),
-            observations: vec![],
-        }])
-        .await
-        .unwrap();
-    store
-        .create_relations(vec![RelationInput {
-            from: "asobi:task-1".into(),
-            to: "project:asobi".into(),
-            relation_type: "part_of".into(),
-        }])
-        .await
-        .unwrap();
-    store
-        .truth_upsert("asobi:task-1", "status", "READY_TO_DISPATCH")
-        .await
-        .unwrap();
-    store
-        .truth_upsert("project:asobi", "status", "ACTIVE")
-        .await
-        .unwrap();
-
-    let graph = store
-        .search_nodes(SearchQuery {
-            query: "concurrent recall".into(),
-            limit: 10,
-            filters: vec![],
-        })
-        .await
-        .unwrap();
-    assert_eq!(graph.entities[0].name, "project:asobi");
-
-    let filtered = store
-        .search_nodes(SearchQuery {
-            query: "concurrent".into(),
-            limit: 10,
-            filters: vec![("status".into(), "ACTIVE".into())],
-        })
-        .await
-        .unwrap();
-    assert_eq!(filtered.entities.len(), 1);
-    assert_eq!(filtered.entities[0].name, "project:asobi");
-
-    assert_eq!(
-        store.claim_next("agent-a").await.unwrap().as_deref(),
-        Some("asobi:task-1")
-    );
-    assert_eq!(store.claim_next("agent-b").await.unwrap(), None);
+    shared_contract::graph_truth_search_and_task_claim_are_atomic_surfaces(&store).await;
 }
 
 #[tokio::test]
 async fn graph_and_search_keep_observations_lazy() {
     let (_dir, store) = store().await;
-    store
-        .create_entities(vec![asobi_core::model::EntityInput {
-            name: "lean-read".into(),
-            entity_type: "concept".into(),
-            observations: vec![],
-        }])
-        .await
-        .unwrap();
-    store
-        .add_observations(
-            vec![asobi_core::model::ObservationInput {
-                entity_name: "lean-read".into(),
-                contents: vec!["heavy observation".into()],
-            }],
-            200,
-        )
-        .await
-        .unwrap();
-
-    let lean = store.read_graph().await.unwrap();
-    let entity = &lean.entities[0];
-    assert_eq!(entity.observation_count, 1);
-    assert!(entity.observations.is_empty());
-    assert!(entity.observations_detailed.is_none());
-    let lean_json = serde_json::to_value(&lean).unwrap();
-    assert!(
-        !lean_json["entities"][0]
-            .as_object()
-            .unwrap()
-            .contains_key("body")
-    );
-    assert!(
-        !lean_json["entities"][0]
-            .as_object()
-            .unwrap()
-            .contains_key("observations")
-    );
-    assert!(
-        !lean_json["entities"][0]
-            .as_object()
-            .unwrap()
-            .contains_key("observationsDetailed")
-    );
-
-    let search = store
-        .search_nodes(SearchQuery {
-            query: "heavy observation".into(),
-            limit: 10,
-            filters: vec![],
-        })
-        .await
-        .unwrap();
-    let entity = &search.entities[0];
-    assert_eq!(entity.observation_count, 1);
-    assert!(entity.observations.is_empty());
-    assert!(entity.observations_detailed.is_none());
-
-    let full = store
-        .open_nodes(OpenNodes {
-            observation_limit: 0,
-            names: vec!["lean-read".into()],
-            with_ids: true,
-            expand: vec![],
-        })
-        .await
-        .unwrap();
-    let entity = &full.entities[0];
-    assert_eq!(entity.observations, vec!["heavy observation"]);
-    assert_eq!(entity.observations_detailed.as_ref().unwrap().len(), 1);
-
-    let exported = store.read_graph_full().await.unwrap();
-    assert_eq!(exported.entities[0].observations, vec!["heavy observation"]);
+    shared_contract::graph_and_search_keep_observations_lazy(&store).await;
 }
 
 #[tokio::test]
 async fn purge_is_preview_first_and_leaves_durable_knowledge() {
-    let (dir, store) = store().await;
-    store
-        .create_entities(vec![
-            EntityInput {
-                name: "project:task-done".into(),
-                entity_type: "task".into(),
-                observations: vec!["old finished task".into()],
-            },
-            EntityInput {
-                name: "project:task-closed".into(),
-                entity_type: "task".into(),
-                observations: vec!["old closed task".into()],
-            },
-            EntityInput {
-                name: "project:concept".into(),
-                entity_type: "concept".into(),
-                observations: vec!["durable note".into()],
-            },
-        ])
-        .await
-        .unwrap();
-    store
-        .truth_upsert("project:task-done", "status", "DONE")
-        .await
-        .unwrap();
-    store
-        .truth_upsert("project:task-closed", "status", "CLOSED")
-        .await
-        .unwrap();
-
-    let db = dir.path().join("contract.db");
-    let mut conn = SqliteConnection::connect(&format!("sqlite://{}?mode=rwc", db.display()))
-        .await
-        .unwrap();
-    sqlx::raw_sql(
-        "UPDATE asobi_entities SET created_at = datetime('now', '-90 days');
-         UPDATE asobi_observations SET created_at = datetime('now', '-90 days');
-         UPDATE asobi_truths SET updated_at = datetime('now', '-90 days');
-         UPDATE asobi_entities SET last_activity = datetime('now', '-90 days');",
-    )
-    .execute(&mut conn)
-    .await
-    .unwrap();
-    drop(conn);
-
-    let request = PurgeRequest {
-        older_than_days: 30,
-        apply: false,
-    };
-    let preview = store.purge(request.clone()).await.unwrap();
-    assert!(preview.dry_run);
-    assert_eq!(preview.deleted, 0);
-    assert_eq!(preview.candidates.len(), 2);
-    assert!(
-        store
-            .open_nodes(OpenNodes {
-                observation_limit: 0,
-                names: vec!["project:task-done".into()],
-                ..Default::default()
-            })
-            .await
-            .unwrap()
-            .entities
-            .len()
-            == 1
-    );
-
-    let applied = store
-        .purge(PurgeRequest {
-            apply: true,
-            ..request
-        })
-        .await
-        .unwrap();
-    assert!(!applied.dry_run);
-    assert_eq!(applied.deleted, 2);
-    assert!(
-        store
-            .open_nodes(OpenNodes {
-                observation_limit: 0,
-                names: vec!["project:task-done".into()],
-                ..Default::default()
-            })
-            .await
-            .unwrap()
-            .entities
-            .is_empty()
-    );
-    // The purged entity leaves the index with its observations. Asserting the
-    // whole result is empty would be wrong now that a multi-word query widens:
-    // "note" still matches the durable concept that survived, correctly.
-    assert!(
-        !store
-            .search_nodes(SearchQuery {
-                query: "old finished task".into(),
-                limit: 10,
-                filters: vec![],
-            })
-            .await
-            .unwrap()
-            .entities
-            .iter()
-            .any(|e| e.name == "project:task")
-    );
-    // The durable concept survives, and there is no request that could have
-    // reached it: the policy is a constant now rather than validated flags, so
-    // "purge refuses durable knowledge" is structural instead of enforced.
-    let survivors = store.read_graph().await.unwrap();
-    assert_eq!(survivors.entities.len(), 1);
-    assert_eq!(survivors.entities[0].name, "project:concept");
+    let (_dir, store) = store().await;
+    shared_contract::purge_is_preview_first_and_leaves_durable_knowledge(&store).await;
 }
 
 // storage-boundary: provider-test -- these tests read PRAGMA user_version and
@@ -473,58 +234,7 @@ async fn applied_purge_reclaims_space_via_incremental_vacuum() {
 #[tokio::test]
 async fn show_returns_recent_observations_and_the_true_total() {
     let (_dir, store) = store().await;
-    store
-        .create_entities(vec![EntityInput {
-            name: "proj:session".into(),
-            entity_type: "session".into(),
-            observations: vec![],
-        }])
-        .await
-        .unwrap();
-    for i in 0..50 {
-        store
-            .add_observations(
-                vec![asobi_core::model::ObservationInput {
-                    entity_name: "proj:session".into(),
-                    contents: vec![format!("note {i}")],
-                }],
-                200,
-            )
-            .await
-            .unwrap();
-    }
-
-    let limited = store
-        .open_nodes(OpenNodes {
-            names: vec!["proj:session".into()],
-            observation_limit: 10,
-            ..Default::default()
-        })
-        .await
-        .unwrap();
-    let entity = &limited.entities[0];
-    assert_eq!(entity.observations.len(), 10, "should return the limit");
-    assert_eq!(entity.observation_count, 50, "count is the true total");
-    // Newest kept, and still in written order so a truncated trail reads forward.
-    assert_eq!(entity.observations.first().unwrap(), "note 40");
-    assert_eq!(entity.observations.last().unwrap(), "note 49");
-
-    // 0 means the whole trail, which is what export relies on.
-    let full = store
-        .open_nodes(OpenNodes {
-            names: vec!["proj:session".into()],
-            observation_limit: 0,
-            ..Default::default()
-        })
-        .await
-        .unwrap();
-    assert_eq!(full.entities[0].observations.len(), 50);
-    assert_eq!(
-        store.read_graph_full().await.unwrap().entities[0]
-            .observations
-            .len(),
-        50
-    );
+    shared_contract::show_returns_recent_observations_and_the_true_total(&store).await;
 }
 
 /// Retention has to happen without being asked. The previous design was a
@@ -594,45 +304,7 @@ async fn finished_work_is_swept_on_the_first_write_not_on_reads() {
 #[tokio::test]
 async fn search_reaches_truth_values_not_just_observations() {
     let (_dir, store) = store().await;
-    store
-        .create_entities(vec![EntityInput {
-            name: "proj:pitfall:cache".into(),
-            entity_type: "concept".into(),
-            observations: vec!["tried: redeploying the server image".into()],
-        }])
-        .await
-        .unwrap();
-    store
-        .truth_upsert(
-            "proj:pitfall:cache",
-            "title",
-            "bump the Valkey generation manually",
-        )
-        .await
-        .unwrap();
-
-    async fn hits(store: &SqliteStore, q: &str) -> usize {
-        store
-            .search_nodes(SearchQuery {
-                query: q.into(),
-                limit: 10,
-                filters: vec![],
-            })
-            .await
-            .unwrap()
-            .entities
-            .len()
-    }
-    assert_eq!(
-        hits(&store, "Valkey").await,
-        1,
-        "a token only in a truth must be findable"
-    );
-    assert_eq!(
-        hits(&store, "redeploying").await,
-        1,
-        "observations still match"
-    );
+    shared_contract::search_reaches_truth_values_not_just_observations(&store).await;
 }
 
 /// A multi-word question must not fail closed. FTS5 ANDs bare terms, so a
@@ -643,34 +315,7 @@ async fn search_reaches_truth_values_not_just_observations() {
 #[tokio::test]
 async fn search_widens_rather_than_returning_a_silent_zero() {
     let (_dir, store) = store().await;
-    store
-        .create_entities(vec![EntityInput {
-            name: "proj:pitfall:cache".into(),
-            entity_type: "concept".into(),
-            observations: vec!["tried: deploying a new image".into()],
-        }])
-        .await
-        .unwrap();
-    store
-        .truth_upsert("proj:pitfall:cache", "title", "bump the cache generation")
-        .await
-        .unwrap();
-
-    // No entity contains all four words, so the strict AND finds nothing.
-    let widened = store
-        .search_nodes(SearchQuery {
-            query: "deploying without cache bump".into(),
-            limit: 10,
-            filters: vec![],
-        })
-        .await
-        .unwrap();
-    assert_eq!(
-        widened.entities.len(),
-        1,
-        "should widen rather than return nothing"
-    );
-    assert_eq!(widened.entities[0].name, "proj:pitfall:cache");
+    shared_contract::search_widens_rather_than_returning_a_silent_zero(&store).await;
 }
 
 /// Ranking survives to the caller. The entity fetch used `ORDER BY name`, which
@@ -679,37 +324,7 @@ async fn search_widens_rather_than_returning_a_silent_zero() {
 #[tokio::test]
 async fn search_returns_results_in_ranked_order_not_alphabetical() {
     let (_dir, store) = store().await;
-    store
-        .create_entities(vec![
-            EntityInput {
-                name: "aaa-unrelated".into(),
-                entity_type: "concept".into(),
-                observations: vec!["mentions widget once".into()],
-            },
-            EntityInput {
-                name: "zzz-the-match".into(),
-                entity_type: "concept".into(),
-                observations: vec!["widget widget widget, entirely about the widget".into()],
-            },
-        ])
-        .await
-        .unwrap();
-    store
-        .truth_upsert("zzz-the-match", "title", "the widget explained")
-        .await
-        .unwrap();
-
-    let ranked = store
-        .search_nodes(SearchQuery {
-            query: "widget".into(),
-            limit: 10,
-            filters: vec![],
-        })
-        .await
-        .unwrap();
-    // Alphabetically `aaa-unrelated` wins; by relevance it does not, and it is
-    // matched by only one path where the other is matched by two.
-    assert_eq!(ranked.entities[0].name, "zzz-the-match");
+    shared_contract::search_returns_results_in_ranked_order_not_alphabetical(&store).await;
 }
 
 #[tokio::test]
