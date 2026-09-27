@@ -13,7 +13,7 @@ help:
 	@echo "  bench-criterion       Run graph Criterion benchmarks"
 	@echo "  bench-alloc           Write a DHAT allocation profile"
 	@echo "  bench-sql-plans       Print SQLite query plans"
-	@echo "  bench-tasks           Benchmark task dispatch"
+	@echo "  bench-tasks           Benchmark task dispatch (REMOTE=1 enables remote)"
 	@echo "  bench-storage         Benchmark SQLite storage hot paths"
 	@echo "  fmt / fmt-check       Format or verify Rust, Python, JSON, YAML, and Markdown"
 	@echo "  lint                  Run Rust clippy and Python ruff"
@@ -28,8 +28,10 @@ run:
 	cargo run -- $(ARGS)
 
 test:
-	cargo test --workspace -- --test-threads=1
+	cargo test --workspace --exclude asobi-server -- --test-threads=1
 	cargo test -p asobi --features remote --test remote_client_test -- --test-threads=1
+	cargo build -p asobi --features remote
+	cargo test -p asobi-server -- --test-threads=1
 
 test-scripts: build
 	uv run --with fastjsonschema scripts/verify_cli.py
@@ -58,7 +60,7 @@ bench-sql-plans:
 	cargo bench --bench sql_plans
 
 bench-tasks:
-	cargo bench --bench tasks
+	cargo bench --bench tasks $(if $(REMOTE),--features remote,)
 
 fmt:
 	cargo fmt
