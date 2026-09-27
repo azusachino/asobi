@@ -54,6 +54,14 @@ cargo install asobi-server              # named-graph HTTP server
 
 Download the platform archive from the [GitHub release](https://github.com/azusachino/asobi/releases) and extract it. It contains both `asobi` (built with remote support) and `asobi-server`.
 
+### Local server container image
+
+Run `make image` to build the native-architecture Podman image
+`azusachino.com/asobi-server:v<workspace-version>`. The non-root container
+persists graph files under `/data`. See the
+[server image guide](docs/usage.md#asobi-server-container-image) for the
+liveness probe and the cluster-host-only import target.
+
 ### From source
 
 ```bash
