@@ -7,7 +7,7 @@ use crate::model::{EntityInput, ObservationDeletion, ObservationInput, RelationI
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use super::error::{RpcError, kinds};
+use super::error::{ProtocolError, kinds};
 
 /// The params for methods that take none: an empty object (or none at all).
 #[derive(Debug, Clone, Default, schemars::JsonSchema, Serialize, Deserialize)]
@@ -82,16 +82,21 @@ pub struct TruthDeleteRequest {
     pub key: String,
 }
 
-#[derive(Debug, Clone, Default, schemars::JsonSchema, Serialize, Deserialize)]
-#[serde(default, rename_all = "camelCase")]
+/// `agent` is required: who holds a claim is never guessed on the wire.
+/// An omitted `observationLimit` is 0, which storage reads as its own cap.
+#[derive(Debug, Clone, schemars::JsonSchema, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct DispatchRequest {
+    #[serde(default)]
     pub task: Option<String>,
     pub agent: String,
+    #[serde(default)]
     pub observation_limit: usize,
 }
 
-#[derive(Debug, Clone, Default, schemars::JsonSchema, Serialize, Deserialize)]
-#[serde(default, rename_all = "camelCase")]
+/// `agent` is required, as for `tasks.dispatch`.
+#[derive(Debug, Clone, schemars::JsonSchema, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ClaimNextRequest {
     pub agent: String,
 }
@@ -99,14 +104,15 @@ pub struct ClaimNextRequest {
 /// The CLI's defaults, which an omitted request field takes (ADR 0005: an
 /// omitted field never takes a zero that changes meaning).
 pub const DEFAULT_SEARCH_LIMIT: usize = 10;
-pub const DEFAULT_OBSERVATION_LIMIT: usize = 200;
+/// `asobi show --limit`: the most recent observations returned per entity.
+pub const DEFAULT_SHOW_OBSERVATIONS: usize = 20;
 
 fn default_search_limit() -> usize {
     DEFAULT_SEARCH_LIMIT
 }
 
-fn default_observation_limit() -> usize {
-    DEFAULT_OBSERVATION_LIMIT
+fn default_show_observations() -> usize {
+    DEFAULT_SHOW_OBSERVATIONS
 }
 
 /// Request body for `graph.openNodes`.
@@ -116,7 +122,7 @@ pub struct OpenNodesRequest {
     pub names: Vec<String>,
     pub with_ids: bool,
     pub expand: Vec<String>,
-    #[serde(default = "default_observation_limit")]
+    #[serde(default = "default_show_observations")]
     pub observation_limit: usize,
 }
 
@@ -126,7 +132,7 @@ impl Default for OpenNodesRequest {
             names: Vec::new(),
             with_ids: false,
             expand: Vec::new(),
-            observation_limit: default_observation_limit(),
+            observation_limit: default_show_observations(),
         }
     }
 }
@@ -176,12 +182,15 @@ impl From<SearchNodesRequest> for crate::api::SearchQuery {
 /// does not match the method's declared shape is a 400 `badRequest`; absent
 /// params deserialize from an empty object, so `{}`-shaped methods accept
 /// both an empty body and `{}`.
-pub(crate) fn parse<P: serde::de::DeserializeOwned>(body: Option<&[u8]>) -> Result<P, RpcError> {
+pub(crate) fn parse<P: serde::de::DeserializeOwned>(
+    body: Option<&[u8]>,
+) -> Result<P, ProtocolError> {
     let value = match body {
         Some(bytes) => serde_json::from_slice::<Value>(bytes),
         None => Ok(Value::Object(serde_json::Map::new())),
     };
-    let value = value.map_err(|e| RpcError::protocol(400, kinds::BAD_REQUEST, e.to_string()))?;
+    let value =
+        value.map_err(|e| ProtocolError::protocol(400, kinds::BAD_REQUEST, e.to_string()))?;
     serde_json::from_value(value)
-        .map_err(|e| RpcError::protocol(400, kinds::BAD_REQUEST, e.to_string()))
+        .map_err(|e| ProtocolError::protocol(400, kinds::BAD_REQUEST, e.to_string()))
 }

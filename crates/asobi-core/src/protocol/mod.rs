@@ -7,7 +7,7 @@
 //! a non-2xx status with `{"kind", "message"}`. This module is transport-free
 //! on purpose — [`dispatch`] takes the graph name, the operation, the raw
 //! body bytes, and the store, and returns either the result JSON or the
-//! [`RpcError`] (status + body). WP4 wraps it in axum; WP5's `RemoteStore`
+//! [`ProtocolError`] (status + body). WP4 wraps it in axum; WP5's `RemoteStore`
 //! speaks the same contract as a client; both stay unit-testable against a
 //! temporary store.
 
@@ -15,7 +15,7 @@ mod error;
 mod operation;
 mod requests;
 
-pub use error::{ErrorBody, RpcError, error_body_to_api};
+pub use error::{ErrorBody, ProtocolError, error_body_to_api};
 pub use operation::Operation;
 pub use requests::{
     AddObservationsRequest, ClaimNextRequest, CreateEntitiesRequest, DeleteEntitiesRequest,
@@ -25,8 +25,8 @@ pub use requests::{
 };
 
 use crate::api::v3::{
-    ApiError, BackendInfo, GraphStore, MaintenanceStore, PurgeRequest, SearchQuery, SearchStore,
-    Stats, TaskStore,
+    ApiError, BackendInfo, GraphStore, MaintenanceStore, PurgeRequest, SearchStore, Stats,
+    TaskStore,
 };
 use serde::Serialize;
 use serde_json::Value;
@@ -35,19 +35,19 @@ use serde_json::Value;
 /// method, and serialize its result.
 ///
 /// Transport-free: no socket, no HTTP types, no panic on bad input — the
-/// [`RpcError`] (status + body) is the complete failure answer, so WP4's
+/// [`ProtocolError`] (status + body) is the complete failure answer, so WP4's
 /// handler is a thin status/body wrapper around whatever this returns.
 pub async fn dispatch<S>(
     store: &S,
     graph: &str,
     operation_name: &str,
     body: Option<&[u8]>,
-) -> Result<Value, RpcError>
+) -> Result<Value, ProtocolError>
 where
     S: GraphStore + SearchStore + MaintenanceStore + TaskStore,
 {
     let Some(operation) = Operation::parse(operation_name) else {
-        return Err(RpcError::protocol(
+        return Err(ProtocolError::protocol(
             404,
             error::kinds::UNKNOWN_OPERATION,
             format!("unknown operation: {operation_name}"),
@@ -61,13 +61,13 @@ async fn handle<S>(
     graph: &str,
     operation: Operation,
     body: Option<&[u8]>,
-) -> Result<Value, RpcError>
+) -> Result<Value, ProtocolError>
 where
     S: GraphStore + SearchStore + MaintenanceStore + TaskStore,
 {
-    fn to_value<T: Serialize>(value: T) -> Result<Value, RpcError> {
+    fn to_value<T: Serialize>(value: T) -> Result<Value, ProtocolError> {
         serde_json::to_value(value).map_err(|e| {
-            RpcError::protocol(500, "backend", format!("result failed to serialize: {e}"))
+            ProtocolError::protocol(500, "backend", format!("result failed to serialize: {e}"))
         })
     }
 
@@ -166,12 +166,14 @@ where
             to_value(store.read_graph_full().await?)
         }
         Operation::GraphOpenNodes => {
-            let request: crate::api::OpenNodes = requests::parse(body)?;
-            to_value(store.open_nodes(request).await?)
+            // Parse the wire body (whose omitted fields take the CLI's
+            // defaults), then convert: the domain type has no wire defaults.
+            let request: requests::OpenNodesRequest = requests::parse(body)?;
+            to_value(store.open_nodes(request.into()).await?)
         }
         Operation::SearchNodes => {
-            let request: SearchQuery = requests::parse(body)?;
-            to_value(store.search_nodes(request).await?)
+            let request: requests::SearchNodesRequest = requests::parse(body)?;
+            to_value(store.search_nodes(request.into()).await?)
         }
 
         Operation::MaintenanceStats => {
@@ -228,7 +230,7 @@ where
 /// Params and result schemas for every method, published by `asobi schema`.
 /// Walks [`Operation::all`] so a new method cannot be added half-way: forgetting
 /// its row here fails the round-trip test that consumes this list.
-pub fn method_schemas() -> Vec<(&'static str, Value, Value)> {
+pub fn operation_schemas() -> Vec<(&'static str, Value, Value)> {
     fn schema<T: schemars::JsonSchema>() -> Value {
         serde_json::to_value(schemars::schema_for!(T)).expect("schemas must serialize to JSON")
     }

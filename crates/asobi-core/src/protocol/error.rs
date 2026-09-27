@@ -19,17 +19,17 @@ pub mod kinds {
 
 /// One RPC failure: the HTTP status to answer with and the JSON body.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RpcError {
+pub struct ProtocolError {
     pub status: u16,
     pub kind: String,
     pub message: String,
 }
 
-impl RpcError {
+impl ProtocolError {
     /// A protocol failure (unknown method, bad params, wrong HTTP verb).
     /// It has no `ApiError` behind it, so there is nothing to rebuild.
     pub fn protocol(status: u16, kind: &'static str, message: impl Into<String>) -> Self {
-        RpcError {
+        ProtocolError {
             status,
             kind: kind.to_string(),
             message: message.into(),
@@ -44,7 +44,7 @@ pub struct ErrorBody {
     pub message: String,
 }
 
-impl RpcError {
+impl ProtocolError {
     pub fn body(&self) -> ErrorBody {
         ErrorBody {
             kind: self.kind.clone(),
@@ -66,9 +66,9 @@ impl ApiError {
         }
     }
 
-    pub fn to_rpc_error(&self) -> RpcError {
+    pub fn to_rpc_error(&self) -> ProtocolError {
         let (status, kind) = self.rpc_shape();
-        RpcError {
+        ProtocolError {
             status,
             kind: kind.to_string(),
             message: self.to_string(),
@@ -96,7 +96,7 @@ pub fn error_body_to_api(body: &ErrorBody) -> Option<ApiError> {
     })
 }
 
-impl From<ApiError> for RpcError {
+impl From<ApiError> for ProtocolError {
     fn from(error: ApiError) -> Self {
         error.to_rpc_error()
     }

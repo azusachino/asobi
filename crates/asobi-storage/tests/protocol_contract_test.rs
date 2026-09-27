@@ -60,14 +60,14 @@ async fn err(
     store: &SqliteStore,
     operation: &str,
     body: Option<&[u8]>,
-) -> asobi_core::protocol::RpcError {
+) -> asobi_core::protocol::ProtocolError {
     dispatch(store, "asobi", operation, body)
         .await
         .expect_err("expected an error")
 }
 
 #[tokio::test]
-async fn every_method_round_trips() {
+async fn every_operation_round_trips() {
     let (_dir, store) = seeded_store().await;
 
     // server.hello
@@ -138,6 +138,29 @@ async fn every_method_round_trips() {
     )
     .await;
     assert_eq!(search["entities"][0]["name"], "project:asobi");
+
+    // And the default is the CLI's 10, not storage's 100 for a zero limit.
+    store
+        .create_entities(
+            (0..15)
+                .map(|i| EntityInput {
+                    name: format!("project:many-{i}"),
+                    entity_type: "project".into(),
+                    observations: vec!["manymatch".into()],
+                })
+                .collect(),
+        )
+        .await
+        .unwrap();
+    let many = dispatch(
+        &store,
+        "asobi",
+        "search.nodes",
+        Some(br#"{"query": "manymatch"}"#),
+    )
+    .await
+    .unwrap();
+    assert_eq!(many["entities"].as_array().unwrap().len(), 10);
 
     // maintenance
     let stats = ok(&store, "maintenance.stats", json!({})).await;
@@ -247,7 +270,7 @@ async fn every_api_error_variant_maps_to_its_status_kind_and_back() {
 }
 
 #[tokio::test]
-async fn unknown_method_is_404_unknown_method() {
+async fn unknown_operation_is_404_unknown_operation() {
     let (_dir, store) = seeded_store().await;
     let error = err(&store, "graph.frobnicate", Some(b"{}".as_slice())).await;
     assert_eq!(error.status, 404);
@@ -268,7 +291,7 @@ async fn malformed_body_is_400_bad_request() {
 }
 
 #[tokio::test]
-async fn wrong_params_shape_is_400_bad_request() {
+async fn wrong_request_shape_is_400_bad_request() {
     let (_dir, store) = seeded_store().await;
     // createEntities needs `entities`; a string is not that shape.
     let error = err(&store, "graph.createEntities", Some(br#""nope""#)).await;
@@ -305,8 +328,8 @@ async fn dispatch_parses_raw_json_bodies_not_only_values() {
 /// The schema publisher covers every method: a method added without a schema
 /// row breaks this assertion.
 #[test]
-fn method_schemas_cover_every_method() {
-    let schemas = asobi_core::protocol::method_schemas();
+fn operation_schemas_cover_every_operation() {
+    let schemas = asobi_core::protocol::operation_schemas();
     assert_eq!(schemas.len(), Operation::all().count());
     for (name, request, result) in schemas {
         assert!(request.is_object(), "{name} request schema missing");
@@ -333,15 +356,58 @@ async fn omitted_optional_fields_take_the_cli_defaults() {
     .unwrap();
     assert_eq!(search["entities"][0]["name"], "project:asobi");
 
-    // openNodes with no `observationLimit`: defaults to the CLI's 200, so the
-    // eager read carries observations instead of an empty trail.
+    // openNodes with no `observationLimit`: defaults to `asobi show`'s 20
+    // most recent observations, with the true total still reported.
+    store
+        .create_entities(vec![EntityInput {
+            name: "project:long-trail".into(),
+            entity_type: "project".into(),
+            observations: (0..25).map(|i| format!("note {i}")).collect(),
+        }])
+        .await
+        .unwrap();
     let nodes = dispatch(
         &store,
         "asobi",
         "graph.openNodes",
-        Some(br#"{"names": ["project:asobi"]}"#),
+        Some(br#"{"names": ["project:long-trail"]}"#),
     )
     .await
     .unwrap();
-    assert_eq!(nodes["entities"][0]["observationCount"], 1);
+    assert_eq!(nodes["entities"][0]["observationCount"], 25);
+    assert_eq!(
+        nodes["entities"][0]["observations"]
+            .as_array()
+            .unwrap()
+            .len(),
+        20
+    );
+}
+
+#[tokio::test]
+async fn claims_require_an_agent() {
+    // Who holds a claim is never guessed on the wire: no default agent.
+    let (_dir, store) = seeded_store().await;
+    for (operation, body) in [
+        (
+            "tasks.dispatch",
+            br#"{"task": "project:asobi:task-1"}"#.as_slice(),
+        ),
+        ("tasks.claimNext", br#"{}"#.as_slice()),
+    ] {
+        let error = dispatch(&store, "asobi", operation, Some(body))
+            .await
+            .unwrap_err();
+        assert_eq!(error.status, 400, "{operation}");
+    }
+    // Nothing was claimed.
+    let task = dispatch(
+        &store,
+        "asobi",
+        "graph.openNodes",
+        Some(br#"{"names": ["project:asobi:task-1"]}"#),
+    )
+    .await
+    .unwrap();
+    assert_eq!(task["entities"][0]["truths"]["status"], "READY_TO_DISPATCH");
 }

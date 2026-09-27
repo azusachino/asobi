@@ -28,7 +28,7 @@ pub enum ApiError {
 pub type ApiResult<T> = std::result::Result<T, ApiError>;
 
 #[derive(Debug, Clone, Default, schemars::JsonSchema, serde::Serialize, serde::Deserialize)]
-#[serde(default, rename_all = "camelCase")]
+#[serde(rename_all = "camelCase")]
 pub struct OpenNodes {
     pub names: Vec<String>,
     pub with_ids: bool,
@@ -44,7 +44,7 @@ pub struct OpenNodes {
 }
 
 #[derive(Debug, Clone, Default, schemars::JsonSchema, serde::Serialize, serde::Deserialize)]
-#[serde(default, rename_all = "camelCase")]
+#[serde(rename_all = "camelCase")]
 pub struct SearchQuery {
     pub query: String,
     pub limit: usize,
