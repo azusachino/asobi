@@ -10,6 +10,3 @@ pub use anyhow::{Result, anyhow, bail};
 pub mod storage;
 
 pub use storage::{DEFAULT_ABANDON_DAYS, DEFAULT_RETENTION_DAYS, SqliteStore};
-
-/// The selected storage provider.
-pub type Storage = SqliteStore;

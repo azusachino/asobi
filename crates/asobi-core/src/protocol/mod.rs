@@ -20,8 +20,8 @@ pub use operation::Operation;
 pub use requests::{
     AddObservationsRequest, ClaimNextRequest, CreateEntitiesRequest, DeleteEntitiesRequest,
     DeleteObservationByIdRequest, DeleteObservationsRequest, DispatchRequest, EmptyRequest,
-    RelationsRequest, TruthDeleteRequest, TruthUpsertRequest, UpdateObservationByIdRequest,
-    UpdateObservationRequest,
+    OpenNodesRequest, RelationsRequest, SearchNodesRequest, TruthDeleteRequest, TruthUpsertRequest,
+    UpdateObservationByIdRequest, UpdateObservationRequest,
 };
 
 use crate::api::v3::{

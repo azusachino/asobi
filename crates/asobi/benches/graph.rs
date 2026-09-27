@@ -1,5 +1,5 @@
 use asobi_core::api::{GraphStore, MaintenanceStore, OpenNodes, SearchQuery, SearchStore};
-use asobi_storage::Storage;
+use asobi_storage::SqliteStore;
 use std::env;
 use std::hint::black_box;
 use std::time::Instant;
@@ -19,7 +19,7 @@ fn main() {
 
 async fn run(count: usize) {
     let dir = tempdir().expect("tempdir");
-    let store = Storage::open_at(&dir.path().join("graph.db"))
+    let store = SqliteStore::open_at(&dir.path().join("graph.db"))
         .await
         .expect("open storage");
     seed(&store, count).await;

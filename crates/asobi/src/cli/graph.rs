@@ -5,7 +5,7 @@ use asobi_core::api::{GraphStore, MaintenanceStore, OpenNodes, SearchQuery, Sear
 use tracing::info;
 
 pub(crate) async fn run(
-    backend: &asobi_storage::Storage,
+    backend: &crate::storage::Storage,
     command: Commands,
     json: bool,
 ) -> Result<()> {

@@ -1,6 +1,6 @@
 use asobi_core::api::{GraphStore, TaskStore};
 use asobi_core::model::EntityInput;
-use asobi_storage::Storage;
+use asobi_storage::SqliteStore;
 use criterion::{Criterion, criterion_group, criterion_main};
 use std::hint::black_box;
 use tempfile::tempdir;
@@ -12,7 +12,7 @@ fn task_hot_paths(c: &mut Criterion) {
         .build()
         .expect("tokio runtime");
     let store = runtime.block_on(async {
-        let store = Storage::open_at(&dir.path().join("tasks.db"))
+        let store = SqliteStore::open_at(&dir.path().join("tasks.db"))
             .await
             .expect("open storage");
         store
