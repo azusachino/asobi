@@ -263,3 +263,16 @@ async fn graphs_land_in_the_data_directory_the_server_was_given() {
     seed(server.local_addr, "gamma", "gamma:task-1").await;
     assert!(parsed.data_dir.join("gamma.db").is_file());
 }
+
+#[tokio::test]
+async fn an_empty_body_is_an_absent_body() {
+    // A POST with no body at all (what curl or xh send by default) must
+    // work for operations whose request is empty, not fail to parse "".
+    let (_dir, addr, _server) = start_server().await;
+    let (status, hello) = post(addr, "/v3/graphs/alpha/server.hello", "").await;
+    assert_eq!(status, 200, "{hello}");
+    assert_eq!(hello["stateId"], "alpha");
+    // Operations that need fields still reject an empty body.
+    let (status, body) = post(addr, "/v3/graphs/alpha/tasks.claimNext", "").await;
+    assert_eq!(status, 400, "{body}");
+}

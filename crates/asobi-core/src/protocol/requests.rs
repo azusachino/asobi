@@ -185,7 +185,9 @@ impl From<SearchNodesRequest> for crate::api::SearchQuery {
 pub(crate) fn parse<P: serde::de::DeserializeOwned>(
     body: Option<&[u8]>,
 ) -> Result<P, ProtocolError> {
-    let value = match body {
+    // An empty (or whitespace-only) body is an absent body: HTTP frameworks
+    // hand over zero bytes, not "no body", for a POST without one.
+    let value = match body.filter(|bytes| !bytes.iter().all(u8::is_ascii_whitespace)) {
         Some(bytes) => serde_json::from_slice::<Value>(bytes),
         None => Ok(Value::Object(serde_json::Map::new())),
     };
