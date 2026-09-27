@@ -1,6 +1,6 @@
 # Asobi architecture
 
-Asobi is a focused, synchronous knowledge-graph CLI. `main.rs` is only the process entry point; command routing, API contracts, storage, tasks, and compaction live in their own modules.
+Asobi is a focused, single-command-at-a-time knowledge-graph CLI on an async core. `main.rs` is only the process entry point; command routing, API contracts, storage, tasks, and compaction live in their own modules.
 
 ```text
 CLI commands
@@ -16,7 +16,7 @@ SQLite + WAL + FTS5
 
 `src/api/v2.rs` contains domain requests, results, errors, and capability traits. It does not expose SQL statements, connection handles, or SQLite row types. The application composes `SqliteStore`, while commands depend only on the API traits.
 
-The API is synchronous because this is a local SQLite CLI: each operation is a short transaction, and SQLite's WAL mode allows readers to proceed while a writer commits. The task dispatcher claims a READY task and records its claim observation in one immediate transaction.
+The API is async (v3, Send futures on tokio) so the same store traits serve both the CLI's current-thread runtime and the server's multi-threaded runtime (ADR 0008). Each operation is still a short transaction, and SQLite's WAL mode lets readers proceed while a writer commits. The task dispatcher claims a READY task and records its claim observation in one immediate transaction.
 
 ## SQLite storage
 

@@ -24,7 +24,7 @@ So: when you change the code, ask whether this file states something that is now
 
 ## Stack and layout
 
-Rust 2024, Clap, tracing, rusqlite with bundled SQLite/FTS5, and Python scripts run through `uv`.
+Rust 2024, Clap, tracing, sqlx (bundled SQLite/FTS5) on tokio, and Python scripts run through `uv`.
 
 The layout worth knowing is the boundary, not the file list:
 
@@ -53,7 +53,7 @@ Run `make check` before committing. Benchmarks compile as part of it; they execu
 
 ## Conventions
 
-- Storage operations are synchronous, over immediate SQLite transactions.
+- Storage operations are async, over sqlx; mutations run in `BEGIN IMMEDIATE` transactions.
 - Commands depend on `api` traits, never on a storage type.
 - Status is a truth; observations record the transition trail.
 - Tests isolate with a temporary `ASOBI_DATABASE_URL`, and run serially when they touch process-wide environment variables.

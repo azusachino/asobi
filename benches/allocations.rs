@@ -12,8 +12,18 @@ fn main() {
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(1_000);
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("tokio runtime");
+    runtime.block_on(run(count));
+}
+
+async fn run(count: usize) {
     let dir = tempdir().expect("tempdir");
-    let store = Storage::open_at(&dir.path().join("allocations.db")).expect("open storage");
+    let store = Storage::open_at(&dir.path().join("allocations.db"))
+        .await
+        .expect("open storage");
     store
         .create_entities(
             (0..count)
@@ -24,6 +34,7 @@ fn main() {
                 })
                 .collect(),
         )
+        .await
         .expect("seed");
     let _profiler = dhat::Profiler::new_heap();
     black_box(
@@ -33,6 +44,7 @@ fn main() {
                 limit: count,
                 filters: vec![],
             })
+            .await
             .expect("search"),
     );
     black_box(
@@ -41,6 +53,7 @@ fn main() {
                 names: vec!["entity-10".into()],
                 ..Default::default()
             })
+            .await
             .expect("open"),
     );
 }

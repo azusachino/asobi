@@ -4,6 +4,10 @@
 
 ### Changed
 
+- **Async storage on sqlx; `api::v2` replaced by `api::v3` (breaking)** ([ADR 0008](docs/decisions/0008-async-storage-on-sqlx.md)). The four capability traits now have `async fn` methods with `Send` futures; `API_VERSION` is 3. `SqliteStore` runs on a `SqlitePool` with runtime-checked queries; every CLI command executes on a single-threaded tokio runtime (the server's multi-threaded runtime calls the same store directly). Behaviour and command output are unchanged.
+- **`rusqlite` is gone; `sqlx` is the storage layer.** The bundled SQLite build keeps FTS5/BM25 search, WAL, foreign keys, the bounded `ASOBI_BUSY_TIMEOUT`, and the activity triggers.
+- **The schema baseline moved to `migrations/0001_baseline.sql`, applied by `sqlx::migrate!`.** Version tracking moves from `PRAGMA user_version` to sqlx's `_sqlx_migrations` table; new files carry `user_version 0`. The pre-0.8 refusal is unchanged: a read-only connection checks `user_version` before the pool opens, and a refused file stays byte-for-byte untouched.
+- Task claims and the abandonment sweep still run in `BEGIN IMMEDIATE` transactions, so the concurrency guarantees (a task is never claimed twice) hold unchanged.
 - **Clean schema baseline: schema 9, pre-0.8 graph files refused** ([ADR 0007](docs/decisions/0007-clean-schema-baseline.md)). A new database is created directly at schema 9; the upgrade chain (`upgrade_to_v5`–`v7`, the v8 index rebuild, and the legacy MCP-memory/libSQL table knowledge behind them) is deleted. Opening a file whose `user_version` is not 9 fails with an error naming the path, saying it predates 0.8 (or is newer), and telling you to move it aside — the file is not modified, so deciding is safe. **Every existing local graph must be moved aside once, deliberately; nothing is carried into 0.8.**
 - `asobi_entities.updated_at` is now `last_activity`, kept current by triggers on observation and truth insert/update/delete (relations do not count). Retention and abandonment read the column instead of recomputing a `MAX` over three sources per entity, so the definition of activity lives in one place: the schema.
 
