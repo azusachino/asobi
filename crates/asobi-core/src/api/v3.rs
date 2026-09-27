@@ -117,16 +117,6 @@ pub struct BackendHealth {
     pub detail: Option<String>,
 }
 
-#[derive(Debug, Clone, schemars::JsonSchema, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct BackendInfo {
-    pub backend: String,
-    pub api_version: u32,
-    pub schema_version: u32,
-    pub state_id: String,
-    pub capabilities: BackendCapabilities,
-}
-
 pub trait GraphStore {
     fn create_entities(
         &self,

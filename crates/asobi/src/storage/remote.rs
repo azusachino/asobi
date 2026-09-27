@@ -1,10 +1,10 @@
 //! HTTP implementation of the v3 traits (ADR 0005). One `reqwest::Client`
-//! belongs to one process/store and is reused for the handshake and calls.
+//! belongs to one process/store and is reused for the reachability probe and calls.
 
 use asobi_core::api::v3::{
-    API_VERSION, ApiError, ApiResult, BackendCapabilities, BackendHealth, BackendInfo, GraphStore,
-    MaintenanceStore, OpenNodes, PurgeReport, PurgeRequest, SearchQuery, SearchStore, Stats,
-    StorageLocation, TaskStore,
+    ApiError, ApiResult, BackendCapabilities, BackendHealth, GraphStore, MaintenanceStore,
+    OpenNodes, PurgeReport, PurgeRequest, SearchQuery, SearchStore, Stats, StorageLocation,
+    TaskStore,
 };
 use asobi_core::model::{EntityInput, Graph, ObservationDeletion, ObservationInput, RelationInput};
 use asobi_core::protocol::{
@@ -18,20 +18,7 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 use std::time::Duration;
 
-#[derive(Debug, thiserror::Error)]
-#[error("{message}")]
-pub struct RemoteError {
-    pub error: ApiError,
-    pub message: String,
-    transport_failure: bool,
-}
-
-#[derive(Debug)]
-pub enum ConnectError {
-    Unreachable(String),
-    Failure(RemoteError),
-}
-
+#[derive(Clone)]
 pub struct RemoteStore {
     client: Client,
     base: String,
@@ -39,112 +26,65 @@ pub struct RemoteStore {
 }
 
 impl RemoteStore {
-    pub async fn connect(remote: String, graph: String) -> Result<Self, ConnectError> {
-        let base = remote.trim_end_matches('/').to_string();
+    /// Build the per-process HTTP client without making a request. The first
+    /// actual operation is the liveness probe; callers decide whether it is
+    /// safe to fall back before running a write.
+    pub fn new(remote: String, graph: String) -> ApiResult<Self> {
         let client = Client::builder()
             .connect_timeout(Duration::from_secs(2))
             .pool_max_idle_per_host(1)
             .build()
-            .map_err(|e| {
-                ConnectError::Failure(RemoteError {
-                    error: ApiError::Backend(e.to_string()),
-                    message: e.to_string(),
-                    transport_failure: false,
-                })
-            })?;
-        let store = Self {
+            .map_err(|error| ApiError::Backend(error.to_string()))?;
+        Ok(Self {
             client,
-            base,
+            base: remote.trim_end_matches('/').to_string(),
             graph,
-        };
-        let hello: BackendInfo = match tokio::time::timeout(
-            Duration::from_secs(2),
-            store.call("server.hello", &EmptyRequest {}),
-        )
-        .await
-        {
-            Err(_) => {
-                return Err(ConnectError::Unreachable(
-                    "server.hello timed out after 2 seconds".to_string(),
-                ));
-            }
-            Ok(Ok(hello)) => hello,
-            Ok(Err(error)) if error.transport_failure => {
-                return Err(ConnectError::Unreachable(error.message));
-            }
-            Ok(Err(error)) => return Err(ConnectError::Failure(error)),
-        };
-        if hello.api_version != API_VERSION {
-            let message = format!(
-                "remote API version mismatch: server is {}, this asobi requires {}",
-                hello.api_version, API_VERSION
-            );
-            return Err(ConnectError::Failure(RemoteError {
-                error: ApiError::Unsupported("remote API version mismatch"),
-                message,
-                transport_failure: false,
-            }));
-        }
-        Ok(store)
+        })
     }
 
     async fn call<T: DeserializeOwned>(
         &self,
         operation: &str,
         body: &impl Serialize,
-    ) -> Result<T, RemoteError> {
+    ) -> ApiResult<T> {
         let url = format!("{}/v3/graphs/{}/{operation}", self.base, self.graph);
-        let response = self.client.post(url).json(body).send().await.map_err(|e| {
-            let message = format!("remote server request failed: {e}");
-            let transport_failure = e.is_connect() || e.is_timeout();
-            RemoteError {
-                error: if transport_failure {
-                    ApiError::Unavailable(message.clone())
-                } else {
-                    ApiError::Invalid(message.clone())
-                },
-                message,
-                transport_failure,
-            }
-        })?;
+        let response = self
+            .client
+            .post(url)
+            .json(body)
+            .send()
+            .await
+            .map_err(|error| {
+                ApiError::Unavailable(format!("remote server request failed: {error}"))
+            })?;
         let status = response.status();
-        let bytes = response.bytes().await.map_err(|e| {
-            let message = format!("failed to read remote response: {e}");
-            RemoteError {
-                error: ApiError::Unavailable(message.clone()),
-                message,
-                transport_failure: true,
-            }
+        let bytes = response.bytes().await.map_err(|error| {
+            ApiError::Unavailable(format!("failed to read remote response: {error}"))
         })?;
+
+        if matches!(status.as_u16(), 502..=504) {
+            return Err(ApiError::Unavailable(format!(
+                "remote gateway returned HTTP {status}"
+            )));
+        }
         if status.is_success() {
-            serde_json::from_slice(&bytes).map_err(|e| {
-                let message = format!("invalid response from remote server: {e}");
-                RemoteError {
-                    error: ApiError::Backend(message.clone()),
-                    message,
-                    transport_failure: false,
-                }
-            })
-        } else {
-            let body: ErrorBody = serde_json::from_slice(&bytes).unwrap_or(ErrorBody {
-                kind: "backend".to_string(),
-                message: format!("remote server returned HTTP {status}"),
-            });
-            let error = error_body_to_api(&body).unwrap_or_else(|| match body.kind.as_str() {
+            return serde_json::from_slice(&bytes)
+                .map_err(|_| ApiError::Backend("server does not speak API v3".to_string()));
+        }
+
+        let body: ErrorBody = serde_json::from_slice(&bytes)
+            .map_err(|_| ApiError::Backend("server does not speak API v3".to_string()))?;
+        Err(
+            error_body_to_api(&body).unwrap_or_else(|| match body.kind.as_str() {
                 "notFound" | "unknownOperation" => ApiError::NotFound(body.message.clone()),
                 "conflict" => ApiError::Conflict(body.message.clone()),
                 "invalid" => ApiError::Invalid(body.message.clone()),
                 "unsupported" => ApiError::Unsupported("remote operation unsupported"),
                 "unavailable" => ApiError::Unavailable(body.message.clone()),
                 "badRequest" => ApiError::Invalid(body.message.clone()),
-                _ => ApiError::Backend(body.message.clone()),
-            });
-            Err(RemoteError {
-                error,
-                message: body.message,
-                transport_failure: false,
-            })
-        }
+                _ => ApiError::Backend(body.message),
+            }),
+        )
     }
 
     async fn result<T: DeserializeOwned>(
@@ -152,9 +92,7 @@ impl RemoteStore {
         operation: &str,
         body: &impl Serialize,
     ) -> ApiResult<T> {
-        self.call(operation, body)
-            .await
-            .map_err(|error| error.error)
+        self.call(operation, body).await
     }
 }
 

@@ -481,7 +481,7 @@ graph = "workstation"
 
 `ASOBI_REMOTE` and `ASOBI_GRAPH` override those keys. When `remote` is set, all graph and task calls go to that server; local `data_dir` and `ASOBI_DATABASE_URL` are not used. The `observation_limit` and `topics_dir` stay client-side, so `compact` writes Markdown locally.
 
-The CLI checks `server.hello` once before its first remote operation and refuses a server with a different API version. It reuses one HTTP client/connection for the command. If the server cannot be reached during that handshake (about two seconds), that command uses the local graph instead and prints a warning on stderr: its writes will not reach the server and are not merged later. A failure after a successful handshake is an error; a command never switches backend mid-run. Use a build with the `remote` feature (`cargo install asobi --features remote`); a local-only build fails clearly if it finds `remote` configured.
+The API version is encoded in the `/v3` URL; there is no separate handshake. The first remote operation is the reachability probe (a write command first makes a read-only `maintenance.location` call). If that call cannot connect, times out after about two seconds, or receives gateway HTTP 502/503/504, the process warns on stderr and uses the local graph for the whole command; its writes will not reach the server and are not merged later. Once any remote call succeeds, a later failure is an error and never switches backend mid-command. A non-protocol response fails with `server does not speak API v3`. The process reuses one HTTP client/connection. Use a build with the `remote` feature (`cargo install asobi --features remote`); a local-only build fails clearly if it finds `remote` configured.
 
 ## The graph server: `asobi-server`
 

@@ -269,10 +269,18 @@ async fn an_empty_body_is_an_absent_body() {
     // A POST with no body at all (what curl or xh send by default) must
     // work for operations whose request is empty, not fail to parse "".
     let (_dir, addr, _server) = start_server().await;
-    let (status, hello) = post(addr, "/v3/graphs/alpha/server.hello", "").await;
-    assert_eq!(status, 200, "{hello}");
-    assert_eq!(hello["stateId"], "alpha");
+    let (status, stats) = post(addr, "/v3/graphs/alpha/maintenance.stats", "").await;
+    assert_eq!(status, 200, "{stats}");
+    assert_eq!(stats["entities"], 0);
     // Operations that need fields still reject an empty body.
     let (status, body) = post(addr, "/v3/graphs/alpha/tasks.claimNext", "").await;
     assert_eq!(status, 400, "{body}");
+}
+
+#[tokio::test]
+async fn healthz_is_live_without_opening_a_graph() {
+    let (dir, addr, _server) = start_server().await;
+    let (status, _, _) = call(addr, "GET", "/healthz", "").await;
+    assert_eq!(status, 200);
+    assert!(std::fs::read_dir(dir.path()).unwrap().next().is_none());
 }

@@ -5,8 +5,8 @@
 //! Plain JSON over HTTP, no envelope: `POST /v3/graphs/<graph>/<operation>`
 //! with the request body as the payload answers 200 with the result JSON, or
 //! a non-2xx status with `{"kind", "message"}`. This module is transport-free
-//! on purpose — [`dispatch`] takes the graph name, the operation, the raw
-//! body bytes, and the store, and returns either the result JSON or the
+//! on purpose — [`dispatch`] takes the operation, the raw body bytes, and
+//! the store, and returns either the result JSON or the
 //! [`ProtocolError`] (status + body). WP4 wraps it in axum; WP5's `RemoteStore`
 //! speaks the same contract as a client; both stay unit-testable against a
 //! temporary store.
@@ -25,8 +25,7 @@ pub use requests::{
 };
 
 use crate::api::v3::{
-    ApiError, BackendInfo, GraphStore, MaintenanceStore, PurgeRequest, SearchStore, Stats,
-    TaskStore,
+    ApiError, GraphStore, MaintenanceStore, PurgeRequest, SearchStore, Stats, TaskStore,
 };
 use serde::Serialize;
 use serde_json::Value;
@@ -39,7 +38,6 @@ use serde_json::Value;
 /// handler is a thin status/body wrapper around whatever this returns.
 pub async fn dispatch<S>(
     store: &S,
-    graph: &str,
     operation_name: &str,
     body: Option<&[u8]>,
 ) -> Result<Value, ProtocolError>
@@ -53,12 +51,11 @@ where
             format!("unknown operation: {operation_name}"),
         ));
     };
-    handle(store, graph, operation, body).await
+    handle(store, operation, body).await
 }
 
 async fn handle<S>(
     store: &S,
-    graph: &str,
     operation: Operation,
     body: Option<&[u8]>,
 ) -> Result<Value, ProtocolError>
@@ -72,22 +69,6 @@ where
     }
 
     match operation {
-        Operation::ServerHello => {
-            requests::parse::<requests::EmptyRequest>(body)?;
-            // One SQLite file per graph: the store's location is the state.
-            let location = store.location().await?;
-            let capabilities = store.capabilities().await?;
-            to_value(BackendInfo {
-                backend: capabilities.backend.clone(),
-                api_version: crate::api::API_VERSION,
-                schema_version: location.schema_version,
-                // The graph name identifies the state; server file paths never
-                // leave the server (ADR 0005).
-                state_id: graph.to_string(),
-                capabilities,
-            })
-        }
-
         Operation::GraphCreateEntities => {
             let request: requests::CreateEntitiesRequest = requests::parse(body)?;
             store.create_entities(request.entities).await?;
@@ -241,7 +222,6 @@ pub fn operation_schemas() -> Vec<(&'static str, Value, Value)> {
     }
     Operation::all()
         .map(|operation| match operation {
-            Operation::ServerHello => row::<requests::EmptyRequest, BackendInfo>(operation),
             Operation::GraphCreateEntities => row::<requests::CreateEntitiesRequest, ()>(operation),
             Operation::GraphAddObservations => {
                 row::<requests::AddObservationsRequest, ()>(operation)

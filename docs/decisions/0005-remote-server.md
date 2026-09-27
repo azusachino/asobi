@@ -112,6 +112,7 @@ JSON-RPC 2.0 was considered and not used: its `id`, batches and notifications se
 ### Server behavior
 
 - **Access:** no authentication. The server must only be reachable over the owner's tailnet; exposure is a deployment concern, and binding to a public interface is out of contract.
+- **Request logs:** emit structured method, path, status, and elapsed-time fields for every request, including health probes and routing failures. Do not log query strings or request bodies. Graph-open failures additionally include graph, operation, status, and protocol error details.
 - **Concurrent requests, pooled storage.** Requests are served concurrently from one sqlx pool per graph ([0008](0008-async-storage-on-sqlx.md)). SQLite still has one writer: writes serialise through WAL and the busy timeout, and atomic operations (task claims, abandonment) use `BEGIN IMMEDIATE`.
 - **`reset` is local-only.** Over HTTP it is refused, so an agent on any device cannot wipe a shared graph. Run `asobi reset` on the server host against the file directly when that is intended.
 - **Sweeps run in the background.** The CLI sweeps once per process before its first write; a server process lives for weeks, so `asobi-server` runs the same sweeps (retention, and idle-task abandonment from [0006](0006-tasks-replace-sessions.md)) as a background task on a one-hour interval, over every graph it holds.

@@ -9,7 +9,7 @@
 pub mod v3;
 
 pub use v3::{
-    API_VERSION, ApiError, ApiResult, BackendCapabilities, BackendHealth, BackendInfo, GraphStore,
+    API_VERSION, ApiError, ApiResult, BackendCapabilities, BackendHealth, GraphStore,
     MaintenanceStore, OpenNodes, PurgeCandidate, PurgeReport, PurgeRequest, SearchQuery,
     SearchStore, Stats, StorageLocation, TaskStore,
 };
