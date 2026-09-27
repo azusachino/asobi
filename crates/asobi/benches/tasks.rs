@@ -1,6 +1,6 @@
-use asobi::api::{GraphStore, TaskStore};
-use asobi::model::EntityInput;
-use asobi::storage::Storage;
+use asobi_core::api::{GraphStore, TaskStore};
+use asobi_core::model::EntityInput;
+use asobi_storage::Storage;
 use criterion::{Criterion, criterion_group, criterion_main};
 use std::hint::black_box;
 use tempfile::tempdir;

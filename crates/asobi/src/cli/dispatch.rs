@@ -1,6 +1,6 @@
 use super::commands::{Cli, Commands};
 use super::output::*;
-use crate::api::{MaintenanceStore, PurgeRequest};
+use asobi_core::api::{MaintenanceStore, PurgeRequest};
 use crate::application::AsobiRuntime;
 use anyhow::Result;
 use clap::CommandFactory;

@@ -1,5 +1,5 @@
-use asobi::api::{GraphStore, OpenNodes, SearchQuery, SearchStore};
-use asobi::storage::Storage;
+use asobi_core::api::{GraphStore, OpenNodes, SearchQuery, SearchStore};
+use asobi_storage::Storage;
 use std::env;
 use std::hint::black_box;
 use tempfile::tempdir;
@@ -27,7 +27,7 @@ async fn run(count: usize) {
     store
         .create_entities(
             (0..count)
-                .map(|i| asobi::model::EntityInput {
+                .map(|i| asobi_core::model::EntityInput {
                     name: format!("entity-{i}"),
                     entity_type: "bench".into(),
                     observations: vec![format!("commonterm observation {i}")],

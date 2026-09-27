@@ -1,4 +1,4 @@
-use crate::api::{GraphStore, SearchStore, TaskStore};
+use asobi_core::api::{GraphStore, SearchStore, TaskStore};
 use anyhow::Result;
 use clap::Subcommand;
 use schemars::JsonSchema;
@@ -101,7 +101,7 @@ pub async fn run(
                 .map(|(idx, _)| format!("{epic}:task-{}", idx + 1))
                 .collect();
             let existing = backend
-                .open_nodes(crate::api::OpenNodes {
+                .open_nodes(asobi_core::api::OpenNodes {
                     names: std::iter::once(epic.clone())
                         .chain(child_names.iter().cloned())
                         .collect(),
@@ -112,7 +112,7 @@ pub async fn run(
                 anyhow::bail!("plan target already exists: {}", existing.entities[0].name);
             }
             backend
-                .create_entities(vec![crate::model::EntityInput {
+                .create_entities(vec![asobi_core::model::EntityInput {
                     name: epic.clone(),
                     entity_type: "task".to_string(),
                     observations: vec![format!("scope: {}", objective)],
@@ -124,7 +124,7 @@ pub async fn run(
                     child_names
                         .iter()
                         .zip(&tasks)
-                        .map(|(name, title)| crate::model::EntityInput {
+                        .map(|(name, title)| asobi_core::model::EntityInput {
                             name: name.clone(),
                             entity_type: "task".to_string(),
                             observations: vec![format!("plan: {title}")],
@@ -143,7 +143,7 @@ pub async fn run(
                 .create_relations(
                     child_names
                         .iter()
-                        .map(|name| crate::model::RelationInput {
+                        .map(|name| asobi_core::model::RelationInput {
                             from: name.clone(),
                             to: epic.clone(),
                             relation_type: "part_of".to_string(),
@@ -153,7 +153,7 @@ pub async fn run(
                 .await?;
             if json {
                 let graph = backend
-                    .open_nodes(crate::api::OpenNodes {
+                    .open_nodes(asobi_core::api::OpenNodes {
                         names: vec![epic_name],
                         expand: vec!["part_of".to_string()],
                         ..Default::default()
@@ -167,7 +167,7 @@ pub async fn run(
         Some(TasksCommands::List { epic, all }) => {
             let graph = if let Some(epic) = epic {
                 let graph = backend
-                    .open_nodes(crate::api::OpenNodes {
+                    .open_nodes(asobi_core::api::OpenNodes {
                         names: vec![epic.clone()],
                         expand: vec!["part_of".to_string()],
                         ..Default::default()
@@ -231,7 +231,7 @@ pub async fn run(
             status,
         }) => {
             let graph = backend
-                .open_nodes(crate::api::OpenNodes {
+                .open_nodes(asobi_core::api::OpenNodes {
                     names: vec![task.clone()],
                     ..Default::default()
                 })
@@ -252,7 +252,7 @@ pub async fn run(
             if !notes.is_empty() {
                 backend
                     .add_observations(
-                        vec![crate::model::ObservationInput {
+                        vec![asobi_core::model::ObservationInput {
                             entity_name: task.clone(),
                             contents: notes,
                         }],
@@ -273,7 +273,7 @@ pub async fn run(
         }
         Some(TasksCommands::Close { epic, lessons }) => {
             let graph = backend
-                .open_nodes(crate::api::OpenNodes {
+                .open_nodes(asobi_core::api::OpenNodes {
                     names: vec![epic.clone()],
                     expand: vec!["part_of".to_string()],
                     ..Default::default()
@@ -299,7 +299,7 @@ pub async fn run(
             let project = epic.split(':').next().unwrap_or(&epic).to_string();
             if !lessons.is_empty() && !graph.entities.iter().any(|entity| entity.name == project) {
                 backend
-                    .create_entities(vec![crate::model::EntityInput {
+                    .create_entities(vec![asobi_core::model::EntityInput {
                         name: project.clone(),
                         entity_type: "project".to_string(),
                         observations: vec![],
@@ -309,7 +309,7 @@ pub async fn run(
             if !lessons.is_empty() {
                 backend
                     .add_observations(
-                        vec![crate::model::ObservationInput {
+                        vec![asobi_core::model::ObservationInput {
                             entity_name: project,
                             contents: lessons,
                         }],
@@ -320,7 +320,7 @@ pub async fn run(
             backend.truth_upsert(&epic, "status", "DONE").await?;
             backend
                 .add_observations(
-                    vec![crate::model::ObservationInput {
+                    vec![asobi_core::model::ObservationInput {
                         entity_name: epic.clone(),
                         contents: vec![format!(
                             "outcome: closed {}",
@@ -345,7 +345,7 @@ pub async fn run(
 }
 
 fn observation_limit() -> usize {
-    let paths = crate::paths::AsobiPaths::resolve();
+    let paths = asobi_core::paths::AsobiPaths::resolve();
     std::env::var("ASOBI_OBSERVATION_LIMIT")
         .ok()
         .and_then(|value| value.parse::<usize>().ok())

@@ -1,4 +1,4 @@
-use asobi::normalize::normalize_key;
+use asobi_core::normalize::normalize_key;
 use std::time::Instant;
 
 fn main() {

@@ -5,6 +5,8 @@
 //! Implementation detail of the `asobi` crate; no stability promise beyond
 //! matching its version.
 
+pub use anyhow::{Result, anyhow, bail};
+
 pub mod storage;
 
 pub use storage::{DEFAULT_ABANDON_DAYS, DEFAULT_RETENTION_DAYS, SqliteStore};

@@ -7,6 +7,9 @@ authors.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[dev-dependencies]
+tempfile = { workspace = true }
+
 [dependencies]
 schemars = { workspace = true }
 serde = { workspace = true }

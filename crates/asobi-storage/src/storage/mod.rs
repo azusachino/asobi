@@ -2,5 +2,5 @@
 
 mod sqlite;
 
-pub use sqlite::{DEFAULT_RETENTION_DAYS, SqliteStore};
+pub use sqlite::{DEFAULT_ABANDON_DAYS, DEFAULT_RETENTION_DAYS, SqliteStore};
 pub type Storage = SqliteStore;

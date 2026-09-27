@@ -1,12 +1,12 @@
-use crate::api::GraphStore;
-use crate::model::EntityOutput;
-use crate::normalize::slugify;
+use asobi_core::api::GraphStore;
+use asobi_core::model::EntityOutput;
+use asobi_core::normalize::slugify;
 use anyhow::Result;
 use std::fmt::Write as _;
 use std::io::Write as _;
 
 pub async fn sync_graph_to_markdown(graph_store: &impl GraphStore) -> Result<usize> {
-    let paths = crate::paths::AsobiPaths::resolve();
+    let paths = asobi_core::paths::AsobiPaths::resolve();
     let topics_dir = paths.topics_dir;
     if !topics_dir.exists() {
         std::fs::create_dir_all(&topics_dir)?;
@@ -81,7 +81,7 @@ fn render_frontmatter(
     out: &mut String,
     entity: &EntityOutput,
     slug: &str,
-    relations: &[crate::model::RelationInput],
+    relations: &[asobi_core::model::RelationInput],
     compacted: &str,
 ) {
     use crate::frontmatter::quote;
@@ -132,7 +132,7 @@ fn render_frontmatter(
 fn render_entity_markdown(
     entity: &EntityOutput,
     slug: &str,
-    relations: &[crate::model::RelationInput],
+    relations: &[asobi_core::model::RelationInput],
     compacted: &str,
 ) -> String {
     let mut out = String::new();
@@ -267,7 +267,7 @@ mod tests {
         let mut e = entity("asobi:decision:no-pwa", "concept");
         e.truths.insert("status".into(), "ACCEPTED".into());
         e.observations.push("decision: ship native".into());
-        let rels = vec![crate::model::RelationInput {
+        let rels = vec![asobi_core::model::RelationInput {
             from: "asobi:decision:no-pwa".into(),
             to: "asobi".into(),
             relation_type: "part_of".into(),
@@ -290,12 +290,12 @@ mod tests {
     fn test_frontmatter_repeated_relation_type_is_a_list() {
         let e = entity("ame:task-3", "task");
         let rels = vec![
-            crate::model::RelationInput {
+            asobi_core::model::RelationInput {
                 from: "ame:task-3".into(),
                 to: "ame:task-1".into(),
                 relation_type: "depends_on".into(),
             },
-            crate::model::RelationInput {
+            asobi_core::model::RelationInput {
                 from: "ame:task-3".into(),
                 to: "ame:task-2".into(),
                 relation_type: "depends_on".into(),
@@ -325,12 +325,12 @@ mod tests {
     fn test_render_relations_both_directions() {
         let e = entity("ame:task-1", "task");
         let rels = vec![
-            crate::model::RelationInput {
+            asobi_core::model::RelationInput {
                 from: "ame:task-1".into(),
                 to: "ame:epic".into(),
                 relation_type: "part_of".into(),
             },
-            crate::model::RelationInput {
+            asobi_core::model::RelationInput {
                 from: "ame:task-2".into(),
                 to: "ame:task-1".into(),
                 relation_type: "depends_on".into(),
