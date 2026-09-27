@@ -66,7 +66,6 @@ No existing graph is migrated: the server starts empty, and local graphs stay wh
 
 | Operation | Request body | Result |
 | --- | --- | --- |
-| `server.hello` | `{}` | `BackendInfo`, with `stateId` = the graph name (server file paths never leave the server) |
 | `graph.createEntities` | `{entities: EntityInput[]}` | `null` |
 | `graph.addObservations` | `{observations: ObservationInput[], limit}` | `null` |
 | `graph.createRelations` / `graph.deleteRelations` | `{relations: RelationInput[]}` | `null` |
@@ -106,7 +105,9 @@ No existing graph is migrated: the server starts empty, and local graphs stay wh
 
 JSON-RPC 2.0 was considered and not used: its `id`, batches and notifications serve nothing here, and it answers HTTP 200 for failures, hiding them from everything that reads HTTP.
 
-- **Handshake:** before its first call, `RemoteStore` calls `server.hello` once per process and refuses to continue unless `apiVersion` equals its own `API_VERSION`. The error `unsupported` from `maintenance.reset` is rebuilt on the client with a fixed message that says reset is not available over the network and names the alternative: `asobi reset` on the server host. Only the server touches the schema, so schema version skew between devices cannot happen.
+- **No handshake; the first call is the probe.** The API version is the `v3` in the path, so there is no separate hello call. A response to a `/v3/…` request that is not a protocol response (e.g. a 404 without a `{kind, message}` body, from a server that does not serve v3) fails the command with "server does not speak API v3". The first call a process makes also decides reachability: if it cannot connect, times out (about two seconds), or a gateway in front of the server answers 502, 503 or 504, the server is unreachable and the process falls back to the local graph (see below); nothing has been written at that point. Once a call has succeeded, a later failure is an `Unavailable` error for that call, never a switch to the local graph.
+- **Liveness:** `GET /healthz` answers 200 without touching any graph. It exists for container and cluster probes; clients never call it.
+- **Messages:** the error `unsupported` from `maintenance.reset` is rebuilt on the client with a fixed message that says reset is not available over the network and names the alternative: `asobi reset` on the server host. Only the server touches the schema, so schema version skew between devices cannot happen.
 
 ### Server behavior
 
@@ -127,7 +128,7 @@ The server is built on tokio, axum and hyper; the client on reqwest, one client 
 
 - `tests/backend_api_contract_test.rs` and `tests/concurrency_test.rs` run against `RemoteStore` with an in-process server on `127.0.0.1:0`, in addition to `SqliteStore`. SQLite-specific cases (migrations, `sqlite_master`, incremental vacuum) stay SQLite-only.
 - Error round-trip: each `ApiError` variant survives server → wire → client unchanged.
-- The handshake rejects a mismatched `apiVersion`; `maintenance.reset` over HTTP is refused; an unknown graph name is created, and an invalid one rejected.
+- A server that does not serve `/v3` is reported as not speaking API v3; a 502/503/504 from a gateway on the first call triggers the fallback; `maintenance.reset` over HTTP is refused; an unknown graph name is created, and an invalid one rejected.
 - An unreachable server falls back to the local graph, with the warning on every command.
 
 ## Consequences
