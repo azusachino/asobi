@@ -3,6 +3,7 @@ name = "asobi"
 description = "A persistent, project-local knowledge graph CLI for AI agents."
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true

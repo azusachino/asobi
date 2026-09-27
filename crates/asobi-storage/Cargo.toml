@@ -3,6 +3,7 @@ name = "asobi-storage"
 description = "The bundled SQLite provider for the Asobi knowledge graph (implementation detail of the asobi crates; no stability promise)."
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true

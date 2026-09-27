@@ -19,6 +19,8 @@
   release build, a distroless non-root runtime, and `/data` for graph files.
   `make image-import` builds and imports the image into k3s containerd on the
   cluster host; no registry push is used.
+- **Idle open tasks are abandoned automatically** ([ADR 0006](docs/decisions/0006-tasks-replace-sessions.md)). A task with no activity for `abandon_days` (default 7; `ASOBI_ABANDON_DAYS` or the `asobi.toml` key, `0` disables) becomes `ABANDONED`, with an observation recording that it was abandoned automatically after that many idle days. A task with no `status` truth counts as open. An epic is never abandoned while any `part_of` child is open. Abandonment runs in the same per-process sweep as retention, before it — an abandoned task is terminal, so retention deletes it `retention_days` later, which with both defaults gives an untouched task one visible week as `ABANDONED` and deletion after two.
+- The sweep is now `SqliteStore::sweep()` on the provider, callable repeatedly, so `asobi-server` runs it hourly as a background task over its graphs. It is not part of the `v3` traits or the HTTP protocol.
 
 ### Changed
 
@@ -29,15 +31,9 @@
 - Task claims and the abandonment sweep still run in `BEGIN IMMEDIATE` transactions, so the concurrency guarantees (a task is never claimed twice) hold unchanged.
 - **Clean schema baseline: schema 9, pre-0.8 graph files refused** ([ADR 0007](docs/decisions/0007-clean-schema-baseline.md)). A new database applies the schema-9 baseline migration; the old upgrade chain is deleted. A read-only check rejects pre-0.8 files before the pool opens and leaves them untouched. **Move every existing local or server graph file aside before using 0.8; nothing is carried forward.**
 - `asobi_entities.updated_at` is now `last_activity`, kept current by triggers on observation and truth insert/update/delete (relations do not count). Retention and abandonment read the column instead of recomputing a `MAX` over three sources per entity, so the definition of activity lives in one place: the schema.
-
-### Added
-
-- **Idle open tasks are abandoned automatically** ([ADR 0006](docs/decisions/0006-tasks-replace-sessions.md)). A task with no activity for `abandon_days` (default 7; `ASOBI_ABANDON_DAYS` or the `asobi.toml` key, `0` disables) becomes `ABANDONED`, with an observation recording that it was abandoned automatically after that many idle days. A task with no `status` truth counts as open. An epic is never abandoned while any `part_of` child is open. Abandonment runs in the same per-process sweep as retention, before it — an abandoned task is terminal, so retention deletes it `retention_days` later, which with both defaults gives an untouched task one visible week as `ABANDONED` and deletion after two.
-- The sweep is now `SqliteStore::sweep()` on the provider, callable repeatedly, so `asobi-server` runs it hourly as a background task over its graphs. It is not part of the `v3` traits or the HTTP protocol.
-
-### Changed
-
 - **`session` is no longer a special entity type** (ADR 0006). Retention no longer purges `session` entities — existing sessions become ordinary entities that nothing deletes; remove them with `asobi rm` if wanted. `compact` no longer excludes them by name, so they project to Markdown like any other knowledge entity. `purge` accepts only `task` entities now.
+- **Minimum Rust is 1.94** (sqlx 0.9 requires it); every crate declares `rust-version = "1.94"`, so older toolchains get a clear Cargo error.
+- **`asobi-server` log timestamps use the local clock** (`chrono::Local`), like the CLI, so the container's `TZ` takes effect.
 
 ### Removed
 
