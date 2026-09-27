@@ -239,3 +239,27 @@ async fn the_on_demand_sweep_abandons_and_deletes_expired_tasks() {
     assert_eq!(status, 200);
     assert_eq!(graph["entities"][0]["truths"]["status"], "ABANDONED");
 }
+
+#[tokio::test]
+async fn graphs_land_in_the_data_directory_the_server_was_given() {
+    // The data directory is exactly what --data-dir names — nothing is
+    // resolved from asobi.toml/XDG — and the graph file lands inside it.
+    let dir = tempdir().unwrap();
+    let parsed = asobi_server::parse_args([
+        "--listen".to_string(),
+        "127.0.0.1:0".to_string(),
+        "--data-dir".to_string(),
+        dir.path().to_string_lossy().to_string(),
+    ])
+    .unwrap();
+    assert_eq!(parsed.data_dir, dir.path());
+
+    let server = BoundServer::bind(
+        Arc::new(App::new(parsed.data_dir.clone())),
+        "127.0.0.1:0".parse().unwrap(),
+    )
+    .await
+    .unwrap();
+    seed(server.local_addr, "gamma", "gamma:task-1").await;
+    assert!(parsed.data_dir.join("gamma.db").is_file());
+}

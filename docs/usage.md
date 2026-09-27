@@ -475,10 +475,10 @@ asobi show "project-x:session" "UserPreferences"
 One long-lived process holds **named graphs** — one SQLite file per graph in its data directory — and serves them over HTTP to every device that points its `remote` at it (WP4; see ADR 0005 for the whole picture).
 
 ```bash
-asobi-server --listen 127.0.0.1:8300
+asobi-server --listen 127.0.0.1:8300 --data-dir /srv/asobi-data
 ```
 
-- **Data directory** resolves like the CLI's (`asobi.toml` / XDG); each graph is `<data_dir>/<name>.db`. Graph names match `^[a-z0-9-]+$` — they become file names, so anything else is refused with `422 invalid` and no file is created. Naming a graph that does not exist yet creates it on first use.
+- **Both arguments are required.** `--data-dir` is the server's own data directory — created if missing and never resolved from `asobi.toml`/XDG, so a server and a local CLI on one host cannot silently share a graph file, and the server's sweep never walks the CLI's directory. Each graph is `<data-dir>/<name>.db`. Graph names match `^[a-z0-9-]+$` — they become file names, so anything else is refused with `422 invalid` and no file is created. Naming a graph that does not exist yet creates it on first use.
 - **Route:** `POST /v3/graphs/<graph>/<operation>` with the operation's request object as the body; a success is `200` with the result JSON. A failure is a non-2xx status with `{"kind", "message"}`. Any other verb on a known path is `405 badRequest`; any other path is `404`.
 - **Requests are concurrent** (one sqlx pool per graph); SQLite serialises writes through WAL and the busy timeout, and task claims and abandonment run in `BEGIN IMMEDIATE` transactions.
 - **Sweeps run in the background** on a one-hour interval over every graph: idle open tasks are abandoned and finished tasks deleted, exactly as in local mode, driven by the server's own `retention_days` / `abandon_days` configuration.

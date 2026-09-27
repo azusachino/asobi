@@ -4,7 +4,7 @@
 
 ### Added
 
-- **`asobi-server` is real** (WP4; ADR 0005): `asobi-server --listen <addr:port>` serves named graphs over `POST /v3/graphs/<graph>/<operation>` — one sqlx pool per graph, concurrent requests, hourly background sweeps (abandonment + retention) over every graph, one log line per request. Graph names match `^[a-z0-9-]+$` (else `422 invalid`, no file created); unknown valid names are created on first use; `maintenance.reset` is refused over the network. No authentication: keep it on the tailnet.
+- **`asobi-server` is real** (WP4; ADR 0005): `asobi-server --listen <addr:port>` serves named graphs over `POST /v3/graphs/<graph>/<operation>` — one sqlx pool per graph, concurrent requests, hourly background sweeps (abandonment + retention) over every graph, one log line per request. Graph names match `^[a-z0-9-]+$` (else `422 invalid`, no file created); unknown valid names are created on first use; `maintenance.reset` is refused over the network. No authentication: keep it on the tailnet. `--data-dir` is a required argument with no asobi.toml/XDG fallback — the server never shares the CLI's data directory (WP4 review).
 
 ### Changed
 
