@@ -8,9 +8,10 @@
 //! `raw_sql`; never the `query!` macros, because part of the SQL is built
 //! dynamically and the build must not need a database). sqlx 0.9 requires
 //! dynamically built SQL to be wrapped in [`sqlx::AssertSqlSafe`]: every wrap
-//! in this module interpolates only placeholder counts and `?` lists over
-//! constants (`TERMINAL_STATUSES`, `PURGEABLE_*`, the caller's own entity
-//! names), never user text, which always travels through `.bind()`. Static
+//! in this module interpolates only `?` placeholder lists (sized by a
+//! constant such as `TERMINAL_STATUSES`/`PURGEABLE_*`, or by how many names
+//! a caller passed) and table-alias indices. Every value, entity names
+//! included, travels through `.bind()`; no text reaches the SQL string. Static
 //! SQL stays plain string literals, which `SqlSafeStr` trusts. One [`SqlitePool`] per graph file --
 //! SQLite still has one writer, so concurrency comes from WAL readers and the
 //! busy timeout, not from the pool. Transactions that must be atomic against
