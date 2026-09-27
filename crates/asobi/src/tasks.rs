@@ -1,5 +1,5 @@
-use asobi_core::api::{GraphStore, SearchStore, TaskStore};
 use anyhow::Result;
+use asobi_core::api::{GraphStore, SearchStore, TaskStore};
 use clap::Subcommand;
 use schemars::JsonSchema;
 use serde::Serialize;

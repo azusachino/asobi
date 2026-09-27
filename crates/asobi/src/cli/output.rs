@@ -1,5 +1,5 @@
-use asobi_core::api::{GraphStore, OpenNodes};
 use anyhow::Result;
+use asobi_core::api::{GraphStore, OpenNodes};
 use schemars::JsonSchema;
 use serde::Serialize;
 

@@ -14,13 +14,13 @@ SQLite + WAL + FTS5
 
 ## API boundary
 
-`src/api/v2.rs` contains domain requests, results, errors, and capability traits. It does not expose SQL statements, connection handles, or SQLite row types. The application composes `SqliteStore`, while commands depend only on the API traits.
+`asobi-core` (`crates/asobi-core`) contains domain requests, results, errors, and the async `api::v3` capability traits. It does not expose SQL statements, connection handles, or SQLite row types. The application composes `SqliteStore`, while commands depend only on the API traits.
 
 The API is async (v3, Send futures on tokio) so the same store traits serve both the CLI's current-thread runtime and the server's multi-threaded runtime (ADR 0008). Each operation is still a short transaction, and SQLite's WAL mode lets readers proceed while a writer commits. The task dispatcher claims a READY task and records its claim observation in one immediate transaction.
 
 ## SQLite storage
 
-`src/storage/sqlite.rs` owns schema creation, connection settings, and queries. There is no upgrade chain: a new database is created directly at schema 9, and a file from any earlier version is refused with a move-aside message (ADR 0007). The database uses foreign keys, WAL, bounded busy timeouts, and an external-content FTS5 index with porter stemming and BM25 ranking. Truth filters are applied in SQL and combine with keyword search through AND semantics.
+`asobi-storage` (`crates/asobi-storage`) owns schema creation, connection settings, and queries, and is the only crate that depends on a storage driver (ADR 0009). There is no upgrade chain: a new database is created directly at schema 9, and a file from any earlier version is refused with a move-aside message (ADR 0007). The database uses foreign keys, WAL, bounded busy timeouts, and an external-content FTS5 index with porter stemming and BM25 ranking. Truth filters are applied in SQL and combine with keyword search through AND semantics.
 
 ## Durable projections
 

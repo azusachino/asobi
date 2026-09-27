@@ -1,7 +1,7 @@
+use anyhow::Result;
 use asobi_core::api::GraphStore;
 use asobi_core::model::EntityOutput;
 use asobi_core::normalize::slugify;
-use anyhow::Result;
 use std::fmt::Write as _;
 use std::io::Write as _;
 

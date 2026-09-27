@@ -1,7 +1,7 @@
 use super::commands::Commands;
 use super::output::*;
-use asobi_core::api::{GraphStore, MaintenanceStore, OpenNodes, SearchQuery, SearchStore, Stats};
 use anyhow::Result;
+use asobi_core::api::{GraphStore, MaintenanceStore, OpenNodes, SearchQuery, SearchStore, Stats};
 use tracing::info;
 
 pub(crate) async fn run(
