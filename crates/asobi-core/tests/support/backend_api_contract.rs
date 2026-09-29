@@ -103,6 +103,81 @@ where
     assert_eq!(store.claim_next("agent-b").await.unwrap(), None);
 }
 
+pub async fn task_update_is_one_operation_and_preserves_status_without_explicit_change<S>(store: &S)
+where
+    S: GraphStore + TaskStore,
+{
+    store
+        .create_entities(vec![EntityInput {
+            name: "contract:handoff".into(),
+            entity_type: "task".into(),
+            observations: vec![],
+        }])
+        .await
+        .unwrap();
+    store
+        .truth_upsert("contract:handoff", "status", "DISPATCHED")
+        .await
+        .unwrap();
+    let status = store
+        .update("contract:handoff", vec!["tests passed".into()], None, 200)
+        .await
+        .unwrap();
+    assert_eq!(status, "DISPATCHED");
+    let task = store
+        .open_nodes(OpenNodes {
+            names: vec!["contract:handoff".into()],
+            observation_limit: 20,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(task.entities[0].truths["status"], "DISPATCHED");
+    assert_eq!(task.entities[0].observations, ["tests passed"]);
+    assert!(
+        store
+            .update(
+                "contract:handoff",
+                vec!["ignored".into()],
+                Some("NOT_A_STATUS"),
+                200
+            )
+            .await
+            .is_err()
+    );
+    let task = store
+        .open_nodes(OpenNodes {
+            names: vec!["contract:handoff".into()],
+            observation_limit: 20,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(task.entities[0].observations, ["tests passed"]);
+    assert_eq!(
+        store
+            .update(
+                "contract:handoff",
+                vec!["reviewed".into()],
+                Some("DONE"),
+                200
+            )
+            .await
+            .unwrap(),
+        "DONE"
+    );
+    let task = store
+        .open_nodes(OpenNodes {
+            names: vec!["contract:handoff".into()],
+            observation_limit: 20,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(task.entities[0].truths["status"], "DONE");
+    assert_eq!(task.entities[0].observations, ["tests passed", "reviewed"]);
+}
+
 pub async fn graph_and_search_keep_observations_lazy<S>(store: &S)
 where
     S: GraphStore + SearchStore,

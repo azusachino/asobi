@@ -87,7 +87,6 @@ pub(crate) async fn run(
         }
         Commands::Truth { name, key, value } => {
             backend.truth_upsert(&name, &key, &value).await?;
-            info!("Truth added.");
             if json {
                 emit_nodes(backend, vec![name]).await?;
             }

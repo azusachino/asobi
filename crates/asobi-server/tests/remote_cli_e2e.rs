@@ -181,7 +181,7 @@ async fn two_cli_workspaces_handoff_and_claim_distinct_tasks() {
         device_a.path(),
         Some(&remote),
         graph,
-        &["tasks", "dispatch", first, "--agent", "agent-a"],
+        &["tasks", "claim", first, "--agent", "agent-a"],
     )
     .await;
     assert!(claimed.status.success(), "{claimed:?}");
@@ -199,7 +199,7 @@ async fn two_cli_workspaces_handoff_and_claim_distinct_tasks() {
         device_b.path(),
         Some(&remote),
         graph,
-        &["tasks", "dispatch", first, "--agent", "agent-b"],
+        &["tasks", "claim", first, "--agent", "agent-b"],
     )
     .await;
     assert!(
@@ -210,10 +210,49 @@ async fn two_cli_workspaces_handoff_and_claim_distinct_tasks() {
         device_b.path(),
         Some(&remote),
         graph,
-        &["tasks", "dispatch", second, "--agent", "agent-b"],
+        &["tasks", "claim", second, "--agent", "agent-b"],
     )
     .await;
     assert!(claimed.status.success(), "{claimed:?}");
+    let note = run_cli(
+        device_a.path(),
+        Some(&remote),
+        graph,
+        &[
+            "--json",
+            "tasks",
+            "update",
+            first,
+            "--note",
+            "ready for verification",
+        ],
+    )
+    .await;
+    assert!(note.status.success(), "{note:?}");
+    let receipt: Value = serde_json::from_slice(&note.stdout).unwrap();
+    assert_eq!(
+        receipt["status"], "DISPATCHED",
+        "note-only update must retain status"
+    );
+    let seen_note =
+        graph_output(&run_cli(device_b.path(), Some(&remote), graph, &["show", first]).await);
+    assert!(
+        seen_note["entities"][0]["observations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|note| note == "ready for verification")
+    );
+    let done = run_cli(
+        device_a.path(),
+        Some(&remote),
+        graph,
+        &[
+            "tasks", "update", first, "--status", "DONE", "--note", "verified",
+        ],
+    )
+    .await;
+    assert!(done.status.success(), "{done:?}");
     let seen = graph_output(
         &run_cli(
             device_b.path(),
@@ -230,6 +269,7 @@ async fn two_cli_workspaces_handoff_and_claim_distinct_tasks() {
         .find(|entity| entity["name"] == first)
         .unwrap();
     assert_eq!(first_on_b["truths"]["claimed_by"], "agent-a");
+    assert_eq!(first_on_b["truths"]["status"], "DONE");
     assert_eq!(first_on_b["truths"]["branch"], "feat/handoff");
     assert_eq!(first_on_b["truths"]["commit"], "abc123");
     let second_on_b = seen["entities"]
@@ -281,6 +321,29 @@ async fn outage_fails_closed_and_explicit_local_work_does_not_merge_after_restar
     assert!(String::from_utf8_lossy(&outage.stderr).contains("remote Asobi server unavailable"));
     let local_db = device.path().join("local.db");
     assert!(!local_db.exists(), "outage must not create a local graph");
+    let update = run_cli(
+        device.path(),
+        Some(&first_remote),
+        "shared",
+        &[
+            "tasks",
+            "update",
+            "remote:seed",
+            "--note",
+            "offline update",
+            "--status",
+            "DONE",
+        ],
+    )
+    .await;
+    assert!(
+        !update.status.success(),
+        "outage update must fail: {update:?}"
+    );
+    assert!(
+        !local_db.exists(),
+        "outage update must not create a local graph"
+    );
     let explicit = run_cli(
         device.path(),
         Some(&first_remote),

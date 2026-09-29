@@ -7,6 +7,9 @@
 - Remote-configured commands now fail on an unreachable server rather than silently using a local graph. Use `--local-graph` for an intentional one-command local override. Local-only workspaces are unchanged.
 - `asobi stats` now shows the actual backend, selected graph, endpoint and database-path owner; its existing JSON keys remain, with additive target fields. `asobi version` distinguishes the client build, API version and connected server build. No named-context or duplicate `info` command is introduced.
 - New servers include an optional `serverVersion` on the existing `maintenance.location` response. New clients show `unknown` against older servers, and older clients can still read the new response. No handshake or protocol-version bump is required.
+- Task handoffs use `tasks claim <TASK>` to avoid accidentally claiming work across epics. `tasks update <TASK> --note ...` keeps the current status unless `--status` is explicit; note and status commit atomically. Legacy `dispatch` and `sync` remain available for existing scripts, but are omitted from help. Remote `tasks update` requires an 0.8.1 server. `tasks plan` and `tasks close` are still multi-call operations.
+- Successful `truth` writes are silent unless `--json` is requested; failures remain visible.
+- The maintained Asobi agent skill now lives in this repository at `skills/asobi/SKILL.md`, installed with `npx skills add https://github.com/azusachino/asobi --skill asobi --agent universal`. Asobi itself still does not manage skills.
 
 ## v0.8.0
 

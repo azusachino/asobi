@@ -1157,6 +1157,81 @@ impl MaintenanceStore for SqliteStore {
 }
 
 impl TaskStore for SqliteStore {
+    async fn update(
+        &self,
+        task: &str,
+        notes: Vec<String>,
+        status: Option<&str>,
+        observation_limit: usize,
+    ) -> ApiResult<String> {
+        if status.is_none() && notes.is_empty() {
+            return Err(ApiError::Invalid("update needs --note or --status".into()));
+        }
+        if let Some(status) = status
+            && !asobi_core::api::valid_task_status(status)
+        {
+            return Err(ApiError::Invalid(format!("invalid task status: {status}")));
+        }
+        let task = normalize(task);
+        let mut tx = self.begin_write().await?;
+        let entity_type: Option<String> =
+            sqlx::query_scalar("SELECT entity_type FROM asobi_entities WHERE name=?")
+                .bind(&task)
+                .fetch_optional(&mut *tx)
+                .await
+                .map_err(backend_error)?;
+        match entity_type.as_deref() {
+            None => return Err(ApiError::NotFound(task)),
+            Some("task") => {}
+            Some(_) => return Err(ApiError::Invalid(format!("entity is not a task: {task}"))),
+        }
+        let current: Option<String> = sqlx::query_scalar(
+            "SELECT value FROM asobi_truths WHERE entity_name=? AND key='status'",
+        )
+        .bind(&task)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(backend_error)?;
+        if !notes.is_empty() {
+            for note in notes {
+                sqlx::query("INSERT INTO asobi_observations(entity_name,content) VALUES (?,?)")
+                    .bind(&task)
+                    .bind(note)
+                    .execute(&mut *tx)
+                    .await
+                    .map_err(backend_error)?;
+            }
+            let cap = if observation_limit == 0 {
+                DEFAULT_OBSERVATION_LIMIT
+            } else {
+                observation_limit
+            };
+            sqlx::query(
+                "DELETE FROM asobi_observations WHERE entity_name=? AND id NOT IN \
+                 (SELECT id FROM asobi_observations WHERE entity_name=? ORDER BY id DESC LIMIT ?)",
+            )
+            .bind(&task)
+            .bind(&task)
+            .bind(cap as i64)
+            .execute(&mut *tx)
+            .await
+            .map_err(backend_error)?;
+        }
+        if let Some(status) = status {
+            sqlx::query(
+                "INSERT INTO asobi_truths(entity_name,key,value) VALUES (?,'status',?) \
+                 ON CONFLICT(entity_name,key) DO UPDATE SET value=excluded.value, updated_at=CURRENT_TIMESTAMP",
+            )
+            .bind(&task)
+            .bind(status)
+            .execute(&mut *tx)
+            .await
+            .map_err(backend_error)?;
+        }
+        tx.commit().await.map_err(backend_error)?;
+        Ok(status.map(str::to_string).or(current).unwrap_or_default())
+    }
+
     async fn dispatch(
         &self,
         task: Option<&str>,

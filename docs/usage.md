@@ -2,7 +2,7 @@
 
 This is Asobi's interface reference: what each command does, what it accepts, and what it returns. It describes the CLI and nothing more.
 
-It describes command behavior, not agent workflow: when to read the graph, what to write at closeout, or how to sequence a task board. That guidance differs between users and lives in the [`asobi` skill](https://github.com/azusachino/harus-skills/blob/main/skills/asobi/SKILL.md), which cites this document for exact contracts.
+It describes command behavior, not agent workflow: when to read the graph, what to write at closeout, or how to sequence a task board. That guidance lives in the [repository-owned `asobi` skill](../skills/asobi/SKILL.md), which cites this document for exact contracts.
 
 ## For humans
 
@@ -52,7 +52,7 @@ The command also supports `elvish` and `powershell`. Completions cover commands,
 
 Asobi 0.8 starts a new graph and refuses pre-0.8 graph files without modifying them. Move an old local graph aside before running 0.8; server-side graph files created by an older version must likewise be moved aside on the server. There is no automatic migration or import.
 
-The former session handoff is replaced by graph-backed tasks. `session` is no longer a special type; legacy session entities are ordinary entities. Skills management and `[skills]` configuration are removed; any existing `[skills]` block is ignored. Install the maintained skill with `npx skills add https://github.com/azusachino/harus-skills --skill asobi --agent universal`.
+The former session handoff is replaced by graph-backed tasks. `session` is no longer a special type; legacy session entities are ordinary entities. Skills management and `[skills]` configuration are removed; any existing `[skills]` block is ignored. Install the repository-owned skill with `npx skills add https://github.com/azusachino/asobi --skill asobi --agent universal`.
 
 ### Workspace setup
 
@@ -204,10 +204,10 @@ asobi rm-truth "project-x" "language"
 
 Writing the same key again replaces the value. Asobi keeps no archive of what it held before: that store was unbounded, had no reader, and where a trail genuinely matters the observations carry it in better form — a task's `status` history said `DISPATCHED` where the observation beside it said "dispatched to codex".
 
-**Install the companion skill.** Asobi ships no `SKILL.md` of its own — this document describes what the CLI _is_, and when to reach for it is agent policy. The maintained skill lives in [harus-skills](https://github.com/azusachino/harus-skills), installed with the [`skills` CLI](https://github.com/vercel-labs/skills):
+**Install the companion skill.** This document describes what the CLI does; the repository's [`skills/asobi/SKILL.md`](../skills/asobi/SKILL.md) covers agent workflow. Install it with the independent [`skills` CLI](https://github.com/vercel-labs/skills):
 
 ```bash
-npx skills add https://github.com/azusachino/harus-skills --skill asobi --agent universal
+npx skills add https://github.com/azusachino/asobi --skill asobi --agent universal
 ```
 
 **Coordinate durable task work:**
@@ -216,8 +216,11 @@ npx skills add https://github.com/azusachino/harus-skills --skill asobi --agent 
 asobi tasks plan "project:epic" --objective "Ship the feature" \
   --task "Implement the change" --task "Verify the result"
 asobi tasks list "project:epic"
-asobi tasks dispatch                 # select the first READY_TO_DISPATCH task
-asobi tasks sync "project:epic:task-1" --note "make check passes" --status DONE
+asobi tasks claim "project:epic:task-1" --agent lead
+asobi tasks update "project:epic:task-1" --note "make check passes"  # status stays DISPATCHED
+asobi tasks update "project:epic:task-1" --status DONE --note "implementation complete"
+asobi tasks claim "project:epic:task-2" --agent reviewer
+asobi tasks update "project:epic:task-2" --status DONE --note "verified"
 asobi tasks close "project:epic"
 ```
 
@@ -344,16 +347,16 @@ asobi reset [--force]
 ```text
 asobi tasks plan <EPIC> --objective <TEXT> --task <TITLE>...
 asobi tasks list [EPIC] [--all]
-asobi tasks dispatch [TASK] [--agent <NAME>]
-asobi tasks sync <TASK> [--status <STATUS>] [--note <TEXT>]
+asobi tasks claim <TASK> [--agent <NAME>]
+asobi tasks update <TASK> [--status <STATUS>] [--note <TEXT>]
 asobi tasks close <EPIC> [--lesson <TEXT>]
 ```
 
-These are ordinary graph entities under a workflow contract: status is a truth, notes are observations, and child tasks link to their epic with `part_of`. Task status moves through `READY_TO_DISPATCH → DISPATCHED → REVIEW → AWAITING_VERIFY → DONE`. `dispatch` claims a task and records the claim atomically — it marks ownership and does **not** launch an agent; omitting `TASK` claims the first ready one. Use `asobi tasks <command> --help` for the full argument list.
+These are ordinary graph entities under a workflow contract: status is a truth, notes are observations, and child tasks link to their epic with `part_of`. Task status moves through `READY_TO_DISPATCH → DISPATCHED → REVIEW → AWAITING_VERIFY → DONE`. `claim` requires the task name and atomically records ownership; it does **not** launch an agent or choose work from another epic. `update` requires a note or explicit status: a note alone preserves the current status, and a note plus status commits together in one server operation or local transaction. An update with neither is refused. The old `dispatch` (including its global no-argument selection) and `sync` (including its implicit `REVIEW` status) remain available for 0.8 scripts but are hidden from help. New `update` needs an 0.8.1 server; install the server before using it from remote clients. `plan` and `close` still span several remote operations and can leave partial work on failure; inspect the board before retrying them. Use `asobi tasks <command> --help` for the full argument list.
 
 Without an `EPIC`, `tasks list` is the "what is open" read: it returns tasks and epics that are not `DONE`, `CLOSED` or `ABANDONED`. Pass `--all` for the complete board including finished work. An entity with no `status` truth counts as open — which is what surfaces an epic whose children are all `DONE` but which was never closed: it appears alone, with no open children under it.
 
-A checkpoint is more useful when it says which revision it was true at, but Asobi does not capture that for you: one graph can serve several repositories — a workspace of submodules resolves to the same graph from every directory — so the commit it would read depends on where the command was run, not on what the task is about. Record it yourself when the handoff warrants it, from the repository the work is actually in:
+A checkpoint is more useful when it says which revision it was true at, but Asobi does not capture that for you: one graph can serve several repositories — a nested checkout can select its own `asobi.toml` and graph — so the commit it would read depends on where the command was run, not on what the task is about. Record it yourself when the handoff warrants it, from the repository the work is actually in:
 
 ```bash
 asobi truth "[project]:[epic]:task-N" commit "$(git -C path/to/repo rev-parse HEAD)"
@@ -381,7 +384,7 @@ Names are hierarchical and colon-separated — `project-x`, `project-x:task:depl
 
 ### Streams and exit codes
 
-**Mutating** commands print a one-line confirmation (`Entity 'X' created.`, `Observation added.`) to **stderr** and leave **stdout empty** on success. A scripted caller must branch on the exit code, not on stdout being non-empty.
+Most **mutating** commands print a one-line confirmation to **stderr** and leave **stdout empty** on success. `truth` succeeds silently to keep repeated handoff updates readable. A scripted caller must branch on the exit code, not on stdout being non-empty.
 
 **Read** commands (`graph`, `search`, `show`, `stats`, `capabilities`, `schema`) write their JSON payload to **stdout**.
 

@@ -82,6 +82,19 @@ pub struct TruthDeleteRequest {
     pub key: String,
 }
 
+/// One task update is a single storage transaction, including its notes.
+#[derive(Debug, Clone, schemars::JsonSchema, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateTaskRequest {
+    pub task: String,
+    #[serde(default)]
+    pub notes: Vec<String>,
+    #[serde(default)]
+    pub status: Option<String>,
+    #[serde(default)]
+    pub observation_limit: usize,
+}
+
 /// `agent` is required: who holds a claim is never guessed on the wire.
 /// An omitted `observationLimit` is 0, which storage reads as its own cap.
 #[derive(Debug, Clone, schemars::JsonSchema, Serialize, Deserialize)]

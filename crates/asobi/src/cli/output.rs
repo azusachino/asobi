@@ -95,6 +95,8 @@ fn schema_registry() -> Vec<SchemaRow> {
     use asobi_core::model::Graph;
     let rows: Vec<SchemaRow> = vec![
         ("capabilities", schema_for_data::<CapabilitiesReceipt>),
+        ("tasks-claim", schema_for_data::<crate::tasks::TaskReceipt>),
+        ("tasks-update", schema_for_data::<crate::tasks::TaskReceipt>),
         ("graph", schema_for_data::<Graph>),
         ("link", schema_for_data::<Graph>),
         ("new", schema_for_data::<Graph>),

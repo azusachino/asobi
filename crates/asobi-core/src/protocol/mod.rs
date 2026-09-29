@@ -21,7 +21,7 @@ pub use requests::{
     AddObservationsRequest, ClaimNextRequest, CreateEntitiesRequest, DeleteEntitiesRequest,
     DeleteObservationByIdRequest, DeleteObservationsRequest, DispatchRequest, EmptyRequest,
     OpenNodesRequest, RelationsRequest, SearchNodesRequest, TruthDeleteRequest, TruthUpsertRequest,
-    UpdateObservationByIdRequest, UpdateObservationRequest,
+    UpdateObservationByIdRequest, UpdateObservationRequest, UpdateTaskRequest,
 };
 
 use crate::api::v3::{
@@ -189,6 +189,19 @@ where
             to_value(store.location().await?)
         }
 
+        Operation::TasksUpdate => {
+            let request: requests::UpdateTaskRequest = requests::parse(body)?;
+            to_value(
+                store
+                    .update(
+                        &request.task,
+                        request.notes,
+                        request.status.as_deref(),
+                        request.observation_limit,
+                    )
+                    .await?,
+            )
+        }
         Operation::TasksDispatch => {
             let request: requests::DispatchRequest = requests::parse(body)?;
             to_value(
@@ -269,6 +282,7 @@ pub fn operation_schemas() -> Vec<(&'static str, Value, Value)> {
                 row::<requests::EmptyRequest, crate::api::StorageLocation>(operation)
             }
             Operation::TasksDispatch => row::<requests::DispatchRequest, Option<String>>(operation),
+            Operation::TasksUpdate => row::<requests::UpdateTaskRequest, String>(operation),
             Operation::TasksClaimNext => {
                 row::<requests::ClaimNextRequest, Option<String>>(operation)
             }

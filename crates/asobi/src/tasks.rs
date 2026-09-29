@@ -12,14 +12,6 @@ pub struct TaskReceipt {
     pub status: String,
 }
 
-const TASK_STATUSES: &[&str] = &[
-    "READY_TO_DISPATCH",
-    "DISPATCHED",
-    "REVIEW",
-    "AWAITING_VERIFY",
-    "DONE",
-];
-
 /// Statuses that mean the work is over. Matches what `purge` accepts, so the
 /// set of tasks `tasks list` hides by default is the set retention can reclaim.
 const TERMINAL_STATUSES: &[&str] = &["DONE", "CLOSED", "ABANDONED"];
@@ -52,13 +44,29 @@ pub enum TasksCommands {
         #[arg(long)]
         all: bool,
     },
-    /// Mark the next ready task, or the named task, as dispatched
+    /// Claim one named ready task (does not launch an agent)
+    Claim {
+        task: String,
+        #[arg(long, default_value = "lead")]
+        agent: String,
+    },
+    /// Add notes and/or explicitly set status in one atomic task update
+    Update {
+        task: String,
+        #[arg(long = "note")]
+        notes: Vec<String>,
+        #[arg(long)]
+        status: Option<String>,
+    },
+    /// Compatibility command: claim the next ready task or a named task
+    #[command(hide = true)]
     Dispatch {
         task: Option<String>,
         #[arg(long, default_value = "lead")]
         agent: String,
     },
-    /// Record implementation/review notes and advance a task status
+    /// Compatibility command: notes plus REVIEW status by default
+    #[command(hide = true)]
     Sync {
         task: String,
         #[arg(long = "note")]
@@ -203,26 +211,46 @@ pub async fn run(
             };
             print_json(graph)?;
         }
+        Some(TasksCommands::Claim { task, agent }) => {
+            claim(backend, Some(&task), &agent, json, "claim").await?;
+        }
         Some(TasksCommands::Dispatch { task, agent }) => {
-            if agent.trim().is_empty() {
-                anyhow::bail!("dispatch agent must be non-empty");
+            claim(backend, task.as_deref(), &agent, json, "dispatch").await?;
+        }
+        Some(TasksCommands::Update {
+            task,
+            notes,
+            status,
+        }) => {
+            if status.is_none() && notes.is_empty() {
+                anyhow::bail!("update needs --note or --status");
             }
-            let task = backend
-                .dispatch(task.as_deref(), &agent, observation_limit())
-                .await?
-                .ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "no READY_TO_DISPATCH task found or task was claimed by another agent"
-                    )
-                })?;
+            if notes.iter().any(|note| note.trim().is_empty()) {
+                anyhow::bail!("update notes must be non-empty");
+            }
+            if status
+                .as_deref()
+                .is_some_and(|status| !asobi_core::api::valid_task_status(status))
+            {
+                anyhow::bail!(
+                    "invalid task status: {}",
+                    status.as_deref().unwrap_or_default()
+                );
+            }
+            let result = backend
+                .update(&task, notes, status.as_deref(), observation_limit())
+                .await?;
             if json {
                 print_json(TaskReceipt {
-                    action: "dispatch",
+                    action: "update",
                     entity: task,
-                    status: "DISPATCHED".to_string(),
+                    status: result,
                 })?;
             } else {
-                println!("Dispatched {task} to {agent}.");
+                println!(
+                    "Updated {task} (status: {}).",
+                    if result.is_empty() { "unset" } else { &result }
+                );
             }
         }
         Some(TasksCommands::Sync {
@@ -243,7 +271,7 @@ pub async fn run(
             if entity.entity_type != "task" {
                 anyhow::bail!("entity is not a task: {task}");
             }
-            if !TASK_STATUSES.contains(&status.as_str()) && !status.starts_with("BLOCKED_ON ") {
+            if !asobi_core::api::valid_task_status(&status) {
                 anyhow::bail!("invalid task status: {status}");
             }
             if graph.entities.is_empty() {
@@ -341,6 +369,36 @@ pub async fn run(
             }
         }
     };
+    Ok(())
+}
+
+async fn claim(
+    backend: &impl TaskStore,
+    task: Option<&str>,
+    agent: &str,
+    json: bool,
+    action: &'static str,
+) -> Result<()> {
+    if agent.trim().is_empty() {
+        anyhow::bail!("{action} agent must be non-empty");
+    }
+    let task = backend
+        .dispatch(task, agent, observation_limit())
+        .await?
+        .ok_or_else(|| {
+            anyhow::anyhow!("task is not READY_TO_DISPATCH or was claimed by another agent")
+        })?;
+    if json {
+        print_json(TaskReceipt {
+            action,
+            entity: task,
+            status: "DISPATCHED".to_string(),
+        })?;
+    } else if action == "dispatch" {
+        println!("Dispatched {task} to {agent}.");
+    } else {
+        println!("Claimed {task} for {agent}.");
+    }
     Ok(())
 }
 

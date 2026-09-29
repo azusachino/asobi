@@ -2,6 +2,50 @@ use std::process::Command;
 use tempfile::tempdir;
 
 #[test]
+fn truth_success_is_quiet_but_json_echo_still_works() {
+    let dir = tempdir().unwrap();
+    let bin = env!("CARGO_BIN_EXE_asobi");
+    let db = dir.path().join("test.db");
+    let mut command = Command::new(bin);
+    command
+        .current_dir(dir.path())
+        .env_remove("ASOBI_REMOTE")
+        .env("ASOBI_DATABASE_URL", &db);
+    assert!(
+        command
+            .args(["new", "quiet:item", "task"])
+            .output()
+            .unwrap()
+            .status
+            .success()
+    );
+    let plain = Command::new(bin)
+        .current_dir(dir.path())
+        .env_remove("ASOBI_REMOTE")
+        .env("ASOBI_DATABASE_URL", &db)
+        .args(["truth", "quiet:item", "next", "review"])
+        .output()
+        .unwrap();
+    assert!(plain.status.success());
+    assert!(plain.stdout.is_empty());
+    assert!(
+        plain.stderr.is_empty(),
+        "{}",
+        String::from_utf8_lossy(&plain.stderr)
+    );
+    let json = Command::new(bin)
+        .current_dir(dir.path())
+        .env_remove("ASOBI_REMOTE")
+        .env("ASOBI_DATABASE_URL", &db)
+        .args(["--json", "truth", "quiet:item", "next", "done"])
+        .output()
+        .unwrap();
+    assert!(json.status.success());
+    let payload: serde_json::Value = serde_json::from_slice(&json.stdout).unwrap();
+    assert_eq!(payload["entities"][0]["truths"]["next"], "done");
+}
+
+#[test]
 fn test_cli_agent_features() {
     // 1. Setup temp database
     let dir = tempdir().unwrap();

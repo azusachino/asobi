@@ -136,7 +136,7 @@ The server is built on tokio, axum and hyper; the client on reqwest, one client 
 
 ## Consequences
 
-- Commands built from several trait calls (`tasks plan`, `tasks sync`, `tasks close`) are not atomic in remote mode: a failure part-way leaves the earlier calls applied. Accepted for now; a command that needs atomicity later gets a server-side method, not a client-side transaction.
+- **Amended for 0.8.1:** `tasks update` uses one additive `tasks.update` operation: its note and optional status commit atomically on the server. The old `tasks sync` remains available to old clients, with its multi-call behavior. `tasks plan` and `tasks close` still span several remote calls: a failure part-way leaves earlier calls applied; inspect the board before retrying. Other commands that need atomicity should gain a server-side operation, not a client-side transaction.
 - Each remote call is one HTTP round trip over the tailnet, so a command costs milliseconds per call instead of a local file access. Acceptable for a CLI.
 - The server becomes a deployable, owned by harus-k3s, not this repository: a Deployment with a PVC, a Traefik `IngressRoute` at `asobi.h.azusachino.com` (tailnet-only), and the existing SQLite backup CronJob.
 - An outage blocks shared-graph commands rather than silently splitting memory; operators may explicitly choose a local graph for unrelated work.

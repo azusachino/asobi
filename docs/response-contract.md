@@ -16,6 +16,8 @@ The index lists schemas available in the current build. `--command NAME` prints 
 
 `version` reports `clientVersion`, `serverVersion` (`unknown` for an older remote server, `not applicable` locally), and `apiVersion`. `stats` retains its existing counts and database fields plus `mode`, `pathOwner` (`client` or `server`), and optional remote graph, endpoint and server version. It reports the actual backend after connecting; an unreachable remote fails closed instead of returning local stats. Human output labels remote database paths as server-side. `--local-graph` selects the local store for one invocation; `init --local` still means initialize a workspace in the cwd.
 
+`tasks-claim` and `tasks-update` each return a `TaskReceipt` under `--json`. `tasks.update` is an additive v3 operation taking a task name, optional notes and an optional status. Its resulting status response comes from one provider transaction: note-only updates preserve status, and note-plus-status updates commit or roll back together. An older server has no `tasks.update`; the unchanged `dispatch` and `sync` compatibility commands still speak their original operations.
+
 The lazy-read shape is shared in local and remote mode: `graph` and `search` return entity identity, truths, observation counts, and relations without observation bodies; `show` returns requested observations and can add stable IDs with `--with-ids`.
 
 ## Remote HTTP protocol

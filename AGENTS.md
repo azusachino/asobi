@@ -40,13 +40,13 @@ Anything not listed is a leaf: find it with `rg`, and it needs no entry here.
 
 ## Documentation split
 
-This repository documents what the CLI _is_ and ships no `SKILL.md`. Agent workflow guidance — advice about _when_ to reach for a command — lives in the [`asobi` skill](https://github.com/azusachino/harus-skills/blob/main/skills/asobi/SKILL.md):
+Command behavior belongs in `docs/usage.md`; agent workflow guidance belongs in this repository's `skills/asobi/SKILL.md`. The skill is distributed through the external [`skills` CLI](https://github.com/vercel-labs/skills), not through Asobi's own CLI:
 
 ```bash
-npx skills add https://github.com/azusachino/harus-skills --skill asobi --agent universal
+npx skills add https://github.com/azusachino/asobi --skill asobi --agent universal
 ```
 
-Keep the split when adding documentation. A change to a command's behaviour belongs in `docs/usage.md`. Advice about when to use it does not belong in this repository at all.
+Keep one authoritative copy of each kind of guidance. Moving skill ownership here in 0.8.1 does not restore the removed `asobi skills` commands.
 
 ## Quality gate
 

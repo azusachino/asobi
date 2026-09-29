@@ -11,7 +11,8 @@ use asobi_core::protocol::{
     AddObservationsRequest, ClaimNextRequest, CreateEntitiesRequest, DeleteEntitiesRequest,
     DeleteObservationByIdRequest, DeleteObservationsRequest, DispatchRequest, EmptyRequest,
     ErrorBody, OpenNodesRequest, RelationsRequest, SearchNodesRequest, TruthDeleteRequest,
-    TruthUpsertRequest, UpdateObservationByIdRequest, UpdateObservationRequest, error_body_to_api,
+    TruthUpsertRequest, UpdateObservationByIdRequest, UpdateObservationRequest, UpdateTaskRequest,
+    error_body_to_api,
 };
 use reqwest::Client;
 use serde::Serialize;
@@ -394,6 +395,30 @@ impl MaintenanceStore for RemoteStore {
 
 #[allow(clippy::manual_async_fn)] // Keep the explicit Send future required by the v3 trait.
 impl TaskStore for RemoteStore {
+    fn update(
+        &self,
+        task: &str,
+        notes: Vec<String>,
+        status: Option<&str>,
+        observation_limit: usize,
+    ) -> impl std::future::Future<Output = ApiResult<String>> + Send {
+        let (task, status) = (task.to_string(), status.map(str::to_string));
+        async move {
+            remote_call!(
+                self,
+                "tasks.update",
+                UpdateTaskRequest {
+                    task,
+                    notes,
+                    status,
+                    observation_limit
+                },
+                String
+            )
+            .await
+        }
+    }
+
     fn dispatch(
         &self,
         task: Option<&str>,

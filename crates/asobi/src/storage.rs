@@ -432,6 +432,55 @@ impl MaintenanceStore for Storage {
 
 #[allow(clippy::manual_async_fn)]
 impl TaskStore for Storage {
+    fn update(
+        &self,
+        task: &str,
+        notes: Vec<String>,
+        status: Option<&str>,
+        observation_limit: usize,
+    ) -> impl Future<Output = ApiResult<String>> + Send {
+        let (task, status) = (task.to_string(), status.map(str::to_string));
+        async move {
+            #[cfg(feature = "remote")]
+            {
+                let (remote_task, remote_notes, remote_status) =
+                    (task.clone(), notes.clone(), status.clone());
+                self.route(
+                    true,
+                    move |store| {
+                        Box::pin(async move {
+                            store
+                                .update(
+                                    &remote_task,
+                                    remote_notes,
+                                    remote_status.as_deref(),
+                                    observation_limit,
+                                )
+                                .await
+                        })
+                    },
+                    move |store| {
+                        Box::pin(async move {
+                            store
+                                .update(&task, notes, status.as_deref(), observation_limit)
+                                .await
+                        })
+                    },
+                )
+                .await
+            }
+            #[cfg(not(feature = "remote"))]
+            self.route_local(move |store| {
+                Box::pin(async move {
+                    store
+                        .update(&task, notes, status.as_deref(), observation_limit)
+                        .await
+                })
+            })
+            .await
+        }
+    }
+
     fn dispatch(
         &self,
         task: Option<&str>,

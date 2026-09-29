@@ -11,5 +11,5 @@ pub mod v3;
 pub use v3::{
     API_VERSION, ApiError, ApiResult, BackendCapabilities, BackendHealth, GraphStore,
     MaintenanceStore, OpenNodes, PurgeCandidate, PurgeReport, PurgeRequest, SearchQuery,
-    SearchStore, Stats, StorageLocation, TaskStore,
+    SearchStore, Stats, StorageLocation, TaskStore, valid_task_status,
 };
