@@ -14,6 +14,8 @@ The index lists schemas available in the current build. `--command NAME` prints 
 
 `graph`, `search`, and `show` return their graph payloads directly. Mutations using `--json` also return their existing receipt or affected-graph payload directly. There is no `.data` wrapper. Human-readable confirmations and errors remain on stderr. The CLI schema describes command payloads; it is not a graph-file migration or import/export format.
 
+`context-show` describes configured mode, graph, sanitized endpoint and config source without opening any graph. `version` reports `clientVersion`, `serverVersion` (`unknown` for an older remote server, `not applicable` locally), and `apiVersion`. `info` and `stats` share a payload: existing counts and database fields plus `mode`, `pathOwner` (`client` or `server`), and optional remote graph, endpoint and server version. Human output labels remote database paths as server-side. `--local-graph` selects the local store for one invocation; `init --local` still means initialize a workspace in the cwd.
+
 The lazy-read shape is shared in local and remote mode: `graph` and `search` return entity identity, truths, observation counts, and relations without observation bodies; `show` returns requested observations and can add stable IDs with `--with-ids`.
 
 ## Remote HTTP protocol
@@ -31,7 +33,7 @@ A successful response is HTTP 200 with the operation result as JSON. An empty re
 
 The graph name selects an isolated server-side graph; a valid name not yet held by the server creates it. The `asobi-server --data-dir` path contains one SQLite file per name. See [ADR 0005](decisions/0005-remote-server.md) and [the usage guide](usage.md#remote-workspaces) for operation names, errors, and configuration.
 
-If the first remote call cannot connect, times out, or receives gateway 502/503/504, the CLI warns and uses the workspace's local graph for the entire invocation. Writes during an outage remain local and are never replayed. After a remote call succeeds, a later failure is an error and does not switch backends.
+If the first remote call cannot connect, times out, or receives gateway 502/503/504, the command fails without opening a local graph. After a remote call succeeds, a later failure is an error and does not switch backends. `maintenance.location` may include optional `serverVersion`, added by newer servers; old clients ignore the field and new clients show `unknown` when it is absent.
 
 ## Version policy
 

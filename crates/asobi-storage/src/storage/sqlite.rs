@@ -1151,6 +1151,7 @@ impl MaintenanceStore for SqliteStore {
             database_path: self.db_path.display().to_string(),
             journal_mode,
             schema_version: SCHEMA_VERSION,
+            server_version: None,
         })
     }
 }

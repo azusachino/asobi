@@ -34,14 +34,29 @@ enum Backend {
     Local(SqliteStore),
 }
 
-/// One process selects exactly one backend. In remote mode the first
-/// read-only call decides reachability; once selected, the backend never
-/// changes. This prevents a command from splitting writes across graphs.
+/// One process selects exactly one backend. An unreachable configured remote
+/// fails closed: no command silently opens the local graph.
 pub struct Storage {
     backend: tokio::sync::Mutex<Backend>,
 }
 
 impl Storage {
+    pub async fn is_remote(&self) -> bool {
+        #[cfg(feature = "remote")]
+        return matches!(
+            &*self.backend.lock().await,
+            Backend::Pending(_) | Backend::Remote(_)
+        );
+        #[cfg(not(feature = "remote"))]
+        return false;
+    }
+
+    pub async fn open_local() -> crate::Result<Self> {
+        Ok(Self {
+            backend: tokio::sync::Mutex::new(Backend::Local(SqliteStore::open_default().await?)),
+        })
+    }
+
     pub async fn open_default() -> crate::Result<Self> {
         let paths = asobi_core::paths::AsobiPaths::resolve();
         let config = crate::config::resolve(&paths);
@@ -61,9 +76,7 @@ impl Storage {
                 anyhow::bail!("this asobi was built without remote support");
             }
         }
-        Ok(Self {
-            backend: tokio::sync::Mutex::new(Backend::Local(SqliteStore::open_default().await?)),
-        })
+        Self::open_local().await
     }
 
     #[cfg(feature = "remote")]
@@ -92,17 +105,12 @@ impl Storage {
                     *backend = Backend::Remote(remote.clone());
                     remote_call(&remote).await
                 }
-                Ok(Err(ApiError::Unavailable(message))) => {
-                    self.fallback(&mut backend, message, local_call).await
-                }
-                Err(_) => {
-                    self.fallback(
-                        &mut backend,
-                        "first remote reachability probe timed out after 2 seconds".to_string(),
-                        local_call,
-                    )
-                    .await
-                }
+                Ok(Err(ApiError::Unavailable(message))) => Err(ApiError::Unavailable(format!(
+                    "remote Asobi server unavailable: {message}"
+                ))),
+                Err(_) => Err(ApiError::Unavailable(
+                    "remote Asobi server unavailable: first reachability probe timed out after 2 seconds".into(),
+                )),
                 Ok(Err(error)) => {
                     *backend = Backend::Remote(remote);
                     Err(error)
@@ -116,47 +124,18 @@ impl Storage {
                     *backend = Backend::Remote(remote);
                     Ok(value)
                 }
-                Ok(Err(ApiError::Unavailable(message))) => {
-                    self.fallback(&mut backend, message, local_call).await
-                }
-                Err(_) => {
-                    self.fallback(
-                        &mut backend,
-                        "first remote call timed out after 2 seconds".to_string(),
-                        local_call,
-                    )
-                    .await
-                }
+                Ok(Err(ApiError::Unavailable(message))) => Err(ApiError::Unavailable(format!(
+                    "remote Asobi server unavailable: {message}"
+                ))),
+                Err(_) => Err(ApiError::Unavailable(
+                    "remote Asobi server unavailable: first call timed out after 2 seconds".into(),
+                )),
                 Ok(Err(error)) => {
                     *backend = Backend::Remote(remote);
                     Err(error)
                 }
             }
         }
-    }
-
-    #[cfg(feature = "remote")]
-    async fn fallback<T, L>(
-        &self,
-        backend: &mut Backend,
-        reason: String,
-        local_call: L,
-    ) -> ApiResult<T>
-    where
-        T: Send,
-        L: for<'a> FnOnce(&'a SqliteStore) -> CallFuture<'a, T> + Send,
-    {
-        eprintln!(
-            "warning: remote Asobi server unavailable; this command is using the local graph, and its writes will not reach the server ({reason})"
-        );
-        let store = SqliteStore::open_default()
-            .await
-            .map_err(|error| ApiError::Backend(error.to_string()))?;
-        *backend = Backend::Local(store);
-        let Backend::Local(store) = &*backend else {
-            unreachable!()
-        };
-        local_call(store).await
     }
 
     #[cfg(not(feature = "remote"))]

@@ -12,6 +12,9 @@ pub(crate) struct Cli {
     /// already emit JSON.
     #[arg(long, global = true)]
     pub(crate) json: bool,
+    /// Use this workspace's local graph for this invocation, ignoring remote config
+    #[arg(long, global = true)]
+    pub(crate) local_graph: bool,
 }
 
 #[derive(Subcommand)]
@@ -125,6 +128,18 @@ pub(crate) enum Commands {
         #[arg(long)]
         local: bool,
     },
+    /// Show the selected target and its configuration source without opening a graph
+    Context {
+        #[command(subcommand)]
+        command: ContextCommand,
+    },
+    /// Report CLI and connected server versions
+    Version,
+    /// Show server or local graph information (same output as stats)
+    Info {
+        #[arg(long)]
+        per_entity: bool,
+    },
     /// Show statistics about the knowledge graph
     Stats {
         /// Show observation counts and limits per entity
@@ -157,6 +172,12 @@ pub(crate) enum Commands {
         #[command(subcommand)]
         subcommand: Option<crate::tasks::TasksCommands>,
     },
+}
+
+#[derive(Subcommand)]
+pub(crate) enum ContextCommand {
+    /// Show the effective workspace target; no network or database I/O
+    Show,
 }
 
 #[derive(Clone, Debug, ValueEnum)]

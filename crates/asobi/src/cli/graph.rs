@@ -217,6 +217,17 @@ pub(crate) async fn run(
         }
         Commands::Stats { per_entity } => {
             let location = backend.location().await?;
+            let remote = backend.is_remote().await;
+            let config = crate::config::resolve(&asobi_core::paths::AsobiPaths::resolve());
+            let graph = remote.then_some(config.graph);
+            let endpoint = if remote {
+                config
+                    .remote
+                    .map(|url| crate::config::display_endpoint(&url).to_string())
+            } else {
+                None
+            };
+            let owner = if remote { "server" } else { "client" };
 
             let Stats {
                 entities,
@@ -261,10 +272,29 @@ pub(crate) async fn run(
                     database_path: location.database_path,
                     journal_mode: location.journal_mode,
                     schema_version: location.schema_version,
+                    mode: if remote { "remote" } else { "local" },
+                    path_owner: owner,
+                    graph,
+                    endpoint,
+                    server_version: location.server_version,
                     entities_detailed,
                 })?;
             } else {
-                println!("Database Path:  {}", location.database_path);
+                println!(
+                    "Mode:           {}",
+                    if remote { "remote" } else { "local" }
+                );
+                if let Some(graph) = graph {
+                    println!("Graph:          {graph}");
+                    if let Some(endpoint) = endpoint {
+                        println!("Endpoint:       {endpoint}");
+                    }
+                    println!(
+                        "Server Version: {}",
+                        location.server_version.as_deref().unwrap_or("unknown")
+                    );
+                }
+                println!("Database Path ({owner}): {}", location.database_path);
                 println!("Journal Mode:   {}", location.journal_mode);
                 println!("Schema Version: {}", location.schema_version);
                 println!("Knowledge Graph Statistics:");

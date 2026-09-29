@@ -107,6 +107,10 @@ pub struct StorageLocation {
     pub database_path: String,
     pub journal_mode: String,
     pub schema_version: u32,
+    /// Populated by a server on the existing location response; absent on local
+    /// stores and older servers. Not the API or SQLite schema version.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub server_version: Option<String>,
 }
 
 #[derive(Debug, Clone, schemars::JsonSchema, serde::Serialize, serde::Deserialize)]

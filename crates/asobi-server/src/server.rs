@@ -74,7 +74,14 @@ impl App {
         };
 
         match protocol::dispatch(store.as_ref(), &operation, Some(&body)).await {
-            Ok(value) => (StatusCode::OK, Json(value)).into_response(),
+            Ok(mut value) => {
+                if operation == "maintenance.location"
+                    && let Some(location) = value.as_object_mut()
+                {
+                    location.insert("serverVersion".into(), json!(env!("CARGO_PKG_VERSION")));
+                }
+                (StatusCode::OK, Json(value)).into_response()
+            }
             Err(error) => protocol_error(&error),
         }
     }

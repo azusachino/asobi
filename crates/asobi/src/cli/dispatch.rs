@@ -1,4 +1,4 @@
-use super::commands::{Cli, Commands};
+use super::commands::{Cli, Commands, ContextCommand};
 use super::output::*;
 use crate::application::AsobiRuntime;
 use anyhow::Result;
@@ -32,9 +32,79 @@ pub(crate) async fn run_cli(cli: Cli) -> Result<()> {
         return Ok(());
     }
 
-    let runtime = AsobiRuntime::open_default().await?;
-    let backend = runtime.storage();
+    if let Commands::Context {
+        command: ContextCommand::Show,
+    } = cli.command
+    {
+        let paths = asobi_core::paths::AsobiPaths::resolve();
+        let config = crate::config::resolve(&paths);
+        let source = if cli.local_graph {
+            "--local-graph".to_string()
+        } else if std::env::var_os("ASOBI_REMOTE").is_some() {
+            "ASOBI_REMOTE".to_string()
+        } else if let Some(path) = &paths.config_file {
+            path.display().to_string()
+        } else {
+            "local default".to_string()
+        };
+        let remote = if cli.local_graph { None } else { config.remote };
+        let endpoint = remote.as_deref().map(crate::config::display_endpoint);
+        if cli.json {
+            print_json(ContextReceipt {
+                mode: if remote.is_some() { "remote" } else { "local" }.into(),
+                graph: remote.as_ref().map(|_| config.graph.clone()),
+                endpoint: endpoint.map(str::to_string),
+                source,
+            })?;
+        } else {
+            println!(
+                "Mode:     {}",
+                if remote.is_some() { "remote" } else { "local" }
+            );
+            if remote.is_some() {
+                println!("Graph:    {}", config.graph);
+                println!("Endpoint: {}", endpoint.unwrap_or_default());
+            }
+            println!("Source:   {source}");
+        }
+        return Ok(());
+    }
 
+    if let Commands::Version = cli.command {
+        let remote = !cli.local_graph
+            && crate::config::resolve(&asobi_core::paths::AsobiPaths::resolve())
+                .remote
+                .is_some();
+        let server = if remote {
+            AsobiRuntime::open_default()
+                .await?
+                .storage()
+                .location()
+                .await?
+                .server_version
+                .unwrap_or_else(|| "unknown".into())
+        } else {
+            "not applicable".into()
+        };
+        if cli.json {
+            print_json(VersionReceipt {
+                client_version: env!("CARGO_PKG_VERSION").into(),
+                server_version: server,
+                api_version: asobi_core::api::API_VERSION,
+            })?;
+        } else {
+            println!("Client: {}", env!("CARGO_PKG_VERSION"));
+            println!("Server: {server}");
+            println!("API:    v{}", asobi_core::api::API_VERSION);
+        }
+        return Ok(());
+    }
+    let runtime = if cli.local_graph {
+        AsobiRuntime::open_local().await?
+    } else {
+        AsobiRuntime::open_default().await?
+    };
+    let backend = runtime.storage();
     let json = cli.json;
     match cli.command {
         Commands::Compact {} => {
@@ -84,6 +154,9 @@ pub(crate) async fn run_cli(cli: Cli) -> Result<()> {
             }
         }
         Commands::Tasks { subcommand } => crate::tasks::run(backend, subcommand, json).await?,
+        Commands::Info { per_entity } => {
+            super::graph::run(backend, Commands::Stats { per_entity }, json).await?
+        }
         command => super::graph::run(backend, command, json).await?,
     }
 

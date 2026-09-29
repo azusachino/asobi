@@ -148,7 +148,7 @@ async fn two_workspaces_share_a_graph_and_a_third_graph_is_isolated() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn outage_writes_stay_local_and_remote_mode_recovers_after_restart() {
+async fn outage_fails_closed_and_explicit_local_work_does_not_merge_after_restart() {
     let data = tempdir().unwrap();
     let server = start_server(data.path()).await;
     let first_remote = remote(&server);
@@ -171,13 +171,25 @@ async fn outage_writes_stay_local_and_remote_mode_recovers_after_restart() {
         &["new", "outage:local-only", "task", "--obs", "outage data"],
     )
     .await;
-    assert!(outage.status.success(), "{outage:?}");
-    assert!(String::from_utf8_lossy(&outage.stderr).contains("writes will not reach the server"));
+    assert!(!outage.status.success(), "{outage:?}");
+    assert!(String::from_utf8_lossy(&outage.stderr).contains("remote Asobi server unavailable"));
     let local_db = device.path().join("local.db");
-    assert!(
-        local_db.is_file(),
-        "fallback created the workspace-local graph"
-    );
+    assert!(!local_db.exists(), "outage must not create a local graph");
+    let explicit = run_cli(
+        device.path(),
+        Some(&first_remote),
+        "shared",
+        &[
+            "--local-graph",
+            "new",
+            "outage:local-only",
+            "task",
+            "--obs",
+            "local data",
+        ],
+    )
+    .await;
+    assert!(explicit.status.success(), "{explicit:?}");
     let local_graph = graph_output(&run_cli(device.path(), None, "shared", &["graph"]).await);
     assert_eq!(local_graph["entities"][0]["name"], "outage:local-only");
 
@@ -194,7 +206,7 @@ async fn outage_writes_stay_local_and_remote_mode_recovers_after_restart() {
     assert_eq!(remote_names, vec!["remote:seed"]);
     assert!(
         !remote_names.contains(&"outage:local-only"),
-        "outage write was not merged remotely"
+        "explicit local write was not merged remotely"
     );
     server.shutdown().await;
 }
