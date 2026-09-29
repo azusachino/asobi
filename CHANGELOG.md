@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.8.1
+
+### Changed
+
+- Remote-configured commands now fail on an unreachable server rather than silently using a local graph. Use `--local-graph` for an intentional one-command local override. Local-only workspaces are unchanged.
+- `asobi stats` now shows the actual backend, selected graph, endpoint and database-path owner; its existing JSON keys remain, with additive target fields. `asobi version` distinguishes the client build, API version and connected server build. No named-context or duplicate `info` command is introduced.
+- New servers include an optional `serverVersion` on the existing `maintenance.location` response. New clients show `unknown` against older servers, and older clients can still read the new response. No handshake or protocol-version bump is required.
+
 ## v0.8.0
 
 ### Migration from 0.7.x
