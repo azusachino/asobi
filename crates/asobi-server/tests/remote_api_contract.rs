@@ -40,6 +40,11 @@ remote_contract_test!(
     graph_truth_search_and_task_claim_are_atomic_surfaces
 );
 remote_contract_test!(
+    remote_task_update_is_one_operation_and_preserves_status_without_explicit_change,
+    "contract-task-update",
+    task_update_is_one_operation_and_preserves_status_without_explicit_change
+);
+remote_contract_test!(
     remote_graph_and_search_keep_observations_lazy,
     "contract-lazy",
     graph_and_search_keep_observations_lazy

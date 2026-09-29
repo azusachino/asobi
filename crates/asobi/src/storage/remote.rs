@@ -10,8 +10,9 @@ use asobi_core::model::{EntityInput, Graph, ObservationDeletion, ObservationInpu
 use asobi_core::protocol::{
     AddObservationsRequest, ClaimNextRequest, CreateEntitiesRequest, DeleteEntitiesRequest,
     DeleteObservationByIdRequest, DeleteObservationsRequest, DispatchRequest, EmptyRequest,
-    ErrorBody, OpenNodesRequest, RelationsRequest, SearchNodesRequest, TruthDeleteRequest,
-    TruthUpsertRequest, UpdateObservationByIdRequest, UpdateObservationRequest, error_body_to_api,
+    ErrorBody, OpenNodesRequest, RelationsRequest, SearchNodesRequest, ServerMetadata,
+    TruthDeleteRequest, TruthUpsertRequest, UpdateObservationByIdRequest, UpdateObservationRequest,
+    UpdateTaskRequest, error_body_to_api,
 };
 use reqwest::Client;
 use serde::Serialize;
@@ -26,9 +27,8 @@ pub struct RemoteStore {
 }
 
 impl RemoteStore {
-    /// Build the per-process HTTP client without making a request. The first
-    /// actual operation is the liveness probe; callers decide whether it is
-    /// safe to fall back before running a write.
+    /// Build the per-process HTTP client without making a request. The CLI
+    /// negotiates against /meta before any graph operation.
     pub fn new(remote: String, graph: String) -> ApiResult<Self> {
         let client = Client::builder()
             .connect_timeout(Duration::from_secs(2))
@@ -40,6 +40,40 @@ impl RemoteStore {
             base: remote.trim_end_matches('/').to_string(),
             graph,
         })
+    }
+
+    pub(crate) async fn negotiate(&self) -> ApiResult<()> {
+        let response = self
+            .client
+            .get(format!("{}/meta", self.base))
+            .send()
+            .await
+            .map_err(|e| ApiError::Unavailable(format!("remote server request failed: {e}")))?;
+        let status = response.status();
+        if matches!(status.as_u16(), 502..=504) {
+            return Err(ApiError::Unavailable(format!(
+                "remote gateway returned HTTP {status}"
+            )));
+        }
+        if !status.is_success() {
+            return Err(ApiError::Backend(format!(
+                "server cannot negotiate API versions (HTTP {status}); upgrade the server before this CLI"
+            )));
+        }
+        let meta: ServerMetadata = response.json().await.map_err(|_| {
+            ApiError::Backend("invalid server version metadata; upgrade the server".into())
+        })?;
+        if !meta
+            .supported_api_versions
+            .contains(&asobi_core::api::API_VERSION)
+        {
+            return Err(ApiError::Backend(format!(
+                "incompatible API versions: client needs v{}, server supports {:?}",
+                asobi_core::api::API_VERSION,
+                meta.supported_api_versions
+            )));
+        }
+        Ok(())
     }
 
     async fn call<T: DeserializeOwned>(
@@ -394,6 +428,30 @@ impl MaintenanceStore for RemoteStore {
 
 #[allow(clippy::manual_async_fn)] // Keep the explicit Send future required by the v3 trait.
 impl TaskStore for RemoteStore {
+    fn update(
+        &self,
+        task: &str,
+        notes: Vec<String>,
+        status: Option<&str>,
+        observation_limit: usize,
+    ) -> impl std::future::Future<Output = ApiResult<String>> + Send {
+        let (task, status) = (task.to_string(), status.map(str::to_string));
+        async move {
+            remote_call!(
+                self,
+                "tasks.update",
+                UpdateTaskRequest {
+                    task,
+                    notes,
+                    status,
+                    observation_limit
+                },
+                String
+            )
+            .await
+        }
+    }
+
     fn dispatch(
         &self,
         task: Option<&str>,

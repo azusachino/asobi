@@ -22,11 +22,11 @@ Commands depend on API traits, not provider types. The CLI runs on a current-thr
 
 ## Remote protocol and graph ownership
 
-The remote client sends plain JSON over HTTP: `POST /v3/graphs/<graph>/<operation>`, with the operation request object as the body. Success returns JSON; failures use a non-2xx status and `{ "kind", "message" }`. There is no JSON-RPC envelope or `server.hello` handshake: the `/v3` path identifies the API version. `GET /healthz` is a liveness probe that does not open a graph.
+The remote client sends plain JSON over HTTP: `POST /v3/graphs/<graph>/<operation>`, with the operation request object as the body. Success returns JSON; failures use a non-2xx status and `{ "kind", "message" }`. There is no JSON-RPC envelope. Before accessing a graph, the remote CLI requests unversioned `GET /meta` and requires its supported API versions to include v3; the `/v3` path then selects that protocol. Build versions are diagnostic, not the protocol version. `GET /healthz` is a separate liveness probe. Neither GET opens a graph.
 
 A workspace selects either local or remote mode for its entire graph. Remote workspaces name one server graph (default `asobi`); unrelated graphs cannot share entities or relations. The server accepts graph names matching `[a-z0-9-]+` and creates a valid graph on first use. Its required `--data-dir` is isolated from CLI config and XDG paths.
 
-On the first remote call, connection failure, timeout, or gateway 502/503/504 falls back to the workspace's local graph with a warning. Those outage writes remain local and are never replayed. Once a remote call succeeds, later failures return errors rather than switching backends.
+The CLI fails closed on connection failure, a two-second negotiation timeout, gateway 502/503/504, missing metadata, or an incompatible API version, without touching a local graph. Deploy the server before the 0.8.1 client: older servers do not serve `/meta`. Older clients still use the v3 routes on a new server. Later failures also return errors rather than switching backends. Remote `stats` shows the selected graph, endpoint, and counts, not the server's filesystem or SQLite details.
 
 ## Storage and lifecycle
 

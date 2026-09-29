@@ -22,6 +22,7 @@ fn every_top_level_and_nested_subcommand_has_help() {
         "purge",
         "init",
         "stats",
+        "version",
         "schema",
         "reset",
         "completions",

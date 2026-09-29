@@ -12,6 +12,9 @@ pub(crate) struct Cli {
     /// already emit JSON.
     #[arg(long, global = true)]
     pub(crate) json: bool,
+    /// Use this workspace's local graph for this invocation, ignoring remote config
+    #[arg(long, global = true)]
+    pub(crate) local_graph: bool,
 }
 
 #[derive(Subcommand)]
@@ -40,8 +43,11 @@ pub(crate) enum Commands {
     /// Add observations to existing entities
     Obs {
         name: String,
-        #[arg(num_args = 1..)]
+        #[arg(num_args = 0..)]
         contents: Vec<String>,
+        /// Read one observation from a UTF-8 file (- for stdin)
+        #[arg(long, value_name = "PATH", conflicts_with = "contents")]
+        file: Option<std::path::PathBuf>,
     },
     /// Add or update a truth for an entity
     Truth {
@@ -125,6 +131,8 @@ pub(crate) enum Commands {
         #[arg(long)]
         local: bool,
     },
+    /// Report CLI and connected server versions
+    Version,
     /// Show statistics about the knowledge graph
     Stats {
         /// Show observation counts and limits per entity

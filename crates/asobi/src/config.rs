@@ -8,6 +8,15 @@ pub struct RemoteConfig {
     pub graph: String,
 }
 
+/// Avoid disclosing URL userinfo, query parameters or fragments in CLI output.
+pub fn display_endpoint(remote: &str) -> &str {
+    if remote.contains(['@', '?', '#']) {
+        "<redacted>"
+    } else {
+        remote
+    }
+}
+
 /// Resolve config from the discovered workspace file, then environment.
 pub fn resolve(paths: &AsobiPaths) -> RemoteConfig {
     resolve_values(

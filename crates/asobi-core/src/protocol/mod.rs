@@ -21,14 +21,23 @@ pub use requests::{
     AddObservationsRequest, ClaimNextRequest, CreateEntitiesRequest, DeleteEntitiesRequest,
     DeleteObservationByIdRequest, DeleteObservationsRequest, DispatchRequest, EmptyRequest,
     OpenNodesRequest, RelationsRequest, SearchNodesRequest, TruthDeleteRequest, TruthUpsertRequest,
-    UpdateObservationByIdRequest, UpdateObservationRequest,
+    UpdateObservationByIdRequest, UpdateObservationRequest, UpdateTaskRequest,
 };
 
 use crate::api::v3::{
     ApiError, GraphStore, MaintenanceStore, PurgeRequest, SearchStore, Stats, TaskStore,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
+
+/// Unversioned server metadata: a client must find a shared API version before
+/// sending a versioned graph request. A server can offer v3 and v4 together.
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ServerMetadata {
+    pub server_version: String,
+    pub supported_api_versions: Vec<u32>,
+}
 
 /// Answer one call: parse `body` as the operation's request, call the trait
 /// method, and serialize its result.
@@ -189,6 +198,19 @@ where
             to_value(store.location().await?)
         }
 
+        Operation::TasksUpdate => {
+            let request: requests::UpdateTaskRequest = requests::parse(body)?;
+            to_value(
+                store
+                    .update(
+                        &request.task,
+                        request.notes,
+                        request.status.as_deref(),
+                        request.observation_limit,
+                    )
+                    .await?,
+            )
+        }
         Operation::TasksDispatch => {
             let request: requests::DispatchRequest = requests::parse(body)?;
             to_value(
@@ -269,6 +291,7 @@ pub fn operation_schemas() -> Vec<(&'static str, Value, Value)> {
                 row::<requests::EmptyRequest, crate::api::StorageLocation>(operation)
             }
             Operation::TasksDispatch => row::<requests::DispatchRequest, Option<String>>(operation),
+            Operation::TasksUpdate => row::<requests::UpdateTaskRequest, String>(operation),
             Operation::TasksClaimNext => {
                 row::<requests::ClaimNextRequest, Option<String>>(operation)
             }

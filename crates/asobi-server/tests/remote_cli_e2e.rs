@@ -148,7 +148,161 @@ async fn two_workspaces_share_a_graph_and_a_third_graph_is_isolated() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn outage_writes_stay_local_and_remote_mode_recovers_after_restart() {
+async fn two_cli_workspaces_handoff_and_claim_distinct_tasks() {
+    let data = tempdir().unwrap();
+    let server = start_server(data.path()).await;
+    let remote = remote(&server);
+    let device_a = tempdir().unwrap();
+    let device_b = tempdir().unwrap();
+    let graph = "handoff";
+    let epic = "handoff:trial";
+    let first = "handoff:trial:task-1";
+    let second = "handoff:trial:task-2";
+
+    let planned = run_cli(
+        device_a.path(),
+        Some(&remote),
+        graph,
+        &[
+            "tasks",
+            "plan",
+            epic,
+            "--objective",
+            "Verify remote handoff",
+            "--task",
+            "Inspect target",
+            "--task",
+            "Verify result",
+        ],
+    )
+    .await;
+    assert!(planned.status.success(), "{planned:?}");
+    let claimed = run_cli(
+        device_a.path(),
+        Some(&remote),
+        graph,
+        &["tasks", "claim", first, "--agent", "agent-a"],
+    )
+    .await;
+    assert!(claimed.status.success(), "{claimed:?}");
+    for (key, value) in [("branch", "feat/handoff"), ("commit", "abc123")] {
+        let output = run_cli(
+            device_a.path(),
+            Some(&remote),
+            graph,
+            &["truth", first, key, value],
+        )
+        .await;
+        assert!(output.status.success(), "{output:?}");
+    }
+    let duplicate = run_cli(
+        device_b.path(),
+        Some(&remote),
+        graph,
+        &["tasks", "claim", first, "--agent", "agent-b"],
+    )
+    .await;
+    assert!(
+        !duplicate.status.success(),
+        "duplicate claim: {duplicate:?}"
+    );
+    let claimed = run_cli(
+        device_b.path(),
+        Some(&remote),
+        graph,
+        &["tasks", "claim", second, "--agent", "agent-b"],
+    )
+    .await;
+    assert!(claimed.status.success(), "{claimed:?}");
+    let note_path = device_a.path().join("handoff.txt");
+    std::fs::write(&note_path, "ready for verification\nfrom device A").unwrap();
+    let note = run_cli(
+        device_a.path(),
+        Some(&remote),
+        graph,
+        &[
+            "--json",
+            "tasks",
+            "update",
+            first,
+            "--note-file",
+            note_path.to_str().unwrap(),
+        ],
+    )
+    .await;
+    assert!(note.status.success(), "{note:?}");
+    let receipt: Value = serde_json::from_slice(&note.stdout).unwrap();
+    assert_eq!(
+        receipt["status"], "DISPATCHED",
+        "note-only update must retain status"
+    );
+    let seen_note =
+        graph_output(&run_cli(device_b.path(), Some(&remote), graph, &["show", first]).await);
+    assert!(
+        seen_note["entities"][0]["observations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|note| note == "ready for verification\nfrom device A")
+    );
+    assert!(
+        !seen_note.to_string().contains(note_path.to_str().unwrap()),
+        "only the file content may reach the remote graph"
+    );
+    let done = run_cli(
+        device_a.path(),
+        Some(&remote),
+        graph,
+        &[
+            "tasks", "update", first, "--status", "DONE", "--note", "verified",
+        ],
+    )
+    .await;
+    assert!(done.status.success(), "{done:?}");
+    let seen = graph_output(
+        &run_cli(
+            device_b.path(),
+            Some(&remote),
+            graph,
+            &["tasks", "list", epic],
+        )
+        .await,
+    );
+    let first_on_b = seen["entities"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entity| entity["name"] == first)
+        .unwrap();
+    assert_eq!(first_on_b["truths"]["claimed_by"], "agent-a");
+    assert_eq!(first_on_b["truths"]["status"], "DONE");
+    assert_eq!(first_on_b["truths"]["branch"], "feat/handoff");
+    assert_eq!(first_on_b["truths"]["commit"], "abc123");
+    let second_on_b = seen["entities"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entity| entity["name"] == second)
+        .unwrap();
+    assert_eq!(second_on_b["truths"]["claimed_by"], "agent-b");
+    let stats_a =
+        graph_output(&run_cli(device_a.path(), Some(&remote), graph, &["--json", "stats"]).await);
+    let stats_b =
+        graph_output(&run_cli(device_b.path(), Some(&remote), graph, &["--json", "stats"]).await);
+    assert_eq!(stats_a["mode"], "remote");
+    assert_eq!(stats_a["graph"], graph);
+    for key in ["pathOwner", "databasePath", "journalMode", "schemaVersion"] {
+        assert!(stats_a.get(key).is_none(), "remote stats must hide {key}");
+        assert!(stats_b.get(key).is_none(), "remote stats must hide {key}");
+    }
+    assert_eq!(stats_a["serverVersion"], env!("CARGO_PKG_VERSION"));
+    assert!(!device_a.path().join("local.db").exists());
+    assert!(!device_b.path().join("local.db").exists());
+    server.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn outage_fails_closed_and_explicit_local_work_does_not_merge_after_restart() {
     let data = tempdir().unwrap();
     let server = start_server(data.path()).await;
     let first_remote = remote(&server);
@@ -171,13 +325,48 @@ async fn outage_writes_stay_local_and_remote_mode_recovers_after_restart() {
         &["new", "outage:local-only", "task", "--obs", "outage data"],
     )
     .await;
-    assert!(outage.status.success(), "{outage:?}");
-    assert!(String::from_utf8_lossy(&outage.stderr).contains("writes will not reach the server"));
+    assert!(!outage.status.success(), "{outage:?}");
+    assert!(String::from_utf8_lossy(&outage.stderr).contains("remote Asobi server unavailable"));
     let local_db = device.path().join("local.db");
+    assert!(!local_db.exists(), "outage must not create a local graph");
+    let update = run_cli(
+        device.path(),
+        Some(&first_remote),
+        "shared",
+        &[
+            "tasks",
+            "update",
+            "remote:seed",
+            "--note",
+            "offline update",
+            "--status",
+            "DONE",
+        ],
+    )
+    .await;
     assert!(
-        local_db.is_file(),
-        "fallback created the workspace-local graph"
+        !update.status.success(),
+        "outage update must fail: {update:?}"
     );
+    assert!(
+        !local_db.exists(),
+        "outage update must not create a local graph"
+    );
+    let explicit = run_cli(
+        device.path(),
+        Some(&first_remote),
+        "shared",
+        &[
+            "--local-graph",
+            "new",
+            "outage:local-only",
+            "task",
+            "--obs",
+            "local data",
+        ],
+    )
+    .await;
+    assert!(explicit.status.success(), "{explicit:?}");
     let local_graph = graph_output(&run_cli(device.path(), None, "shared", &["graph"]).await);
     assert_eq!(local_graph["entities"][0]["name"], "outage:local-only");
 
@@ -194,7 +383,7 @@ async fn outage_writes_stay_local_and_remote_mode_recovers_after_restart() {
     assert_eq!(remote_names, vec!["remote:seed"]);
     assert!(
         !remote_names.contains(&"outage:local-only"),
-        "outage write was not merged remotely"
+        "explicit local write was not merged remotely"
     );
     server.shutdown().await;
 }

@@ -105,7 +105,7 @@ No existing graph is migrated: the server starts empty, and local graphs stay wh
 
 JSON-RPC 2.0 was considered and not used: its `id`, batches and notifications serve nothing here, and it answers HTTP 200 for failures, hiding them from everything that reads HTTP.
 
-- **No handshake; the first call is the probe.** The API version is the `v3` in the path, so there is no separate hello call. A response to a `/v3/…` request that is not a protocol response (e.g. a 404 without a `{kind, message}` body, from a server that does not serve v3) fails the command with "server does not speak API v3". The first call a process makes also decides reachability: if it cannot connect, times out (about two seconds), or a gateway in front of the server answers 502, 503 or 504, the server is unreachable and the process falls back to the local graph (see below); nothing has been written at that point. Once a call has succeeded, a later failure is an `Unavailable` error for that call, never a switch to the local graph.
+- **Negotiate before accessing a graph (0.8.1 amendment).** `GET <remote>/meta` is unversioned, read-only and does not open a graph; it returns `{serverVersion, supportedApiVersions}`. The client requires v3 in the offered versions before sending any `POST /v3/…`, including a write. Package versions identify builds but never determine protocol compatibility: breaking changes require a new versioned route, served alongside v3 while old clients exist. Missing metadata (old server) or an incompatible version fails closed with an upgrade error; deploy the new server before the new CLI. Timeout (two seconds), connection failures and gateway 502–504 also fail closed, never switching to local. Later failures never switch backends either. This supersedes the original no-handshake first-call rule.
 - **Liveness:** `GET /healthz` answers 200 without touching any graph. It exists for container and cluster probes; clients never call it.
 - **Messages:** the error `unsupported` from `maintenance.reset` is rebuilt on the client with a fixed message that says reset is not available over the network and names the alternative: `asobi reset` on the server host. Only the server touches the schema, so schema version skew between devices cannot happen.
 
@@ -119,7 +119,9 @@ JSON-RPC 2.0 was considered and not used: its `id`, batches and notifications se
 
 ### When the server is unreachable
 
-A remote-mode command whose server cannot be reached within about two seconds **falls back to the workspace's local graph**, and prints a warning on stderr on every such command, stating that the command is running against the local graph and its writes will not reach the server. Nothing is merged later: writes made during an outage stay in the local graph. This keeps agents working through an outage at the known cost that their memory from that window is invisible to other devices.
+**Amended 2026-09-29:** A remote-configured command fails with a nonzero exit and an unavailable error if its first call cannot reach the server within about two seconds or receives a gateway 502/503/504. It never opens the local graph. The earlier 0.8 decision was to warn and fall back locally so agents could keep working; in practice that split task state across devices without synchronization. Use `asobi --local-graph <command>` only for deliberate, device-local work. Configured local work remains the default when no `remote` is selected. After a successful remote call, later failures remain errors and are never retried against a different backend.
+
+The CLI keeps Asobi's own `stats` command for selected mode, graph and counts, with `version` for client/server builds. Workspace config plus env overrides already express the local and shared-server use cases; there is no named context registry, `context` command or duplicate `info` alias. Remote CLI output does not show the server database path, journal mode, or schema version; local `stats` retains those fields. The v3 `maintenance.location` response still carries its old fields so previously installed clients can work with the new server; removing them from the wire requires a new API version. New clients reject old servers without negotiation rather than claiming `unknown` means compatible. Roll out the server first.
 
 ### Libraries
 
@@ -129,15 +131,15 @@ The server is built on tokio, axum and hyper; the client on reqwest, one client 
 
 - `tests/backend_api_contract_test.rs` and `tests/concurrency_test.rs` run against `RemoteStore` with an in-process server on `127.0.0.1:0`, in addition to `SqliteStore`. SQLite-specific cases (migrations, `sqlite_master`, incremental vacuum) stay SQLite-only.
 - Error round-trip: each `ApiError` variant survives server → wire → client unchanged.
-- A server that does not serve `/v3` is reported as not speaking API v3; a 502/503/504 from a gateway on the first call triggers the fallback; `maintenance.reset` over HTTP is refused; an unknown graph name is created, and an invalid one rejected.
-- An unreachable server falls back to the local graph, with the warning on every command.
+- An older server without `/meta`, or one advertising only incompatible API versions, is rejected before any graph operation; a gateway 502/503/504 during negotiation fails closed. `maintenance.reset` over HTTP is refused; an unknown graph name is created, and an invalid one rejected.
+- An unreachable server fails the command and creates no local graph; explicit `--local-graph` selects local work.
 
 ## Consequences
 
-- Commands built from several trait calls (`tasks plan`, `tasks sync`, `tasks close`) are not atomic in remote mode: a failure part-way leaves the earlier calls applied. Accepted for now; a command that needs atomicity later gets a server-side method, not a client-side transaction.
+- **Amended for 0.8.1:** `tasks update` uses one additive `tasks.update` operation: its note and optional status commit atomically on the server. The old `tasks sync` remains available to old clients, with its multi-call behavior. `tasks plan` and `tasks close` still span several remote calls: a failure part-way leaves earlier calls applied; inspect the board before retrying. Other commands that need atomicity should gain a server-side operation, not a client-side transaction.
 - Each remote call is one HTTP round trip over the tailnet, so a command costs milliseconds per call instead of a local file access. Acceptable for a CLI.
 - The server becomes a deployable, owned by harus-k3s, not this repository: a Deployment with a PVC, a Traefik `IngressRoute` at `asobi.h.azusachino.com` (tailnet-only), and the existing SQLite backup CronJob.
-- An outage splits memory silently apart from the warning: what agents write during it stays on their device.
+- An outage blocks shared-graph commands rather than silently splitting memory; operators may explicitly choose a local graph for unrelated work.
 
 ## Roadmap: PostgreSQL behind the server
 

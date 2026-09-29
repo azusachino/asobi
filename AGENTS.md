@@ -40,13 +40,13 @@ Anything not listed is a leaf: find it with `rg`, and it needs no entry here.
 
 ## Documentation split
 
-This repository documents what the CLI _is_ and ships no `SKILL.md`. Agent workflow guidance — advice about _when_ to reach for a command — lives in the [`asobi` skill](https://github.com/azusachino/harus-skills/blob/main/skills/asobi/SKILL.md):
+Command behavior belongs in `docs/usage.md`; agent workflow guidance belongs in this repository's `skills/asobi/SKILL.md`. The skill is distributed through the external [`skills` CLI](https://github.com/vercel-labs/skills), not through Asobi's own CLI:
 
 ```bash
-npx skills add https://github.com/azusachino/harus-skills --skill asobi --agent universal
+npx skills add https://github.com/azusachino/asobi --skill asobi --agent universal
 ```
 
-Keep the split when adding documentation. A change to a command's behaviour belongs in `docs/usage.md`. Advice about when to use it does not belong in this repository at all.
+Keep one authoritative copy of each kind of guidance. Moving skill ownership here in 0.8.1 does not restore the removed `asobi skills` commands.
 
 ## Quality gate
 
@@ -65,7 +65,7 @@ Four things here have bitten someone and will bite again. Each is a deliberate d
 
 **The sweep is implicit.** In local mode, abandonment and retention run once per process before the first write, not at open, so a read never mutates the graph. Abandonment runs first: an idle open task becomes `ABANDONED` (an epic with an open `part_of` child is protected), and its new observation refreshes activity so retention cannot delete it in the same sweep. Retention then deletes finished tasks past `retention_days`. The server runs the same sweep hourly as a background task over every named graph. Tests that seed old state before a write may watch it vanish or change; pin `ASOBI_ABANDON_DAYS` and `ASOBI_RETENTION_DAYS` (or set either to `0` to disable that step). The windows and defaults live in `crates/asobi-storage/src/storage/sqlite.rs` and `crates/asobi-core/src/paths.rs`.
 
-**Remote fallback is local-only, not synchronization.** If the first remote call in a CLI invocation cannot connect, times out, or gets a gateway 502/503/504, the command warns and uses the workspace's local graph for the whole invocation. Writes made during that outage stay local and are never replayed to the server. After a remote call succeeds, a later failure is an error, not a backend switch. Do not describe fallback as offline sync or assume its writes will appear remotely.
+**Remote outages fail closed.** If the first remote call in a CLI invocation cannot connect, times out, or gets a gateway 502/503/504, the command exits nonzero without opening a local graph. Work on a local graph only by selecting it explicitly (`--local-graph`) or in a locally configured workspace. After a remote call succeeds, a later failure is still an error, not a backend switch. ADR 0005 records why the original 0.8 fallback was retired.
 
 **`crates/asobi/src/frontmatter.rs` is a subset, not YAML.** It handles a flat `key: value` block and nothing else — no nesting, lists, comments, or multi-line scalars. A document declaring `description: >` therefore parses as the literal `">"`. That is known and accepted: the fix is to stop depending on the field, not to widen the parser. That call has already been made once — a block-scalar implementation was written to fix exactly this, then thrown away in favour of dropping the manifest's `description` field, which nothing read. Before widening the subset, check whether the value is load-bearing at all.
 

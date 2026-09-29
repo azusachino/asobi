@@ -32,9 +32,41 @@ pub(crate) async fn run_cli(cli: Cli) -> Result<()> {
         return Ok(());
     }
 
-    let runtime = AsobiRuntime::open_default().await?;
+    if let Commands::Version = cli.command {
+        let remote = !cli.local_graph
+            && crate::config::resolve(&asobi_core::paths::AsobiPaths::resolve())
+                .remote
+                .is_some();
+        let server = if remote {
+            AsobiRuntime::open_default()
+                .await?
+                .storage()
+                .location()
+                .await?
+                .server_version
+                .unwrap_or_else(|| "unknown".into())
+        } else {
+            "not applicable".into()
+        };
+        if cli.json {
+            print_json(VersionReceipt {
+                client_version: env!("CARGO_PKG_VERSION").into(),
+                server_version: server,
+                api_version: asobi_core::api::API_VERSION,
+            })?;
+        } else {
+            println!("Client: {}", env!("CARGO_PKG_VERSION"));
+            println!("Server: {server}");
+            println!("API:    v{}", asobi_core::api::API_VERSION);
+        }
+        return Ok(());
+    }
+    let runtime = if cli.local_graph {
+        AsobiRuntime::open_local().await?
+    } else {
+        AsobiRuntime::open_default().await?
+    };
     let backend = runtime.storage();
-
     let json = cli.json;
     match cli.command {
         Commands::Compact {} => {

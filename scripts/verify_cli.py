@@ -134,14 +134,14 @@ def truths(payload: dict, name: str) -> dict[str, str]:
 
 def schema_checks(env: dict[str, str]) -> None:
     index = json.loads(run(["schema"], env).stdout)
-    assert index["schemaVersion"] == 1
+    assert index["schemaVersion"] == 2
     assert "commands" in index
     assert "graph" in index["commands"]
     assert "properties" in index["commands"]["graph"]
 
     graph_schema = json.loads(run(["schema", "--command", "graph"], env).stdout)
     fastjsonschema.compile(graph_schema, formats=_SCHEMA_FORMATS)
-    assert graph_schema["x-asobi-schema-version"] == 1
+    assert graph_schema["x-asobi-schema-version"] == 2
 
 
 def main() -> None:
@@ -379,6 +379,8 @@ def task_checks() -> None:
             ["tasks", "--help"],
             ["tasks", "plan", "--help"],
             ["tasks", "list", "--help"],
+            ["tasks", "claim", "--help"],
+            ["tasks", "update", "--help"],
             ["tasks", "dispatch", "--help"],
             ["tasks", "sync", "--help"],
             ["tasks", "close", "--help"],
@@ -452,11 +454,33 @@ def task_checks() -> None:
                 env,
                 "tasks-sync",
             )
-            validate_response(
-                ["tasks", "sync", task_2, "--status", "DONE", "--json"],
+            claim = validate_response(
+                ["tasks", "claim", task_2, "--agent", "verifier", "--json"],
                 env,
-                "tasks-sync",
+                "tasks-claim",
             )
+            assert claim["status"] == "DISPATCHED"
+            note = validate_response(
+                ["tasks", "update", task_2, "--note", "review pending", "--json"],
+                env,
+                "tasks-update",
+            )
+            assert note["status"] == "DISPATCHED"
+            done = validate_response(
+                [
+                    "tasks",
+                    "update",
+                    task_2,
+                    "--status",
+                    "DONE",
+                    "--note",
+                    "reviewed",
+                    "--json",
+                ],
+                env,
+                "tasks-update",
+            )
+            assert done["status"] == "DONE"
             closed = validate_response(
                 ["tasks", "close", epic, "--json"], env, "tasks-close"
             )

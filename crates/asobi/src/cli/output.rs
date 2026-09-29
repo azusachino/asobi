@@ -25,11 +25,31 @@ pub(crate) struct StatsReceipt {
     pub(crate) entities: usize,
     pub(crate) relations: usize,
     pub(crate) observations: usize,
-    pub(crate) database_path: String,
-    pub(crate) journal_mode: String,
-    pub(crate) schema_version: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) database_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) journal_mode: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) schema_version: Option<u32>,
+    pub(crate) mode: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) path_owner: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) graph: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) endpoint: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) server_version: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) entities_detailed: Option<Vec<EntityStatsDetail>>,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct VersionReceipt {
+    pub(crate) client_version: String,
+    pub(crate) server_version: String,
+    pub(crate) api_version: u32,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
@@ -60,7 +80,7 @@ pub(crate) fn print_json<T: Serialize>(value: T) -> Result<()> {
     Ok(())
 }
 
-const CLI_SCHEMA_VERSION: u32 = 1;
+const CLI_SCHEMA_VERSION: u32 = 2;
 
 fn schema_for_data<T: JsonSchema>() -> serde_json::Value {
     let mut schema = serde_json::to_value(schemars::schema_for!(T))
@@ -79,6 +99,8 @@ fn schema_registry() -> Vec<SchemaRow> {
     use asobi_core::model::Graph;
     let rows: Vec<SchemaRow> = vec![
         ("capabilities", schema_for_data::<CapabilitiesReceipt>),
+        ("tasks-claim", schema_for_data::<crate::tasks::TaskReceipt>),
+        ("tasks-update", schema_for_data::<crate::tasks::TaskReceipt>),
         ("graph", schema_for_data::<Graph>),
         ("link", schema_for_data::<Graph>),
         ("new", schema_for_data::<Graph>),
@@ -104,6 +126,7 @@ fn schema_registry() -> Vec<SchemaRow> {
         ("rm-obs", schema_for_data::<Graph>),
         ("rm-truth", schema_for_data::<Graph>),
         ("search", schema_for_data::<Graph>),
+        ("version", schema_for_data::<VersionReceipt>),
         ("show", schema_for_data::<Graph>),
         ("stats", schema_for_data::<StatsReceipt>),
         ("tasks-close", schema_for_data::<crate::tasks::TaskReceipt>),

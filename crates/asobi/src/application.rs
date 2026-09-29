@@ -35,6 +35,12 @@ impl AsobiRuntime {
         })
     }
 
+    pub async fn open_local() -> crate::Result<Self> {
+        Ok(Self {
+            storage: Storage::open_local().await?,
+        })
+    }
+
     pub fn from_storage(storage: Storage) -> Self {
         Self { storage }
     }

@@ -65,7 +65,17 @@ pub(crate) async fn run(
                 emit_nodes(backend, involved).await?;
             }
         }
-        Commands::Obs { name, contents } => {
+        Commands::Obs {
+            name,
+            mut contents,
+            file,
+        } => {
+            if let Some(file) = file {
+                contents.push(super::read_text_input(&file)?);
+            }
+            if contents.is_empty() {
+                anyhow::bail!("obs needs text or --file");
+            }
             let paths = asobi_core::paths::AsobiPaths::resolve();
             let limit = std::env::var("ASOBI_OBSERVATION_LIMIT")
                 .ok()
@@ -87,7 +97,6 @@ pub(crate) async fn run(
         }
         Commands::Truth { name, key, value } => {
             backend.truth_upsert(&name, &key, &value).await?;
-            info!("Truth added.");
             if json {
                 emit_nodes(backend, vec![name]).await?;
             }
@@ -217,7 +226,16 @@ pub(crate) async fn run(
         }
         Commands::Stats { per_entity } => {
             let location = backend.location().await?;
-
+            let remote = backend.is_remote().await;
+            let config = crate::config::resolve(&asobi_core::paths::AsobiPaths::resolve());
+            let graph = remote.then_some(config.graph);
+            let endpoint = if remote {
+                config
+                    .remote
+                    .map(|url| crate::config::display_endpoint(&url).to_string())
+            } else {
+                None
+            };
             let Stats {
                 entities,
                 relations,
@@ -258,15 +276,36 @@ pub(crate) async fn run(
                     entities,
                     relations,
                     observations,
-                    database_path: location.database_path,
-                    journal_mode: location.journal_mode,
-                    schema_version: location.schema_version,
+                    database_path: (!remote).then_some(location.database_path),
+                    journal_mode: (!remote).then_some(location.journal_mode),
+                    schema_version: (!remote).then_some(location.schema_version),
+                    mode: if remote { "remote" } else { "local" },
+                    path_owner: (!remote).then_some("client"),
+                    graph,
+                    endpoint,
+                    server_version: location.server_version,
                     entities_detailed,
                 })?;
             } else {
-                println!("Database Path:  {}", location.database_path);
-                println!("Journal Mode:   {}", location.journal_mode);
-                println!("Schema Version: {}", location.schema_version);
+                println!(
+                    "Mode:           {}",
+                    if remote { "remote" } else { "local" }
+                );
+                if let Some(graph) = graph {
+                    println!("Graph:          {graph}");
+                    if let Some(endpoint) = endpoint {
+                        println!("Endpoint:       {endpoint}");
+                    }
+                    println!(
+                        "Server Version: {}",
+                        location.server_version.as_deref().unwrap_or("unknown")
+                    );
+                }
+                if !remote {
+                    println!("Database Path (client): {}", location.database_path);
+                    println!("Journal Mode:   {}", location.journal_mode);
+                    println!("Schema Version: {}", location.schema_version);
+                }
                 println!("Knowledge Graph Statistics:");
                 println!("  Entities:     {}", entities);
                 println!("  Relations:    {}", relations);

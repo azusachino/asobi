@@ -8,7 +8,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.8.0"
+version = "0.8.1"
 edition = "2024"
 rust-version = "1.94"
 authors = ["haru <azusachino@proton.me>"]
@@ -17,8 +17,8 @@ repository = "https://github.com/azusachino/asobi"
 
 # One version for the workspace; all four crates publish together (ADR 0009).
 [workspace.dependencies]
-asobi-core = { path = "crates/asobi-core", version = "0.8.0" }
-asobi-storage = { path = "crates/asobi-storage", version = "0.8.0" }
+asobi-core = { path = "crates/asobi-core", version = "0.8.1" }
+asobi-storage = { path = "crates/asobi-storage", version = "0.8.1" }
 anyhow = "1"
 axum = "0.8"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }

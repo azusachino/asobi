@@ -1,4 +1,4 @@
-use asobi_core::api::{GraphStore, MaintenanceStore, PurgeRequest};
+use asobi_core::api::{GraphStore, MaintenanceStore, OpenNodes, PurgeRequest, TaskStore};
 use asobi_core::model::{EntityInput, ObservationDeletion, ObservationInput, RelationInput};
 use asobi_storage::SqliteStore;
 use sqlx::Connection;
@@ -50,6 +50,62 @@ async fn sqlite_implements_the_v3_contract() {
 async fn graph_truth_search_and_task_claim_are_atomic_surfaces() {
     let (_dir, store) = store().await;
     shared_contract::graph_truth_search_and_task_claim_are_atomic_surfaces(&store).await;
+}
+
+#[tokio::test]
+async fn task_update_is_one_operation_and_preserves_status_without_explicit_change() {
+    let (_dir, store) = store().await;
+    shared_contract::task_update_is_one_operation_and_preserves_status_without_explicit_change(
+        &store,
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn failed_status_write_rolls_back_task_notes() {
+    let (dir, store) = store().await;
+    store
+        .create_entities(vec![EntityInput {
+            name: "rollback:task".into(),
+            entity_type: "task".into(),
+            observations: vec![],
+        }])
+        .await
+        .unwrap();
+    store
+        .truth_upsert("rollback:task", "status", "DISPATCHED")
+        .await
+        .unwrap();
+    let db = dir.path().join("contract.db");
+    let mut conn = SqliteConnection::connect(&format!("sqlite://{}?mode=rwc", db.display()))
+        .await
+        .unwrap();
+    sqlx::query(
+        "CREATE TRIGGER reject_task_status BEFORE UPDATE ON asobi_truths \
+         WHEN NEW.key='status' BEGIN SELECT RAISE(ABORT, 'blocked'); END",
+    )
+    .execute(&mut conn)
+    .await
+    .unwrap();
+    let result = store
+        .update(
+            "rollback:task",
+            vec!["must roll back".into()],
+            Some("DONE"),
+            200,
+        )
+        .await;
+    assert!(result.is_err());
+    let task = store
+        .open_nodes(OpenNodes {
+            names: vec!["rollback:task".into()],
+            observation_limit: 20,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(task.entities[0].truths["status"], "DISPATCHED");
+    assert!(task.entities[0].observations.is_empty());
 }
 
 #[tokio::test]

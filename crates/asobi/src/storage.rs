@@ -23,8 +23,7 @@ use asobi_core::api::v3::ApiError;
 #[cfg(feature = "remote")]
 enum Backend {
     Local(SqliteStore),
-    /// No network request has happened yet. A read call is itself the probe;
-    /// a first write probes with read-only `maintenance.location` first.
+    /// No network request has happened yet. Negotiate before any graph call.
     Pending(RemoteStore),
     Remote(RemoteStore),
 }
@@ -34,14 +33,29 @@ enum Backend {
     Local(SqliteStore),
 }
 
-/// One process selects exactly one backend. In remote mode the first
-/// read-only call decides reachability; once selected, the backend never
-/// changes. This prevents a command from splitting writes across graphs.
+/// One process selects exactly one backend. An unreachable configured remote
+/// fails closed: no command silently opens the local graph.
 pub struct Storage {
     backend: tokio::sync::Mutex<Backend>,
 }
 
 impl Storage {
+    pub async fn is_remote(&self) -> bool {
+        #[cfg(feature = "remote")]
+        return matches!(
+            &*self.backend.lock().await,
+            Backend::Pending(_) | Backend::Remote(_)
+        );
+        #[cfg(not(feature = "remote"))]
+        return false;
+    }
+
+    pub async fn open_local() -> crate::Result<Self> {
+        Ok(Self {
+            backend: tokio::sync::Mutex::new(Backend::Local(SqliteStore::open_default().await?)),
+        })
+    }
+
     pub async fn open_default() -> crate::Result<Self> {
         let paths = asobi_core::paths::AsobiPaths::resolve();
         let config = crate::config::resolve(&paths);
@@ -61,13 +75,11 @@ impl Storage {
                 anyhow::bail!("this asobi was built without remote support");
             }
         }
-        Ok(Self {
-            backend: tokio::sync::Mutex::new(Backend::Local(SqliteStore::open_default().await?)),
-        })
+        Self::open_local().await
     }
 
     #[cfg(feature = "remote")]
-    async fn route<T, R, L>(&self, write: bool, remote_call: R, local_call: L) -> ApiResult<T>
+    async fn route<T, R, L>(&self, _write: bool, remote_call: R, local_call: L) -> ApiResult<T>
     where
         T: Send,
         R: for<'a> FnOnce(&'a RemoteStore) -> CallFuture<'a, T> + Send,
@@ -84,79 +96,22 @@ impl Storage {
             unreachable!()
         };
         let remote = remote.clone();
-        if write {
-            // Never retry a possibly-applied mutation after a gateway error:
-            // establish reachability with a read-only operation first.
-            match tokio::time::timeout(std::time::Duration::from_secs(2), remote.location()).await {
-                Ok(Ok(_)) => {
-                    *backend = Backend::Remote(remote.clone());
-                    remote_call(&remote).await
-                }
-                Ok(Err(ApiError::Unavailable(message))) => {
-                    self.fallback(&mut backend, message, local_call).await
-                }
-                Err(_) => {
-                    self.fallback(
-                        &mut backend,
-                        "first remote reachability probe timed out after 2 seconds".to_string(),
-                        local_call,
-                    )
-                    .await
-                }
-                Ok(Err(error)) => {
-                    *backend = Backend::Remote(remote);
-                    Err(error)
-                }
+        // A single read-only negotiation precedes reads and writes alike.
+        // The URL version is the accepted API major, not a package version.
+        match tokio::time::timeout(std::time::Duration::from_secs(2), remote.negotiate()).await {
+            Ok(Ok(())) => {
+                *backend = Backend::Remote(remote.clone());
+                remote_call(&remote).await
             }
-        } else {
-            match tokio::time::timeout(std::time::Duration::from_secs(2), remote_call(&remote))
-                .await
-            {
-                Ok(Ok(value)) => {
-                    *backend = Backend::Remote(remote);
-                    Ok(value)
-                }
-                Ok(Err(ApiError::Unavailable(message))) => {
-                    self.fallback(&mut backend, message, local_call).await
-                }
-                Err(_) => {
-                    self.fallback(
-                        &mut backend,
-                        "first remote call timed out after 2 seconds".to_string(),
-                        local_call,
-                    )
-                    .await
-                }
-                Ok(Err(error)) => {
-                    *backend = Backend::Remote(remote);
-                    Err(error)
-                }
-            }
+            Ok(Err(ApiError::Unavailable(message))) => Err(ApiError::Unavailable(format!(
+                "remote Asobi server unavailable: {message}"
+            ))),
+            Err(_) => Err(ApiError::Unavailable(
+                "remote Asobi server unavailable: version negotiation timed out after 2 seconds"
+                    .into(),
+            )),
+            Ok(Err(error)) => Err(error),
         }
-    }
-
-    #[cfg(feature = "remote")]
-    async fn fallback<T, L>(
-        &self,
-        backend: &mut Backend,
-        reason: String,
-        local_call: L,
-    ) -> ApiResult<T>
-    where
-        T: Send,
-        L: for<'a> FnOnce(&'a SqliteStore) -> CallFuture<'a, T> + Send,
-    {
-        eprintln!(
-            "warning: remote Asobi server unavailable; this command is using the local graph, and its writes will not reach the server ({reason})"
-        );
-        let store = SqliteStore::open_default()
-            .await
-            .map_err(|error| ApiError::Backend(error.to_string()))?;
-        *backend = Backend::Local(store);
-        let Backend::Local(store) = &*backend else {
-            unreachable!()
-        };
-        local_call(store).await
     }
 
     #[cfg(not(feature = "remote"))]
@@ -453,6 +408,55 @@ impl MaintenanceStore for Storage {
 
 #[allow(clippy::manual_async_fn)]
 impl TaskStore for Storage {
+    fn update(
+        &self,
+        task: &str,
+        notes: Vec<String>,
+        status: Option<&str>,
+        observation_limit: usize,
+    ) -> impl Future<Output = ApiResult<String>> + Send {
+        let (task, status) = (task.to_string(), status.map(str::to_string));
+        async move {
+            #[cfg(feature = "remote")]
+            {
+                let (remote_task, remote_notes, remote_status) =
+                    (task.clone(), notes.clone(), status.clone());
+                self.route(
+                    true,
+                    move |store| {
+                        Box::pin(async move {
+                            store
+                                .update(
+                                    &remote_task,
+                                    remote_notes,
+                                    remote_status.as_deref(),
+                                    observation_limit,
+                                )
+                                .await
+                        })
+                    },
+                    move |store| {
+                        Box::pin(async move {
+                            store
+                                .update(&task, notes, status.as_deref(), observation_limit)
+                                .await
+                        })
+                    },
+                )
+                .await
+            }
+            #[cfg(not(feature = "remote"))]
+            self.route_local(move |store| {
+                Box::pin(async move {
+                    store
+                        .update(&task, notes, status.as_deref(), observation_limit)
+                        .await
+                })
+            })
+            .await
+        }
+    }
+
     fn dispatch(
         &self,
         task: Option<&str>,

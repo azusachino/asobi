@@ -33,3 +33,7 @@ An existing `[skills]` block in `asobi.toml` is **silently ignored**. `AsobiConf
 - Installed skill trees on disk are untouched. Nothing Asobi installed is removed by upgrading.
 - The `asobi` skill in harus-skills documents `asobi skills …` and must be updated in that repository.
 - Reintroducing skills management would be a new product decision, not a regression fix.
+
+## 2026-09-29 amendment: source ownership, not an installer
+
+The `asobi` agent skill is now maintained at `skills/asobi/SKILL.md` in this repository, alongside the commands it describes. Install it with the external `npx skills add https://github.com/azusachino/asobi --skill asobi --agent universal` command. The previous harus-skills copy was the 0.8-era source and is no longer the authoritative place to edit it. This does not restore `[skills]` config or `asobi skills` commands; the decision to leave skill installation to the independent CLI stands.

@@ -107,6 +107,10 @@ pub struct StorageLocation {
     pub database_path: String,
     pub journal_mode: String,
     pub schema_version: u32,
+    /// Populated by a server on the existing location response; absent on local
+    /// stores and older servers. Not the API or SQLite schema version.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub server_version: Option<String>,
 }
 
 #[derive(Debug, Clone, schemars::JsonSchema, serde::Serialize, serde::Deserialize)]
@@ -180,7 +184,28 @@ pub trait MaintenanceStore {
     fn health(&self) -> impl Future<Output = ApiResult<BackendHealth>> + Send;
     fn location(&self) -> impl Future<Output = ApiResult<StorageLocation>> + Send;
 }
+/// The task-board statuses accepted by the CLI and atomic task updater.
+pub fn valid_task_status(status: &str) -> bool {
+    matches!(
+        status,
+        "READY_TO_DISPATCH" | "DISPATCHED" | "REVIEW" | "AWAITING_VERIFY" | "DONE"
+    ) || status
+        .strip_prefix("BLOCKED_ON ")
+        .is_some_and(|target| !target.trim().is_empty())
+}
+
 pub trait TaskStore {
+    /// Atomically append notes and optionally change status, returning the
+    /// resulting status (or an empty string if the task has no status truth).
+    fn update(
+        &self,
+        _task: &str,
+        _notes: Vec<String>,
+        _status: Option<&str>,
+        _observation_limit: usize,
+    ) -> impl Future<Output = ApiResult<String>> + Send {
+        async { Err(ApiError::Unsupported("atomic task update")) }
+    }
     fn dispatch(
         &self,
         task: Option<&str>,

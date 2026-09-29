@@ -2,7 +2,7 @@
 
 This is Asobi's interface reference: what each command does, what it accepts, and what it returns. It describes the CLI and nothing more.
 
-It describes command behavior, not agent workflow: when to read the graph, what to write at closeout, or how to sequence a task board. That guidance differs between users and lives in the [`asobi` skill](https://github.com/azusachino/harus-skills/blob/main/skills/asobi/SKILL.md), which cites this document for exact contracts.
+It describes command behavior, not agent workflow: when to read the graph, what to write at closeout, or how to sequence a task board. That guidance lives in the [repository-owned `asobi` skill](../skills/asobi/SKILL.md), which cites this document for exact contracts.
 
 ## For humans
 
@@ -52,7 +52,7 @@ The command also supports `elvish` and `powershell`. Completions cover commands,
 
 Asobi 0.8 starts a new graph and refuses pre-0.8 graph files without modifying them. Move an old local graph aside before running 0.8; server-side graph files created by an older version must likewise be moved aside on the server. There is no automatic migration or import.
 
-The former session handoff is replaced by graph-backed tasks. `session` is no longer a special type; legacy session entities are ordinary entities. Skills management and `[skills]` configuration are removed; any existing `[skills]` block is ignored. Install the maintained skill with `npx skills add https://github.com/azusachino/harus-skills --skill asobi --agent universal`.
+The former session handoff is replaced by graph-backed tasks. `session` is no longer a special type; legacy session entities are ordinary entities. Skills management and `[skills]` configuration are removed; any existing `[skills]` block is ignored. Install the repository-owned skill with `npx skills add https://github.com/azusachino/asobi --skill asobi --agent universal`.
 
 ### Workspace setup
 
@@ -204,10 +204,10 @@ asobi rm-truth "project-x" "language"
 
 Writing the same key again replaces the value. Asobi keeps no archive of what it held before: that store was unbounded, had no reader, and where a trail genuinely matters the observations carry it in better form — a task's `status` history said `DISPATCHED` where the observation beside it said "dispatched to codex".
 
-**Install the companion skill.** Asobi ships no `SKILL.md` of its own — this document describes what the CLI _is_, and when to reach for it is agent policy. The maintained skill lives in [harus-skills](https://github.com/azusachino/harus-skills), installed with the [`skills` CLI](https://github.com/vercel-labs/skills):
+**Install the companion skill.** This document describes what the CLI does; the repository's [`skills/asobi/SKILL.md`](../skills/asobi/SKILL.md) covers agent workflow. Install it with the independent [`skills` CLI](https://github.com/vercel-labs/skills):
 
 ```bash
-npx skills add https://github.com/azusachino/harus-skills --skill asobi --agent universal
+npx skills add https://github.com/azusachino/asobi --skill asobi --agent universal
 ```
 
 **Coordinate durable task work:**
@@ -216,8 +216,11 @@ npx skills add https://github.com/azusachino/harus-skills --skill asobi --agent 
 asobi tasks plan "project:epic" --objective "Ship the feature" \
   --task "Implement the change" --task "Verify the result"
 asobi tasks list "project:epic"
-asobi tasks dispatch                 # select the first READY_TO_DISPATCH task
-asobi tasks sync "project:epic:task-1" --note "make check passes" --status DONE
+asobi tasks claim "project:epic:task-1" --agent lead
+asobi tasks update "project:epic:task-1" --note "make check passes"  # status stays DISPATCHED
+asobi tasks update "project:epic:task-1" --status DONE --note "implementation complete"
+asobi tasks claim "project:epic:task-2" --agent reviewer
+asobi tasks update "project:epic:task-2" --status DONE --note "verified"
 asobi tasks close "project:epic"
 ```
 
@@ -241,9 +244,10 @@ Creates one or more entities from repeated `NAME TYPE` pairs — `new A task B c
 
 ```text
 asobi obs <NAME> <CONTENT> [<CONTENT> ...]
+asobi obs <NAME> --file <PATH|->
 ```
 
-Appends observations to an entity that must already exist. Observations are capped per entity — 200 by default, oldest evicted — configurable through `ASOBI_OBSERVATION_LIMIT` or `observation_limit` in `asobi.toml`.
+Appends observations to an entity that must already exist. `--file` reads exactly one UTF-8 observation from a local file (`-` reads stdin), preserving newlines; it cannot be combined with inline content. The path is read by the CLI, never sent to a remote server. Empty or whitespace-only files are rejected before writing. Observations are capped per entity — 200 by default, oldest evicted — configurable through `ASOBI_OBSERVATION_LIMIT` or `observation_limit` in `asobi.toml`.
 
 ```text
 asobi link <FROM> <TO> <TYPE> [<FROM> <TO> <TYPE> ...]
@@ -344,16 +348,16 @@ asobi reset [--force]
 ```text
 asobi tasks plan <EPIC> --objective <TEXT> --task <TITLE>...
 asobi tasks list [EPIC] [--all]
-asobi tasks dispatch [TASK] [--agent <NAME>]
-asobi tasks sync <TASK> [--status <STATUS>] [--note <TEXT>]
+asobi tasks claim <TASK> [--agent <NAME>]
+asobi tasks update <TASK> [--status <STATUS>] [--note <TEXT> ... | --note-file <PATH|->]
 asobi tasks close <EPIC> [--lesson <TEXT>]
 ```
 
-These are ordinary graph entities under a workflow contract: status is a truth, notes are observations, and child tasks link to their epic with `part_of`. Task status moves through `READY_TO_DISPATCH → DISPATCHED → REVIEW → AWAITING_VERIFY → DONE`. `dispatch` claims a task and records the claim atomically — it marks ownership and does **not** launch an agent; omitting `TASK` claims the first ready one. Use `asobi tasks <command> --help` for the full argument list.
+These are ordinary graph entities under a workflow contract: status is a truth, notes are observations, and child tasks link to their epic with `part_of`. Task status moves through `READY_TO_DISPATCH → DISPATCHED → REVIEW → AWAITING_VERIFY → DONE`. `claim` requires the task name and atomically records ownership; it does **not** launch an agent or choose work from another epic. `update` requires a note or explicit status: a note alone preserves the current status, and a note plus status commits together in one server operation or local transaction. `--note-file` reads one literal UTF-8 note locally (`-` reads stdin), preserving newlines, and cannot be combined with `--note`; empty or whitespace-only input is rejected before writing. An update with neither is refused. The old `dispatch` (including its global no-argument selection) and `sync` (including its implicit `REVIEW` status) remain available for 0.8 scripts but are hidden from help. New `update` needs an 0.8.1 server; install the server before using it from remote clients. `plan` and `close` still span several remote operations and can leave partial work on failure; inspect the board before retrying them. Use `asobi tasks <command> --help` for the full argument list.
 
 Without an `EPIC`, `tasks list` is the "what is open" read: it returns tasks and epics that are not `DONE`, `CLOSED` or `ABANDONED`. Pass `--all` for the complete board including finished work. An entity with no `status` truth counts as open — which is what surfaces an epic whose children are all `DONE` but which was never closed: it appears alone, with no open children under it.
 
-A checkpoint is more useful when it says which revision it was true at, but Asobi does not capture that for you: one graph can serve several repositories — a workspace of submodules resolves to the same graph from every directory — so the commit it would read depends on where the command was run, not on what the task is about. Record it yourself when the handoff warrants it, from the repository the work is actually in:
+A checkpoint is more useful when it says which revision it was true at, but Asobi does not capture that for you: one graph can serve several repositories — a nested checkout can select its own `asobi.toml` and graph — so the commit it would read depends on where the command was run, not on what the task is about. Record it yourself when the handoff warrants it, from the repository the work is actually in:
 
 ```bash
 asobi truth "[project]:[epic]:task-N" commit "$(git -C path/to/repo rev-parse HEAD)"
@@ -381,7 +385,7 @@ Names are hierarchical and colon-separated — `project-x`, `project-x:task:depl
 
 ### Streams and exit codes
 
-**Mutating** commands print a one-line confirmation (`Entity 'X' created.`, `Observation added.`) to **stderr** and leave **stdout empty** on success. A scripted caller must branch on the exit code, not on stdout being non-empty.
+Most **mutating** commands print a one-line confirmation to **stderr** and leave **stdout empty** on success. `truth` succeeds silently to keep repeated handoff updates readable. A scripted caller must branch on the exit code, not on stdout being non-empty.
 
 **Read** commands (`graph`, `search`, `show`, `stats`, `capabilities`, `schema`) write their JSON payload to **stdout**.
 
@@ -486,9 +490,11 @@ remote = "https://asobi.h.azusachino.com"
 graph = "workstation"
 ```
 
-`ASOBI_REMOTE` and `ASOBI_GRAPH` override those keys. When `remote` is set, all graph and task calls go to that server; local `data_dir` and `ASOBI_DATABASE_URL` are not used. The `observation_limit` and `topics_dir` stay client-side, so `compact` writes Markdown locally.
+Asobi uses the **nearest** `asobi.toml` when walking up from the current directory; a nested checkout with its own config does not inherit the parent's remote setting. `ASOBI_REMOTE` and `ASOBI_GRAPH` override those keys. Run `asobi stats` (or `asobi --json stats`) from the intended workspace to see the selected mode, endpoint, graph and counts. Local `stats` also shows its database path, journal mode and schema version; remote `stats` omits those server storage details in human and JSON output. This opens the selected graph; an unreachable or incompatible configured remote fails rather than reporting local counts. For deliberate work on the local graph even when a remote is configured, use `asobi --local-graph <command>`; this applies to one invocation, not future commands. `asobi version` reports the CLI build, protocol version and connected server build. An older server without version negotiation must be upgraded first.
 
-The API version is encoded in the `/v3` URL; there is no `server.hello` call or separate handshake. Each operation is plain JSON over `POST /v3/graphs/<graph>/<operation>`; successful calls return JSON, and errors use a non-2xx status with `{ "kind", "message" }`. `GET /healthz` returns 200 without opening a graph and is for liveness probes only. The first remote operation is the reachability probe (a write command first makes a read-only `maintenance.location` call). If that call cannot connect, times out after about two seconds, or receives gateway HTTP 502/503/504, the process warns on stderr and uses the local graph for the whole command; outage writes stay local and are never merged later. Once any remote call succeeds, a later failure is an error and never switches backend mid-command. A non-protocol response fails with `server does not speak API v3`. The process reuses one HTTP client/connection. Use a build with the `remote` feature (`cargo install asobi --features remote`); a local-only build fails clearly if it finds `remote` configured.
+When `remote` is set, all graph and task calls go to that server; local `data_dir` and `ASOBI_DATABASE_URL` are not used. The `observation_limit` and `topics_dir` stay client-side, so `compact` writes Markdown locally.
+
+Before any graph operation the remote CLI requests unversioned `GET /meta` for the server build and supported API versions. It requires v3 in that list before using `POST /v3/graphs/<graph>/<operation>`; build numbers are diagnostic, while breaking wire changes require a new versioned route. `GET /meta` and `GET /healthz` do not open a graph; only the former negotiates compatibility. An older server without `/meta` or a server that does not support v3 fails before a read or write: **deploy the 0.8.1 server before the CLI**. Old clients still use v3 routes on the new server. If the metadata call cannot connect, times out after about two seconds, or receives gateway HTTP 502/503/504, the command exits nonzero without opening the local graph. Use `--local-graph` only for intended local work. Once negotiation succeeds, later failures are errors and never switch backend mid-command. A single HTTP client is reused per process. The v3 `maintenance.location` response retains its old fields for older clients, but new remote CLI output does not expose the server database path. Use a build with the `remote` feature (`cargo install asobi --features remote`); a local-only build fails if it finds `remote` configured.
 
 ## The graph server: `asobi-server`
 

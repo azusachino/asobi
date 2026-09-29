@@ -70,7 +70,7 @@ checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
 
 [[package]]
 name = "asobi"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "anyhow",
  "asobi-core",
@@ -94,7 +94,7 @@ dependencies = [
 
 [[package]]
 name = "asobi-core"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "schemars",
  "serde",
@@ -106,7 +106,7 @@ dependencies = [
 
 [[package]]
 name = "asobi-server"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "anyhow",
  "asobi",
@@ -124,7 +124,7 @@ dependencies = [
 
 [[package]]
 name = "asobi-storage"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "anyhow",
  "asobi-core",

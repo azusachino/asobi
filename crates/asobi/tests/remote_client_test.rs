@@ -72,6 +72,23 @@ fn configured_remote_without_feature_fails_before_touching_a_graph() {
     assert!(!db.exists(), "must fail before opening local graph");
 }
 
+#[test]
+fn local_version_does_not_open_a_graph() {
+    let dir = tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("asobi.toml"),
+        "remote = 'http://127.0.0.1:1'\ngraph = 'file-graph'\n",
+    )
+    .unwrap();
+    let db = dir.path().join("not-opened.db");
+    let envs = [("ASOBI_DATABASE_URL", db.to_str().unwrap())];
+    let version = run_cli(dir.path(), &["--json", "--local-graph", "version"], &envs);
+    assert!(version.status.success());
+    let value: serde_json::Value = serde_json::from_slice(&version.stdout).unwrap();
+    assert_eq!(value["serverVersion"], "not applicable");
+    assert!(!db.exists());
+}
+
 #[cfg(feature = "remote")]
 mod remote {
     use super::*;
@@ -132,6 +149,30 @@ mod remote {
             .unwrap();
         let graph = local_view.read_graph().await.unwrap();
         assert_eq!(graph.entities[0].name, "remote:one");
+        let envs = [
+            ("ASOBI_REMOTE", format!("http://{}", server.local_addr)),
+            ("ASOBI_GRAPH", "client-graph".into()),
+        ];
+        let borrowed: Vec<(&str, &str)> = envs.iter().map(|(k, v)| (*k, v.as_str())).collect();
+        let version = command(workspace.path(), &["--json", "version"], &borrowed);
+        assert!(version.status.success());
+        let version: serde_json::Value = serde_json::from_slice(&version.stdout).unwrap();
+        assert_eq!(version["serverVersion"], env!("CARGO_PKG_VERSION"));
+        let stats = command(workspace.path(), &["--json", "stats"], &borrowed);
+        assert!(stats.status.success());
+        let stats: serde_json::Value = serde_json::from_slice(&stats.stdout).unwrap();
+        assert_eq!(stats["mode"], "remote");
+        assert!(stats.get("pathOwner").is_none());
+        assert!(stats.get("databasePath").is_none());
+        assert!(stats.get("journalMode").is_none());
+        assert!(stats.get("schemaVersion").is_none());
+        assert_eq!(stats["graph"], "client-graph");
+        let human = command(workspace.path(), &["stats"], &borrowed);
+        assert!(human.status.success(), "{human:?}");
+        let text = String::from_utf8_lossy(&human.stdout);
+        assert!(!text.contains("Database Path"), "{text}");
+        assert!(!text.contains("Journal Mode"), "{text}");
+        assert!(!text.contains("Schema Version"), "{text}");
 
         // A refusal response maps back to the protocol's ApiError variant.
         let remote = asobi::storage::RemoteStore::new(
@@ -147,7 +188,7 @@ mod remote {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn closed_port_falls_back_to_local_with_warning_each_command() {
+    async fn closed_port_fails_closed_for_reads_and_writes() {
         let workspace = tempdir().unwrap();
         let local_db = workspace.path().join("fallback.db");
         let remote = closed_port();
@@ -161,35 +202,39 @@ mod remote {
                 ("ASOBI_DATABASE_URL", local_db.to_str().unwrap()),
             ],
         );
+        assert!(!output.status.success());
         assert!(
-            output.status.success(),
-            "{}",
-            String::from_utf8_lossy(&output.stderr)
+            String::from_utf8_lossy(&output.stdout).contains("remote Asobi server unavailable")
         );
-        assert!(
-            String::from_utf8_lossy(&output.stderr).contains("writes will not reach the server")
-        );
-        assert!(
-            start.elapsed() < std::time::Duration::from_secs(3),
-            "first-call fallback took {:?}",
-            start.elapsed()
-        );
-        assert!(local_db.exists());
+        assert!(start.elapsed() < std::time::Duration::from_secs(3));
+        assert!(!local_db.exists());
 
         let next = command(
             workspace.path(),
-            &["stats"],
+            &["new", "offline:one", "task"],
             &[
                 ("ASOBI_REMOTE", &remote),
                 ("ASOBI_DATABASE_URL", local_db.to_str().unwrap()),
             ],
         );
-        assert!(next.status.success());
-        assert!(String::from_utf8_lossy(&next.stderr).contains("writes will not reach the server"));
+        assert!(!next.status.success());
+        assert!(String::from_utf8_lossy(&next.stderr).contains("remote Asobi server unavailable"));
+        assert!(!local_db.exists());
+
+        let explicit = command(
+            workspace.path(),
+            &["--local-graph", "stats", "--json"],
+            &[
+                ("ASOBI_REMOTE", &remote),
+                ("ASOBI_DATABASE_URL", local_db.to_str().unwrap()),
+            ],
+        );
+        assert!(explicit.status.success());
+        assert!(local_db.exists());
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn first_gateway_failure_falls_back_for_all_gateway_statuses() {
+    async fn first_gateway_failure_fails_closed_for_all_gateway_statuses() {
         for status in [502, 503, 504] {
             let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
             let addr = listener.local_addr().unwrap();
@@ -215,21 +260,20 @@ mod remote {
                     ("ASOBI_DATABASE_URL", local_db.to_str().unwrap()),
                 ],
             );
-            assert!(output.status.success(), "HTTP {status}: {:?}", output);
+            assert!(!output.status.success(), "HTTP {status}: {:?}", output);
             assert!(
-                String::from_utf8_lossy(&output.stderr)
-                    .contains("writes will not reach the server")
+                String::from_utf8_lossy(&output.stdout).contains("remote Asobi server unavailable")
             );
             assert!(
-                local_db.exists(),
-                "HTTP {status} should select local storage"
+                !local_db.exists(),
+                "HTTP {status} must not select local storage"
             );
             server.await.unwrap();
         }
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn first_call_timeout_falls_back_to_local() {
+    async fn first_call_timeout_fails_closed() {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         let server = tokio::spawn(async move {
@@ -248,13 +292,13 @@ mod remote {
                 ("ASOBI_DATABASE_URL", local_db.to_str().unwrap()),
             ],
         );
-        assert!(output.status.success(), "{:?}", output);
+        assert!(!output.status.success(), "{:?}", output);
         assert!(started.elapsed() >= std::time::Duration::from_secs(1));
         assert!(started.elapsed() < std::time::Duration::from_secs(3));
         assert!(
-            String::from_utf8_lossy(&output.stderr).contains("writes will not reach the server")
+            String::from_utf8_lossy(&output.stdout).contains("remote Asobi server unavailable")
         );
-        assert!(local_db.exists());
+        assert!(!local_db.exists());
         server.abort();
     }
 
@@ -266,7 +310,7 @@ mod remote {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn non_protocol_response_reports_api_v3_error_without_fallback() {
+    async fn old_server_without_negotiation_fails_before_graph_access() {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         let server_task = tokio::spawn(async move {
@@ -299,7 +343,40 @@ mod remote {
             String::from_utf8_lossy(&output.stderr)
         );
         let stderr = String::from_utf8_lossy(&output.stderr);
-        assert!(stderr.contains("server does not speak API v3"), "{stderr}");
+        assert!(stderr.contains("cannot negotiate API versions"), "{stderr}");
+        assert!(!local_db.exists());
+        server_task.await.unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn incompatible_server_fails_before_sending_a_mutation() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server_task = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut request = [0u8; 4096];
+            let bytes = stream.read(&mut request).await.unwrap();
+            assert!(String::from_utf8_lossy(&request[..bytes]).starts_with("GET /meta"));
+            let body = r#"{"serverVersion":"9.0.0","supportedApiVersions":[4]}"#;
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            stream.write_all(response.as_bytes()).await.unwrap();
+        });
+        let dir = tempdir().unwrap();
+        let local_db = dir.path().join("no-fallback.db");
+        let output = command(
+            dir.path(),
+            &["new", "must:not:write", "task"],
+            &[
+                ("ASOBI_REMOTE", &format!("http://{addr}")),
+                ("ASOBI_DATABASE_URL", local_db.to_str().unwrap()),
+            ],
+        );
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(!output.status.success(), "{output:?}");
+        assert!(stderr.contains("incompatible API versions"), "{stderr}");
         assert!(!local_db.exists());
         server_task.await.unwrap();
     }
@@ -312,7 +389,7 @@ mod remote {
             let (mut first, _) = listener.accept().await.unwrap();
             let mut request = [0u8; 4096];
             let _ = first.read(&mut request).await.unwrap();
-            let success = br#"{"databasePath":"remote","journalMode":"wal","schemaVersion":9}"#;
+            let success = br#"{"serverVersion":"0.8.1","supportedApiVersions":[3]}"#;
             let response = format!(
                 "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 success.len(),
@@ -400,7 +477,9 @@ mod remote {
                         }
                         requests.fetch_add(1, Ordering::SeqCst);
                         let path = headers.lines().next().unwrap_or("");
-                        let response_body = if path.contains("maintenance.location") {
+                        let response_body = if path.contains("get /meta") {
+                            r#"{"serverVersion":"0.8.1","supportedApiVersions":[3]}"#
+                        } else if path.contains("maintenance.location") {
                             r#"{"databasePath":"remote","journalMode":"wal","schemaVersion":9}"#
                         } else {
                             r#"{"entities":0,"relations":0,"observations":0}"#
@@ -441,7 +520,11 @@ mod remote {
             String::from_utf8_lossy(&output.stderr)
         );
         assert_eq!(accepted.load(Ordering::SeqCst), 1);
-        assert_eq!(requests.load(Ordering::SeqCst), 2, "location + stats");
+        assert_eq!(
+            requests.load(Ordering::SeqCst),
+            3,
+            "meta + location + stats"
+        );
         done.store(true, Ordering::SeqCst);
         task.abort();
     }

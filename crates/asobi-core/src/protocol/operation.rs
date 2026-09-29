@@ -33,6 +33,7 @@ pub enum Operation {
     MaintenanceLocation,
     TasksDispatch,
     TasksClaimNext,
+    TasksUpdate,
 }
 
 impl Operation {
@@ -62,6 +63,7 @@ impl Operation {
             "maintenance.location" => Operation::MaintenanceLocation,
             "tasks.dispatch" => Operation::TasksDispatch,
             "tasks.claimNext" => Operation::TasksClaimNext,
+            "tasks.update" => Operation::TasksUpdate,
             _ => return None,
         })
     }
@@ -93,6 +95,7 @@ impl Operation {
             Operation::MaintenanceLocation => "maintenance.location",
             Operation::TasksDispatch => "tasks.dispatch",
             Operation::TasksClaimNext => "tasks.claimNext",
+            Operation::TasksUpdate => "tasks.update",
         }
     }
 
@@ -123,6 +126,7 @@ impl Operation {
             Operation::MaintenanceLocation,
             Operation::TasksDispatch,
             Operation::TasksClaimNext,
+            Operation::TasksUpdate,
         ]
         .into_iter()
     }
