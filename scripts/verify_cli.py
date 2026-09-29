@@ -134,14 +134,14 @@ def truths(payload: dict, name: str) -> dict[str, str]:
 
 def schema_checks(env: dict[str, str]) -> None:
     index = json.loads(run(["schema"], env).stdout)
-    assert index["schemaVersion"] == 1
+    assert index["schemaVersion"] == 2
     assert "commands" in index
     assert "graph" in index["commands"]
     assert "properties" in index["commands"]["graph"]
 
     graph_schema = json.loads(run(["schema", "--command", "graph"], env).stdout)
     fastjsonschema.compile(graph_schema, formats=_SCHEMA_FORMATS)
-    assert graph_schema["x-asobi-schema-version"] == 1
+    assert graph_schema["x-asobi-schema-version"] == 2
 
 
 def main() -> None:

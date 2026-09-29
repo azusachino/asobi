@@ -23,8 +23,7 @@ use asobi_core::api::v3::ApiError;
 #[cfg(feature = "remote")]
 enum Backend {
     Local(SqliteStore),
-    /// No network request has happened yet. A read call is itself the probe;
-    /// a first write probes with read-only `maintenance.location` first.
+    /// No network request has happened yet. Negotiate before any graph call.
     Pending(RemoteStore),
     Remote(RemoteStore),
 }
@@ -80,7 +79,7 @@ impl Storage {
     }
 
     #[cfg(feature = "remote")]
-    async fn route<T, R, L>(&self, write: bool, remote_call: R, local_call: L) -> ApiResult<T>
+    async fn route<T, R, L>(&self, _write: bool, remote_call: R, local_call: L) -> ApiResult<T>
     where
         T: Send,
         R: for<'a> FnOnce(&'a RemoteStore) -> CallFuture<'a, T> + Send,
@@ -97,44 +96,21 @@ impl Storage {
             unreachable!()
         };
         let remote = remote.clone();
-        if write {
-            // Never retry a possibly-applied mutation after a gateway error:
-            // establish reachability with a read-only operation first.
-            match tokio::time::timeout(std::time::Duration::from_secs(2), remote.location()).await {
-                Ok(Ok(_)) => {
-                    *backend = Backend::Remote(remote.clone());
-                    remote_call(&remote).await
-                }
-                Ok(Err(ApiError::Unavailable(message))) => Err(ApiError::Unavailable(format!(
-                    "remote Asobi server unavailable: {message}"
-                ))),
-                Err(_) => Err(ApiError::Unavailable(
-                    "remote Asobi server unavailable: first reachability probe timed out after 2 seconds".into(),
-                )),
-                Ok(Err(error)) => {
-                    *backend = Backend::Remote(remote);
-                    Err(error)
-                }
+        // A single read-only negotiation precedes reads and writes alike.
+        // The URL version is the accepted API major, not a package version.
+        match tokio::time::timeout(std::time::Duration::from_secs(2), remote.negotiate()).await {
+            Ok(Ok(())) => {
+                *backend = Backend::Remote(remote.clone());
+                remote_call(&remote).await
             }
-        } else {
-            match tokio::time::timeout(std::time::Duration::from_secs(2), remote_call(&remote))
-                .await
-            {
-                Ok(Ok(value)) => {
-                    *backend = Backend::Remote(remote);
-                    Ok(value)
-                }
-                Ok(Err(ApiError::Unavailable(message))) => Err(ApiError::Unavailable(format!(
-                    "remote Asobi server unavailable: {message}"
-                ))),
-                Err(_) => Err(ApiError::Unavailable(
-                    "remote Asobi server unavailable: first call timed out after 2 seconds".into(),
-                )),
-                Ok(Err(error)) => {
-                    *backend = Backend::Remote(remote);
-                    Err(error)
-                }
-            }
+            Ok(Err(ApiError::Unavailable(message))) => Err(ApiError::Unavailable(format!(
+                "remote Asobi server unavailable: {message}"
+            ))),
+            Err(_) => Err(ApiError::Unavailable(
+                "remote Asobi server unavailable: version negotiation timed out after 2 seconds"
+                    .into(),
+            )),
+            Ok(Err(error)) => Err(error),
         }
     }
 

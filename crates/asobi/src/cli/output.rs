@@ -25,11 +25,15 @@ pub(crate) struct StatsReceipt {
     pub(crate) entities: usize,
     pub(crate) relations: usize,
     pub(crate) observations: usize,
-    pub(crate) database_path: String,
-    pub(crate) journal_mode: String,
-    pub(crate) schema_version: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) database_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) journal_mode: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) schema_version: Option<u32>,
     pub(crate) mode: &'static str,
-    pub(crate) path_owner: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) path_owner: Option<&'static str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) graph: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -76,7 +80,7 @@ pub(crate) fn print_json<T: Serialize>(value: T) -> Result<()> {
     Ok(())
 }
 
-const CLI_SCHEMA_VERSION: u32 = 1;
+const CLI_SCHEMA_VERSION: u32 = 2;
 
 fn schema_for_data<T: JsonSchema>() -> serde_json::Value {
     let mut schema = serde_json::to_value(schemars::schema_for!(T))

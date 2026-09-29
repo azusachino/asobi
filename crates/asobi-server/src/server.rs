@@ -12,7 +12,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
 
-use asobi_core::protocol::{self, ProtocolError};
+use asobi_core::protocol::{self, ProtocolError, ServerMetadata};
 use axum::extract::{Path, Request, State};
 use axum::http::StatusCode;
 use axum::middleware::{self, Next};
@@ -48,6 +48,7 @@ impl App {
     fn router(self: &Arc<Self>) -> Router {
         Router::new()
             .route("/healthz", get(Self::healthz))
+            .route("/meta", get(Self::meta))
             .route(
                 "/v3/graphs/{graph}/{operation}",
                 post(Self::call).fallback(Self::method_not_allowed),
@@ -119,6 +120,14 @@ impl App {
     /// Liveness endpoint for container and cluster probes. Does not touch a graph.
     async fn healthz() -> StatusCode {
         StatusCode::OK
+    }
+
+    /// Protocol negotiation without opening or creating a graph.
+    async fn meta() -> Json<ServerMetadata> {
+        Json(ServerMetadata {
+            server_version: env!("CARGO_PKG_VERSION").to_string(),
+            supported_api_versions: vec![asobi_core::api::API_VERSION],
+        })
     }
 
     /// Any other path: plain 404, same shape as an unknown operation.

@@ -27,8 +27,17 @@ pub use requests::{
 use crate::api::v3::{
     ApiError, GraphStore, MaintenanceStore, PurgeRequest, SearchStore, Stats, TaskStore,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
+
+/// Unversioned server metadata: a client must find a shared API version before
+/// sending a versioned graph request. A server can offer v3 and v4 together.
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ServerMetadata {
+    pub server_version: String,
+    pub supported_api_versions: Vec<u32>,
+}
 
 /// Answer one call: parse `body` as the operation's request, call the trait
 /// method, and serialize its result.

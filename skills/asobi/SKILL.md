@@ -13,8 +13,8 @@ Asobi is working memory, not the permanent backlog. Keep acceptance and review i
 ## Before a write
 
 1. Check `asobi --version`. This workflow uses 0.8.1 or newer. On an older CLI, check its help and be aware that 0.8.0 falls back to a local graph during remote outages; stop rather than writing to the wrong graph.
-2. Run `asobi --json stats` from the **intended workspace**. Verify `mode`, `graph` (when remote), `endpoint`, `pathOwner`, and `databasePath`. The nearest `asobi.toml` wins: a nested checkout can select a different graph from its parent. `ASOBI_REMOTE` and `ASOBI_GRAPH` override that config. A remote outage fails closed in 0.8.1; `--local-graph` is only for deliberate device-local work.
-3. For a resumed task, compare its recorded `branch` and `commit` truths with Git in the owning repository before trusting its `next` action. A server-owned path is not a client-local database file.
+2. Run `asobi --json stats` from the **intended workspace**. Verify `mode`, `graph` (when remote), and `endpoint`. Local stats also shows `databasePath`; remote stats never prints the server's storage path. The nearest `asobi.toml` wins: a nested checkout can select a different graph from its parent. `ASOBI_REMOTE` and `ASOBI_GRAPH` override that config. A remote outage or incompatible server fails closed in 0.8.1; deploy the 0.8.1 server before the CLI. `--local-graph` is only for deliberate device-local work.
+3. For a resumed task, compare its recorded `branch` and `commit` truths with Git in the owning repository before trusting its `next` action.
 
 Reads (`show`, `search`, `tasks list`) emit JSON. `truth` succeeds silently unless `--json` is passed. Branch on exit codes, not success chatter; use `asobi schema --command NAME` for scripted responses.
 
@@ -30,6 +30,8 @@ asobi tasks update "project:epic:task-1" --status REVIEW --note "ready for revie
 asobi truth "project:epic:task-1" branch "$(git -C path/to/repo branch --show-current)"
 asobi truth "project:epic:task-1" commit "$(git -C path/to/repo rev-parse HEAD)"
 ```
+
+For a long observation, use `asobi obs <ENTITY> --file <PATH|->`; for a handoff, `asobi tasks update <TASK> --note-file <PATH|->`. Both read literal UTF-8 locally (`-` is stdin), not JSON/YAML/XML and not a path sent to the server. `--file` replaces inline observation text, and `--note-file` replaces inline `--note`.
 
 `claim` requires a task name; it atomically records ownership but does **not** launch an agent. Check `show <task> --expand depends_on` before claiming; creation order does not enforce dependencies. `update` requires `--note` or `--status`: note-only leaves the status alone, while note plus status commits together. Statuses include `READY_TO_DISPATCH`, `DISPATCHED`, `REVIEW`, `AWAITING_VERIFY`, `DONE`, and `BLOCKED_ON <dependency>`. Record what remains as an observation or `next` truth; do not mark `DONE` before verification. When every child is `DONE`, run `asobi tasks close "project:epic"`.
 

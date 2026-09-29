@@ -5,7 +5,22 @@ mod output;
 mod runtime;
 
 use clap::Parser;
+use std::io::Read;
+use std::path::Path;
 use tracing::error;
+
+pub(crate) fn read_text_input(path: &Path) -> anyhow::Result<String> {
+    let mut content = String::new();
+    if path == Path::new("-") {
+        std::io::stdin().read_to_string(&mut content)?;
+    } else {
+        content = std::fs::read_to_string(path)?;
+    }
+    if content.trim().is_empty() {
+        anyhow::bail!("text input must not be empty");
+    }
+    Ok(content)
+}
 
 use commands::Cli;
 

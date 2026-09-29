@@ -75,6 +75,18 @@ async fn post(addr: SocketAddr, path: &str, body: &str) -> (u16, Value) {
     (status, json)
 }
 
+#[tokio::test]
+async fn metadata_negotiates_versions_without_opening_a_graph() {
+    let (dir, addr, server) = start_server().await;
+    let (status, _, meta) = call(addr, "GET", "/meta", "").await;
+    assert_eq!(status, 200);
+    assert_eq!(meta["serverVersion"], env!("CARGO_PKG_VERSION"));
+    assert_eq!(meta["supportedApiVersions"], serde_json::json!([3]));
+    assert!(meta.get("databasePath").is_none());
+    assert!(std::fs::read_dir(dir.path()).unwrap().next().is_none());
+    server.shutdown().await;
+}
+
 async fn seed(addr: SocketAddr, graph: &str, entity: &str) {
     let (status, _) = post(
         addr,

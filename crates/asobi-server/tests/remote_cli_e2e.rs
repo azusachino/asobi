@@ -214,6 +214,8 @@ async fn two_cli_workspaces_handoff_and_claim_distinct_tasks() {
     )
     .await;
     assert!(claimed.status.success(), "{claimed:?}");
+    let note_path = device_a.path().join("handoff.txt");
+    std::fs::write(&note_path, "ready for verification\nfrom device A").unwrap();
     let note = run_cli(
         device_a.path(),
         Some(&remote),
@@ -223,8 +225,8 @@ async fn two_cli_workspaces_handoff_and_claim_distinct_tasks() {
             "tasks",
             "update",
             first,
-            "--note",
-            "ready for verification",
+            "--note-file",
+            note_path.to_str().unwrap(),
         ],
     )
     .await;
@@ -241,7 +243,11 @@ async fn two_cli_workspaces_handoff_and_claim_distinct_tasks() {
             .as_array()
             .unwrap()
             .iter()
-            .any(|note| note == "ready for verification")
+            .any(|note| note == "ready for verification\nfrom device A")
+    );
+    assert!(
+        !seen_note.to_string().contains(note_path.to_str().unwrap()),
+        "only the file content may reach the remote graph"
     );
     let done = run_cli(
         device_a.path(),
@@ -285,8 +291,10 @@ async fn two_cli_workspaces_handoff_and_claim_distinct_tasks() {
         graph_output(&run_cli(device_b.path(), Some(&remote), graph, &["--json", "stats"]).await);
     assert_eq!(stats_a["mode"], "remote");
     assert_eq!(stats_a["graph"], graph);
-    assert_eq!(stats_a["pathOwner"], "server");
-    assert_eq!(stats_a["databasePath"], stats_b["databasePath"]);
+    for key in ["pathOwner", "databasePath", "journalMode", "schemaVersion"] {
+        assert!(stats_a.get(key).is_none(), "remote stats must hide {key}");
+        assert!(stats_b.get(key).is_none(), "remote stats must hide {key}");
+    }
     assert_eq!(stats_a["serverVersion"], env!("CARGO_PKG_VERSION"));
     assert!(!device_a.path().join("local.db").exists());
     assert!(!device_b.path().join("local.db").exists());

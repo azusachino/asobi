@@ -43,8 +43,11 @@ pub(crate) enum Commands {
     /// Add observations to existing entities
     Obs {
         name: String,
-        #[arg(num_args = 1..)]
+        #[arg(num_args = 0..)]
         contents: Vec<String>,
+        /// Read one observation from a UTF-8 file (- for stdin)
+        #[arg(long, value_name = "PATH", conflicts_with = "contents")]
+        file: Option<std::path::PathBuf>,
     },
     /// Add or update a truth for an entity
     Truth {

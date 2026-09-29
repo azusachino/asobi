@@ -177,6 +177,108 @@ fn named_claim_and_note_only_update_do_not_advance_status() {
 }
 
 #[test]
+fn file_backed_observation_and_task_note_preserve_literal_text() {
+    let dir = tempdir().unwrap();
+    let db = dir.path().join("tasks.db");
+    let file = dir.path().join("handoff.txt");
+    let content = "Long handoff: 'quotes' and 雪\nSecond line.\n";
+    std::fs::write(&file, content).unwrap();
+    let file = file.to_str().unwrap();
+    let run = |args: &[&str]| {
+        Command::new(asobi())
+            .args(args)
+            .current_dir(dir.path())
+            .env_remove("ASOBI_REMOTE")
+            .env("ASOBI_DATABASE_URL", &db)
+            .output()
+            .unwrap()
+    };
+    assert!(run(&["new", "asobi:file", "task"]).status.success());
+    assert!(!run(&["obs", "asobi:file"]).status.success());
+    let empty = dir.path().join("empty.txt");
+    std::fs::write(&empty, " \n").unwrap();
+    assert!(
+        !run(&["obs", "asobi:file", "--file", empty.to_str().unwrap()])
+            .status
+            .success()
+    );
+    assert!(
+        !run(&[
+            "tasks",
+            "update",
+            "asobi:file",
+            "--note-file",
+            "missing.txt"
+        ])
+        .status
+        .success()
+    );
+    assert!(run(&["obs", "asobi:file", "--file", file]).status.success());
+    assert!(
+        !run(&["obs", "asobi:file", "inline", "--file", file])
+            .status
+            .success()
+    );
+    let update = run(&[
+        "--json",
+        "tasks",
+        "update",
+        "asobi:file",
+        "--note-file",
+        file,
+        "--status",
+        "REVIEW",
+    ]);
+    assert!(update.status.success(), "{update:?}");
+    assert!(
+        !run(&[
+            "tasks",
+            "update",
+            "asobi:file",
+            "--note",
+            "inline",
+            "--note-file",
+            file,
+        ])
+        .status
+        .success()
+    );
+    let shown = run(&["show", "asobi:file"]);
+    let graph: serde_json::Value = serde_json::from_slice(&shown.stdout).unwrap();
+    assert_eq!(graph["entities"][0]["truths"]["status"], "REVIEW");
+    assert_eq!(
+        graph["entities"][0]["observations"],
+        serde_json::json!([content, content])
+    );
+    assert!(
+        !shown
+            .stdout
+            .windows(file.len())
+            .any(|part| part == file.as_bytes())
+    );
+
+    let mut child = Command::new(asobi())
+        .args(["obs", "asobi:file", "--file", "-"])
+        .current_dir(dir.path())
+        .env_remove("ASOBI_REMOTE")
+        .env("ASOBI_DATABASE_URL", &db)
+        .stdin(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    use std::io::Write;
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(b"from stdin\n")
+        .unwrap();
+    assert!(child.wait().unwrap().success());
+    let shown = run(&["show", "asobi:file"]);
+    let graph: serde_json::Value = serde_json::from_slice(&shown.stdout).unwrap();
+    assert_eq!(graph["entities"][0]["observations"][2], "from stdin\n");
+}
+
+#[test]
 fn only_one_concurrent_dispatcher_claims_a_task() {
     let dir = tempdir().unwrap();
     let db = dir.path().join("contended-tasks.db");

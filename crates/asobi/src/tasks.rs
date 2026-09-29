@@ -55,6 +55,9 @@ pub enum TasksCommands {
         task: String,
         #[arg(long = "note")]
         notes: Vec<String>,
+        /// Read one note from a UTF-8 file (- for stdin)
+        #[arg(long = "note-file", value_name = "PATH", conflicts_with = "notes")]
+        note_file: Option<std::path::PathBuf>,
         #[arg(long)]
         status: Option<String>,
     },
@@ -219,9 +222,13 @@ pub async fn run(
         }
         Some(TasksCommands::Update {
             task,
-            notes,
+            mut notes,
+            note_file,
             status,
         }) => {
+            if let Some(file) = note_file {
+                notes.push(crate::cli::read_text_input(&file)?);
+            }
             if status.is_none() && notes.is_empty() {
                 anyhow::bail!("update needs --note or --status");
             }
