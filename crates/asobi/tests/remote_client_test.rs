@@ -96,6 +96,17 @@ fn context_show_and_local_version_do_not_open_a_graph() {
     let value: serde_json::Value = serde_json::from_slice(&local.stdout).unwrap();
     assert_eq!(value["mode"], "local");
     assert_eq!(value["source"], "--local-graph");
+    let secret = run_cli(
+        dir.path(),
+        &["--json", "context", "show"],
+        &[(
+            "ASOBI_REMOTE",
+            "http://user:secret@127.0.0.1:1?token=secret",
+        )],
+    );
+    let value: serde_json::Value = serde_json::from_slice(&secret.stdout).unwrap();
+    assert_eq!(value["endpoint"], "<redacted>");
+    assert!(!String::from_utf8_lossy(&secret.stdout).contains("secret"));
     let version = run_cli(dir.path(), &["--json", "--local-graph", "version"], &envs);
     assert!(version.status.success());
     let value: serde_json::Value = serde_json::from_slice(&version.stdout).unwrap();
