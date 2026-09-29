@@ -1,4 +1,4 @@
-use super::commands::{Cli, Commands, ContextCommand};
+use super::commands::{Cli, Commands};
 use super::output::*;
 use crate::application::AsobiRuntime;
 use anyhow::Result;
@@ -29,44 +29,6 @@ pub(crate) async fn run_cli(cli: Cli) -> Result<()> {
         };
         let report = crate::init::init_workspace(target, &cwd)?;
         print_init_report(&report);
-        return Ok(());
-    }
-
-    if let Commands::Context {
-        command: ContextCommand::Show,
-    } = cli.command
-    {
-        let paths = asobi_core::paths::AsobiPaths::resolve();
-        let config = crate::config::resolve(&paths);
-        let source = if cli.local_graph {
-            "--local-graph".to_string()
-        } else if std::env::var_os("ASOBI_REMOTE").is_some() {
-            "ASOBI_REMOTE".to_string()
-        } else if let Some(path) = &paths.config_file {
-            path.display().to_string()
-        } else {
-            "local default".to_string()
-        };
-        let remote = if cli.local_graph { None } else { config.remote };
-        let endpoint = remote.as_deref().map(crate::config::display_endpoint);
-        if cli.json {
-            print_json(ContextReceipt {
-                mode: if remote.is_some() { "remote" } else { "local" }.into(),
-                graph: remote.as_ref().map(|_| config.graph.clone()),
-                endpoint: endpoint.map(str::to_string),
-                source,
-            })?;
-        } else {
-            println!(
-                "Mode:     {}",
-                if remote.is_some() { "remote" } else { "local" }
-            );
-            if remote.is_some() {
-                println!("Graph:    {}", config.graph);
-                println!("Endpoint: {}", endpoint.unwrap_or_default());
-            }
-            println!("Source:   {source}");
-        }
         return Ok(());
     }
 
@@ -154,9 +116,6 @@ pub(crate) async fn run_cli(cli: Cli) -> Result<()> {
             }
         }
         Commands::Tasks { subcommand } => crate::tasks::run(backend, subcommand, json).await?,
-        Commands::Info { per_entity } => {
-            super::graph::run(backend, Commands::Stats { per_entity }, json).await?
-        }
         command => super::graph::run(backend, command, json).await?,
     }
 

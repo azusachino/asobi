@@ -148,6 +148,112 @@ async fn two_workspaces_share_a_graph_and_a_third_graph_is_isolated() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn two_cli_workspaces_handoff_and_claim_distinct_tasks() {
+    let data = tempdir().unwrap();
+    let server = start_server(data.path()).await;
+    let remote = remote(&server);
+    let device_a = tempdir().unwrap();
+    let device_b = tempdir().unwrap();
+    let graph = "handoff";
+    let epic = "handoff:trial";
+    let first = "handoff:trial:task-1";
+    let second = "handoff:trial:task-2";
+
+    let planned = run_cli(
+        device_a.path(),
+        Some(&remote),
+        graph,
+        &[
+            "tasks",
+            "plan",
+            epic,
+            "--objective",
+            "Verify remote handoff",
+            "--task",
+            "Inspect target",
+            "--task",
+            "Verify result",
+        ],
+    )
+    .await;
+    assert!(planned.status.success(), "{planned:?}");
+    let claimed = run_cli(
+        device_a.path(),
+        Some(&remote),
+        graph,
+        &["tasks", "dispatch", first, "--agent", "agent-a"],
+    )
+    .await;
+    assert!(claimed.status.success(), "{claimed:?}");
+    for (key, value) in [("branch", "feat/handoff"), ("commit", "abc123")] {
+        let output = run_cli(
+            device_a.path(),
+            Some(&remote),
+            graph,
+            &["truth", first, key, value],
+        )
+        .await;
+        assert!(output.status.success(), "{output:?}");
+    }
+    let duplicate = run_cli(
+        device_b.path(),
+        Some(&remote),
+        graph,
+        &["tasks", "dispatch", first, "--agent", "agent-b"],
+    )
+    .await;
+    assert!(
+        !duplicate.status.success(),
+        "duplicate claim: {duplicate:?}"
+    );
+    let claimed = run_cli(
+        device_b.path(),
+        Some(&remote),
+        graph,
+        &["tasks", "dispatch", second, "--agent", "agent-b"],
+    )
+    .await;
+    assert!(claimed.status.success(), "{claimed:?}");
+    let seen = graph_output(
+        &run_cli(
+            device_b.path(),
+            Some(&remote),
+            graph,
+            &["tasks", "list", epic],
+        )
+        .await,
+    );
+    let first_on_b = seen["entities"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entity| entity["name"] == first)
+        .unwrap();
+    assert_eq!(first_on_b["truths"]["claimed_by"], "agent-a");
+    assert_eq!(first_on_b["truths"]["branch"], "feat/handoff");
+    assert_eq!(first_on_b["truths"]["commit"], "abc123");
+    let second_on_b = seen["entities"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entity| entity["name"] == second)
+        .unwrap();
+    assert_eq!(second_on_b["truths"]["claimed_by"], "agent-b");
+    let stats_a =
+        graph_output(&run_cli(device_a.path(), Some(&remote), graph, &["--json", "stats"]).await);
+    let stats_b =
+        graph_output(&run_cli(device_b.path(), Some(&remote), graph, &["--json", "stats"]).await);
+    assert_eq!(stats_a["mode"], "remote");
+    assert_eq!(stats_a["graph"], graph);
+    assert_eq!(stats_a["pathOwner"], "server");
+    assert_eq!(stats_a["databasePath"], stats_b["databasePath"]);
+    assert_eq!(stats_a["serverVersion"], env!("CARGO_PKG_VERSION"));
+    assert!(!device_a.path().join("local.db").exists());
+    assert!(!device_b.path().join("local.db").exists());
+    server.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn outage_fails_closed_and_explicit_local_work_does_not_merge_after_restart() {
     let data = tempdir().unwrap();
     let server = start_server(data.path()).await;

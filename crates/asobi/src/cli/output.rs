@@ -42,15 +42,6 @@ pub(crate) struct StatsReceipt {
 
 #[derive(Debug, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct ContextReceipt {
-    pub(crate) mode: String,
-    pub(crate) graph: Option<String>,
-    pub(crate) endpoint: Option<String>,
-    pub(crate) source: String,
-}
-
-#[derive(Debug, Serialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
 pub(crate) struct VersionReceipt {
     pub(crate) client_version: String,
     pub(crate) server_version: String,
@@ -129,9 +120,7 @@ fn schema_registry() -> Vec<SchemaRow> {
         ("rm-obs", schema_for_data::<Graph>),
         ("rm-truth", schema_for_data::<Graph>),
         ("search", schema_for_data::<Graph>),
-        ("context-show", schema_for_data::<ContextReceipt>),
         ("version", schema_for_data::<VersionReceipt>),
-        ("info", schema_for_data::<StatsReceipt>),
         ("show", schema_for_data::<Graph>),
         ("stats", schema_for_data::<StatsReceipt>),
         ("tasks-close", schema_for_data::<crate::tasks::TaskReceipt>),

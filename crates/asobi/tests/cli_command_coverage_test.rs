@@ -22,9 +22,7 @@ fn every_top_level_and_nested_subcommand_has_help() {
         "purge",
         "init",
         "stats",
-        "info",
         "version",
-        "context",
         "schema",
         "reset",
         "completions",
@@ -43,7 +41,6 @@ fn every_top_level_and_nested_subcommand_has_help() {
     }
 
     for args in [
-        ["context", "show", "--help"],
         ["tasks", "plan", "--help"],
         ["tasks", "list", "--help"],
         ["tasks", "dispatch", "--help"],

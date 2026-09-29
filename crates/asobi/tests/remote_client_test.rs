@@ -73,7 +73,7 @@ fn configured_remote_without_feature_fails_before_touching_a_graph() {
 }
 
 #[test]
-fn context_show_and_local_version_do_not_open_a_graph() {
+fn local_version_does_not_open_a_graph() {
     let dir = tempdir().unwrap();
     std::fs::write(
         dir.path().join("asobi.toml"),
@@ -82,31 +82,6 @@ fn context_show_and_local_version_do_not_open_a_graph() {
     .unwrap();
     let db = dir.path().join("not-opened.db");
     let envs = [("ASOBI_DATABASE_URL", db.to_str().unwrap())];
-    let context = run_cli(dir.path(), &["--json", "context", "show"], &envs);
-    assert!(context.status.success());
-    let value: serde_json::Value = serde_json::from_slice(&context.stdout).unwrap();
-    assert_eq!(value["mode"], "remote");
-    assert_eq!(value["graph"], "file-graph");
-    assert!(value["source"].as_str().unwrap().ends_with("asobi.toml"));
-    let local = run_cli(
-        dir.path(),
-        &["--json", "--local-graph", "context", "show"],
-        &envs,
-    );
-    let value: serde_json::Value = serde_json::from_slice(&local.stdout).unwrap();
-    assert_eq!(value["mode"], "local");
-    assert_eq!(value["source"], "--local-graph");
-    let secret = run_cli(
-        dir.path(),
-        &["--json", "context", "show"],
-        &[(
-            "ASOBI_REMOTE",
-            "http://user:secret@127.0.0.1:1?token=secret",
-        )],
-    );
-    let value: serde_json::Value = serde_json::from_slice(&secret.stdout).unwrap();
-    assert_eq!(value["endpoint"], "<redacted>");
-    assert!(!String::from_utf8_lossy(&secret.stdout).contains("secret"));
     let version = run_cli(dir.path(), &["--json", "--local-graph", "version"], &envs);
     assert!(version.status.success());
     let value: serde_json::Value = serde_json::from_slice(&version.stdout).unwrap();
@@ -183,12 +158,12 @@ mod remote {
         assert!(version.status.success());
         let version: serde_json::Value = serde_json::from_slice(&version.stdout).unwrap();
         assert_eq!(version["serverVersion"], env!("CARGO_PKG_VERSION"));
-        let info = command(workspace.path(), &["--json", "info"], &borrowed);
-        assert!(info.status.success());
-        let info: serde_json::Value = serde_json::from_slice(&info.stdout).unwrap();
-        assert_eq!(info["mode"], "remote");
-        assert_eq!(info["pathOwner"], "server");
-        assert_eq!(info["graph"], "client-graph");
+        let stats = command(workspace.path(), &["--json", "stats"], &borrowed);
+        assert!(stats.status.success());
+        let stats: serde_json::Value = serde_json::from_slice(&stats.stdout).unwrap();
+        assert_eq!(stats["mode"], "remote");
+        assert_eq!(stats["pathOwner"], "server");
+        assert_eq!(stats["graph"], "client-graph");
 
         // A refusal response maps back to the protocol's ApiError variant.
         let remote = asobi::storage::RemoteStore::new(
