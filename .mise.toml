@@ -6,11 +6,11 @@
 # this same file, so local and CI agree by construction.
 
 [tools]
-rust = { version = "1.98.0", components = "rustfmt,clippy" }
-uv = "0.12.5"
-bun = "1.4.0"
-ruff = "0.16.4"
-rumdl = "0.2.64"
+rust = { version = "stable", components = "rustfmt,clippy" }
+uv = "0.12"
+bun = "1.4"
+ruff = "0.16"
+rumdl = "0.2"
 
 [env]
 # Keep uv's managed interpreters inside the workspace cache.
