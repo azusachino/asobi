@@ -6,8 +6,6 @@
 # this same file, so local and CI agree by construction.
 
 [tools]
-rust = { version = "stable", components = "rustfmt,clippy" }
-uv = "0.12"
 bun = "1.4"
 ruff = "0.16"
 rumdl = "0.2"
