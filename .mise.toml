@@ -7,7 +7,6 @@
 
 [tools]
 bun = "1.4"
-ruff = "0.16"
 
 [env]
 # Keep uv's managed interpreters inside the workspace cache.

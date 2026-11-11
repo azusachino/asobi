@@ -72,17 +72,17 @@ fmt:
 	cargo fmt
 	bun x prettier --write "**/*.{json,yaml,yml}"
 	rumdl fmt .
-	ruff format .
+	uv run --locked ruff format .
 
 fmt-check:
 	cargo fmt --check
 	bun x prettier --check "**/*.{json,yaml,yml}"
 	rumdl fmt --check .
-	ruff format --check .
+	uv run --locked ruff format --check .
 
 lint:
 	cargo clippy -- -D warnings
-	ruff check .
+	uv run --locked ruff check .
 
 check: fmt-check lint test test-scripts bench-compile
 
