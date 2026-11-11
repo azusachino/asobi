@@ -7,6 +7,8 @@
 
 [tools]
 bun = "1.4"
+uv = "0.13"
+rumdl = "0.3"
 
 [env]
 # Keep uv's managed interpreters inside the workspace cache.
