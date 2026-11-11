@@ -7,7 +7,12 @@
 
 [tools]
 bun = "1.4"
+uv = "0.13"
+rumdl = "0.3"
 
 [env]
 # Keep uv's managed interpreters inside the workspace cache.
 UV_PYTHON_PREFERENCE = "managed"
+# The committed lock was resolved inside this window; without it uv re-resolves
+# and `--locked` fails on a machine or runner that sets a different one.
+UV_EXCLUDE_NEWER = "P3D"
