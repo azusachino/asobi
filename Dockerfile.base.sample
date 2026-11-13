@@ -1,0 +1,69 @@
+# Sample base image: a build-anywhere equivalent of the private runtime base
+# `azusachino.com/media-base:py3.14-trixie-r2` that asobi's image builds FROM.
+# The canonical base lives on a private registry; this sample mirrors its
+# Dockerfile so a public checkout can build without registry access:
+#
+#   podman build -t azusachino.com/media-base:py3.14-trixie-r2 -f Dockerfile.base.sample .
+#   podman build -t <image> -f Dockerfile .
+#
+# Floating tags by policy: every build of this sample pulls the current
+# patch levels (python 3.14.x, apt security updates, latest upstream
+# ffmpeg/deno/bun releases) instead of pinning, so fixes land on rebuild.
+
+FROM docker.io/library/python:3.14-slim-trixie
+
+# upgrade refreshes preinstalled packages too, not just the ones we name.
+# ffmpeg is deliberately NOT taken from apt: bookworm's 5.1 branch carries
+# 150+ deferred/unfixed CVEs; the static upstream build below is current and
+# carries no distro library chain.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        ca-certificates curl tini tzdata unzip xz-utils \
+    && apt-get upgrade -y \
+    && rm -rf /var/lib/apt/lists/*
+
+# Static ffmpeg (GPL build) from BtbN's rolling "latest" release; latest
+# upstream version, no shared distro libraries to go stale. TLS only; the
+# project publishes no per-asset checksum file.
+ARG TARGETARCH
+RUN case "${TARGETARCH}" in \
+      amd64) FF_ARCH=linux64 ;; \
+      arm64) FF_ARCH=linuxarm64 ;; \
+      *) echo "unsupported TARGETARCH: ${TARGETARCH}" >&2; exit 1 ;; \
+    esac \
+    && curl -fsSLo /tmp/ffmpeg.tar.xz \
+         "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-${FF_ARCH}-gpl.tar.xz" \
+    && mkdir -p /tmp/ff && tar -xJf /tmp/ffmpeg.tar.xz -C /tmp/ff --strip-components=2 \
+         --wildcards '*/bin/ffmpeg' '*/bin/ffprobe' \
+    && install -m 0755 /tmp/ff/ffmpeg /tmp/ff/ffprobe /usr/local/bin/ \
+    && rm -rf /tmp/ffmpeg.tar.xz /tmp/ff \
+    && ffmpeg -version | head -1
+
+# deno (yt-dlp's JS runtime for YouTube's EJS challenges): latest release,
+# static binary, no apt package. TLS only; no per-asset checksum published.
+RUN case "${TARGETARCH}" in \
+      amd64) DENO_ARCH=x86_64 ;; \
+      arm64) DENO_ARCH=aarch64 ;; \
+    esac \
+    && DENO_VERSION="$(curl -fsSLI -o /dev/null -w '%{url_effective}' https://github.com/denoland/deno/releases/latest | sed 's#.*/v##')" \
+    && curl -fsSLo /tmp/deno.zip "https://github.com/denoland/deno/releases/download/v${DENO_VERSION}/deno-${DENO_ARCH}-unknown-linux-gnu.zip" \
+    && unzip -q /tmp/deno.zip -d /usr/local/bin \
+    && rm -f /tmp/deno.zip \
+    && deno --version | head -1
+
+# bun (runtime for the TypeScript services, grace and luna): latest release,
+# static binary, verified against the release's SHASUMS256.txt.
+RUN case "${TARGETARCH}" in \
+      amd64) BUN_ARCH=x64 ;; \
+      arm64) BUN_ARCH=aarch64 ;; \
+    esac \
+    && BUN_VERSION="$(curl -fsSLI -o /dev/null -w '%{url_effective}' https://github.com/oven-sh/bun/releases/latest | sed 's#.*/bun-v##')" \
+    && curl -fsSLo /tmp/bun.zip "https://github.com/oven-sh/bun/releases/download/bun-v${BUN_VERSION}/bun-linux-${BUN_ARCH}.zip" \
+    && curl -fsSLo /tmp/SHASUMS256.txt "https://github.com/oven-sh/bun/releases/download/bun-v${BUN_VERSION}/SHASUMS256.txt" \
+    && grep " bun-linux-${BUN_ARCH}.zip$" /tmp/SHASUMS256.txt | awk '{print $1"  /tmp/bun.zip"}' | sha256sum -c - \
+    && unzip -q /tmp/bun.zip -d /tmp/bun \
+    && install -m 0755 /tmp/bun/bun-linux-${BUN_ARCH}/bun /usr/local/bin/bun \
+    && rm -rf /tmp/bun.zip /tmp/bun /tmp/SHASUMS256.txt \
+    && bun --version
+
+ENV TZ=Asia/Tokyo
