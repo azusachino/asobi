@@ -1,4 +1,4 @@
-FROM docker.io/library/rust:1.98.0-slim-bookworm AS build
+FROM docker.io/library/rust:1-slim-bookworm AS build
 
 WORKDIR /src
 COPY Cargo.toml Cargo.lock ./
@@ -7,7 +7,7 @@ COPY crates ./crates
 RUN cargo build --locked --release -p asobi-server \
     && install -d -o 65532 -g 65532 /data
 
-FROM gcr.io/distroless/cc-debian12:nonroot
+FROM azusachino.com/media-base:py3.14-trixie-r2
 
 COPY --from=build --chown=65532:65532 /src/target/release/asobi-server /asobi-server
 COPY --from=build --chown=65532:65532 /data /data
