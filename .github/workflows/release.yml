@@ -15,8 +15,8 @@ jobs:
   publish-crate:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: jdx/mise-action@v2
+      - uses: actions/checkout@v7
+      - uses: jdx/mise-action@v5
       - name: Verify tag matches workspace version
         shell: bash
         run: |
@@ -54,8 +54,8 @@ jobs:
             target: aarch64-apple-darwin
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: jdx/mise-action@v2
+      - uses: actions/checkout@v7
+      - uses: jdx/mise-action@v5
 
       - name: Build remote-enabled CLI
         run: cargo build -p asobi --features remote --release --locked --target ${{ matrix.target }}
