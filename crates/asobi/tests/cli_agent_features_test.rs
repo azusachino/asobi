@@ -53,12 +53,9 @@ fn test_cli_agent_features() {
     let db_path_str = db_path.to_str().unwrap();
 
     // 2. Find the asobi binary
-    let mut bin_path = std::env::current_exe().unwrap();
-    bin_path.pop();
-    if bin_path.ends_with("deps") {
-        bin_path.pop();
-    }
-    bin_path.push("asobi");
+    // Cargo builds the binary for integration tests and names it here, whatever
+    // the target directory layout.
+    let bin_path = std::path::PathBuf::from(env!("CARGO_BIN_EXE_asobi"));
 
     assert!(
         bin_path.exists(),

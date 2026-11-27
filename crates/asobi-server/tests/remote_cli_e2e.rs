@@ -9,12 +9,17 @@ fn asobi_bin() -> PathBuf {
     if let Some(path) = option_env!("CARGO_BIN_EXE_asobi") {
         return PathBuf::from(path);
     }
-    let mut path = std::env::current_exe().unwrap();
-    path.pop();
-    if path.ends_with("deps") {
-        path.pop();
-    }
-    path.push("asobi");
+    // The CLI belongs to another package, so Cargo does not name it here. Walk up
+    // from this test binary to the profile directory that holds it: that is
+    // target/debug/deps/.. in the old layout and target/debug/build/<crate>/<hash>/out/../../..
+    // in the newer one.
+    let exe = std::env::current_exe().unwrap();
+    let path = exe
+        .ancestors()
+        .skip(1)
+        .map(|dir| dir.join("asobi"))
+        .find(|candidate| candidate.is_file())
+        .unwrap_or_else(|| exe.with_file_name("asobi"));
     assert!(
         path.is_file(),
         "build the remote-enabled CLI before running this suite: {}",
