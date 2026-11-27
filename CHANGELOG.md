@@ -108,19 +108,29 @@ So the filesystem becomes the only copy.
 ### Breaking
 
 - **The `Snapshot` envelope and `SnapshotStore` are removed** — `export_snapshot`, `import_snapshot`, `ImportReport`, `SNAPSHOT_FORMAT_VERSION`, and the `apiVersion`/`formatVersion` version check. The CLI never used any of it: `export` writes the graph directly and `import` reads it back, so the envelope and its guard were unreachable from the binary and the version check protected nothing. The on-disk format is unchanged, because it was already the bare graph.
+
 - **`tasks sync`/`close` no longer capture git state.** Asobi cannot know which repository a task belongs to: one graph serves many, and a submodule workspace resolves to the same graph from every directory, so the commit read depended on where the command ran rather than what the task was about — the same task could be stamped with the parent repository's revision or the submodule's. Recording a plausible wrong revision is worse than recording none. An agent knows which repository it is working in and can write the truth itself; `docs/usage.md` shows how.
+
 - **Truth history is gone** — the `asobi_truth_history` table, the `history` command, and the archive-on-overwrite write path. It was the one store with no bound of its own: observations are capped per entity and current truths are one row per key, but every overwrite appended a version that survived until its entity was deleted. On a six-week-old graph that was 616 rows, 496 of them sessions whose `next` had been rewritten 139 times.
 
   It had no reader. `asobi history` appeared in no workflow, and where a trail genuinely mattered the observations already carried it in better form: a task's history held one row saying `status=DISPATCHED`, beside an observation saying "dispatched to codex". A bi-temporal store answers questions about how state changed over time, and nothing here asked one. Schema 7 drops the table.
+
 - **Finished sessions and tasks are deleted after 7 days**, automatically, once per process before the first write — on a write rather than at open, so a read never mutates the graph. Configurable via `retention_days` in `asobi.toml` or `ASOBI_RETENTION_DAYS`; `0` disables it. The previous manual `purge` was correct in every respect except that it never ran, leaving a graph that was 96% finished work.
+
 - **`purge` takes two flags instead of five.** `--type` and `--status` are gone: they were validated against a fixed set, so they could only ever select a subset of the single policy — configuration that could not express anything new. `--dry-run` is gone too; it only ever restated the default. What remains is `--older-than` and `--apply`. "Purge refuses durable knowledge" is now structural rather than enforced, since no request can name a durable type.
+
 - **Skills are no longer graph entities.** They do not appear in `graph`, `search`, or `show`. Search one with `rg` over the skills directory.
+
 - **`show` no longer returns `body`.** The field existed only to carry skill bodies and is gone from the response contract; `asobi schema` reflects this.
+
 - **Schema is now 6.** Upgrading drops the `asobi_skills` table and deletes `skill`-typed entities rather than leaving them as husks with no body — cascades take their truths, observations and relations. Nothing there was the only copy: the bodies are on disk, and `skills sync` rewrites that tree from `asobi.toml` regardless. The upgrade runs `PRAGMA incremental_vacuum` so the file shrinks with the graph.
+
 - **Reference inlining is gone**, replaced by the Markdown copy above. Inlining (0.6.3) folded a skill's local `.md` references into its stored body, which inverted the specification's progressive disclosure — a deliberately tiered skill became a monolith, at exactly the token multiple the tiering exists to avoid — and only ever covered markdown, so scripts and assets vanished regardless.
 
   Measured against `mattpocock/skills`: `tdd` keeps its authored 38-line body with `mocking.md` and `tests.md` beside it, loaded on demand, instead of a 138-line blob. And `diagnosing-bugs`, whose body instructs the agent to run `scripts/hitl-loop.template.sh`, previously installed _without that script_ — inlining could not carry it. It now ships.
+
 - **A skill is a directory containing `SKILL.md`, and nothing else is accepted.** Loose `<name>.md` files were installable before, which bought a filename-based name fallback, an optional bundle threaded through collection and materialisation, and a class of skill whose relative references could never resolve once installed — three kinds of complexity for a shape the specification does not define. A source with no `SKILL.md` now fails with a message saying so. `src/skills.rs` is 1,260 → 1,038 lines across this release.
+
 - **`SkillStore` and `SkillRecord` are removed** from `api::v2`. Library consumers implementing the trait no longer need to; there is no storage-side skill surface at all.
 
 ### Added

@@ -35,12 +35,15 @@ remote            asobi ──► RemoteStore ──HTTP──► asobi-server �
 ```
 
 - **`asobi-server --listen <addr:port> --data-dir <path>`** is a separate binary ([0009](0009-workspace-crates.md)): a long-lived process that holds **named graphs**, one SQLite file per graph name in its data directory, and answers the HTTP protocol below. Its data directory is required and its own: it never falls back to the CLI's `asobi.toml` or XDG location, so a server and a local CLI on one host cannot end up sharing a graph file.
+
 - **`RemoteStore`** implements the same `v3` traits (`GraphStore`, `SearchStore`, `MaintenanceStore`, `TaskStore`; see [0008](0008-async-storage-on-sqlx.md)) by sending one HTTP request per trait call. Commands keep depending on traits only, so every command, flag, and output is identical in both modes. Remote mode is compiled in only with the CLI's `remote` feature ([0009](0009-workspace-crates.md)).
+
 - **Configuration:** two keys in `asobi.toml`, each overridable by its environment variable:
   - `remote = "https://asobi.h.azusachino.com"` (`ASOBI_REMOTE`) selects remote mode and the server;
   - `graph = "<name>"` (`ASOBI_GRAPH`) selects the graph on it, defaulting to `asobi`.
 
   When `remote` is set, the graph lives on the server and `data_dir` / `ASOBI_DATABASE_URL` are not used for it. `topics_dir` stays local, so `compact` writes its Markdown on the calling device. Local mode stays the default.
+
 - **Graph names** match `[a-z0-9-]+`, because a name becomes a file on the server; anything else is rejected before touching the disk. Naming a graph the server does not hold yet **creates it**: there are only a few graphs, each set once in a config file.
 
 ### Data placement
