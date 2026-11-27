@@ -9,13 +9,9 @@ fn test_cli_new_with_obs() {
     let db_path_str = db_path.to_str().unwrap();
 
     // 2. Find the asobi binary. We assume it is compiled at target/debug/asobi
-    let mut bin_path = std::env::current_exe().unwrap();
-    // Navigate up from target/debug/deps/cli_new_with_obs_test-XXXX to target/debug/asobi
-    bin_path.pop(); // remove filename
-    if bin_path.ends_with("deps") {
-        bin_path.pop(); // remove deps
-    }
-    bin_path.push("asobi");
+    // Cargo builds the binary for integration tests and names it here, whatever
+    // the target directory layout.
+    let bin_path = std::path::PathBuf::from(env!("CARGO_BIN_EXE_asobi"));
 
     assert!(
         bin_path.exists(),

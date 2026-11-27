@@ -88,8 +88,11 @@ To support seamless upgrades of existing databases without data loss or manual s
 1. Queries `PRAGMA table_info(asobi_observations)` to inspect the type of the `id` column.
 2. If it is `TEXT` (the legacy UUID format), it triggers the migration:
    - Sets `PRAGMA foreign_keys = OFF` to prevent constraint violations.
+
    - Renames `asobi_observations` to `asobi_observations_old`.
+
    - Creates the new `asobi_observations` table using the `INTEGER PRIMARY KEY AUTOINCREMENT` schema.
+
    - Copies existing rows, ordering by `created_at` and the original `rowid` to preserve exact insertion sequence:
 
      ```sql
@@ -98,6 +101,7 @@ To support seamless upgrades of existing databases without data loss or manual s
      ```
 
    - Drops the `asobi_observations_old` table.
+
    - Restores `PRAGMA foreign_keys = ON` and rebuilds the FTS5 virtual index.
 
 ---

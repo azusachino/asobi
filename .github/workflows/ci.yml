@@ -1,19 +1,35 @@
 name: CI
 
+# Pull requests and manual runs: a merge to main re-ran the check its pull
+# request had just passed. The weekly run on main keeps the Rust cache that pull
+# requests restore from alive (GitHub evicts entries unused for seven days). Markdown stays in: make check formats it.
 on:
-  push:
-    branches: [main]
   pull_request:
     branches: [main]
+  schedule:
+    - cron: "0 18 * * 0" # Monday 03:00 JST
+  workflow_dispatch:
+
+permissions:
+  contents: read
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   check:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
       - uses: jdx/mise-action@v5
+      - uses: Swatinem/rust-cache@v2
+        with:
+          # Pull requests restore main's cache; only main writes it.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Run checks
         run: make check
